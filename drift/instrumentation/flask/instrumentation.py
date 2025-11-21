@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import time
 import uuid
@@ -15,6 +14,7 @@ if TYPE_CHECKING:
     from _typeshed.wsgi import StartResponse, WSGIApplication, WSGIEnvironment
 
 from ...core.drift_sdk import TuskDrift
+from ...core.json_schema_helper import JsonSchemaHelper, SchemaMerge
 from ...core.types import (
     CleanSpanData,
     Duration,
@@ -25,6 +25,11 @@ from ...core.types import (
     Timestamp,
 )
 from ..base import InstrumentationBase
+
+
+HEADER_SCHEMA_MERGES = {
+    "headers": SchemaMerge(match_importance=0.0),
+}
 
 
 class FlaskInstrumentation(InstrumentationBase):
@@ -158,8 +163,12 @@ def _capture_span(environ: WSGIEnvironment, response_data: dict[str, Any]) -> No
     else:
         status = SpanStatus(code=StatusCode.OK, message="")
 
-    input_hash = hashlib.sha256(json.dumps(input_value, sort_keys=True).encode()).hexdigest()[:16]
-    output_hash = hashlib.sha256(json.dumps(output_value, sort_keys=True).encode()).hexdigest()[:16]
+    input_schema_info = JsonSchemaHelper.generate_schema_and_hash(
+        input_value, HEADER_SCHEMA_MERGES
+    )
+    output_schema_info = JsonSchemaHelper.generate_schema_and_hash(
+        output_value, HEADER_SCHEMA_MERGES
+    )
 
     method = environ.get("REQUEST_METHOD", "")
     path = environ.get("PATH_INFO", "")
@@ -177,8 +186,12 @@ def _capture_span(environ: WSGIEnvironment, response_data: dict[str, Any]) -> No
         kind=SpanKind.SERVER,
         input_value=input_value,
         output_value=output_value,
-        input_value_hash=input_hash,
-        output_value_hash=output_hash,
+        input_schema=input_schema_info.schema,
+        output_schema=output_schema_info.schema,
+        input_value_hash=input_schema_info.decoded_value_hash,
+        output_value_hash=output_schema_info.decoded_value_hash,
+        input_schema_hash=input_schema_info.decoded_schema_hash,
+        output_schema_hash=output_schema_info.decoded_schema_hash,
         status=status,
         is_pre_app_start=not sdk.app_ready,
         is_root_span=True,

@@ -7,6 +7,8 @@ idna==3.11
 itsdangerous==2.2.0
 Jinja2==3.1.6
 MarkupSafe==3.0.3
+protobuf==6.33.1
 requests==2.32.5
+tusk-drift-schemas==0.1.9.dev1
 urllib3==2.5.0
 Werkzeug==3.1.3

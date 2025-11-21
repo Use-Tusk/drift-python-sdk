@@ -67,6 +67,8 @@ class TuskDrift:
 
     def collect_span(self, span: CleanSpanData) -> None:
         """Collect a span synchronously"""
+        # Ensure the span can be expressed with the public protobuf schema.
+        span.to_proto()
         self._in_memory_adapter.export_spans([span])
 
     def get_in_memory_spans(self) -> List[CleanSpanData]:

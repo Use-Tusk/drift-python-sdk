@@ -1,9 +1,13 @@
 """Core types and data structures for Drift Python SDK."""
 
+from __future__ import annotations
+
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union
-from contextvars import ContextVar
+from typing import Any, Dict, List, Literal, Optional
+
+from .json_schema_helper import JsonSchema
 
 
 TD_INSTRUMENTATION_LIBRARY_NAME = "tusk-drift-sdk"
@@ -104,17 +108,6 @@ class MetadataObject:
 
 
 @dataclass
-class JsonSchema:
-    """JSON Schema representation for input/output validation."""
-
-    type: Optional[str] = None
-    properties: Optional[Dict[str, Any]] = None
-    required: Optional[List[str]] = None
-    items: Optional[Any] = None
-    additional_properties: Optional[bool] = None
-
-
-@dataclass
 class CleanSpanData:
     """
     Clean span data structure matching Node.js SDK.
@@ -137,8 +130,8 @@ class CleanSpanData:
     # Data capture
     input_value: Any = None
     output_value: Any = None
-    input_schema: Optional[JsonSchema] = None
-    output_schema: Optional[JsonSchema] = None
+    input_schema: JsonSchema = field(default_factory=JsonSchema)
+    output_schema: JsonSchema = field(default_factory=JsonSchema)
 
     # Hashing (for deduplication/matching)
     input_schema_hash: str = ""
@@ -164,6 +157,13 @@ class CleanSpanData:
     # SDK-specific
     is_used: Optional[bool] = None
     stack_trace: Optional[str] = None
+
+    def to_proto(self) -> Any:
+        """Serialize this span to a tusk.drift.core.v1.Span message."""
+
+        from .span_serialization import clean_span_to_proto
+
+        return clean_span_to_proto(self)
 
 
 @dataclass
