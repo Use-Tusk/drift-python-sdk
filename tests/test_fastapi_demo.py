@@ -84,18 +84,21 @@ def display_captured_spans():
         input_val = span.input_value
         if isinstance(input_val, dict):
             print(f"    Method: {input_val.get('method')}")
-            print(f"    Path: {input_val.get('path')}")
-            if "query" in input_val and input_val["query"]:
-                print(f"    Query: {input_val['query']}")
+            print(f"    Target: {input_val.get('target')}")
+            print(f"    URL: {input_val.get('url')}")
+            if input_val.get("httpVersion"):
+                print(f"    HTTP Version: {input_val['httpVersion']}")
             if "body" in input_val:
-                print(f"    Body: {json.dumps(input_val['body'], indent=6)}")
+                print(f"    Body (base64): {input_val['body'][:50]}...")
+                print(f"    Body Size: {input_val.get('bodySize')} bytes")
 
         print("\n  Output:")
         output_val = span.output_value
         if isinstance(output_val, dict):
-            print(f"    Status: {output_val.get('status_code')}")
+            print(f"    Status: {output_val.get('statusCode')} {output_val.get('statusMessage', '')}")
             if "body" in output_val:
-                print(f"    Body: {json.dumps(output_val['body'], indent=6)}")
+                print(f"    Body (base64): {output_val['body'][:50]}...")
+                print(f"    Body Size: {output_val.get('bodySize')} bytes")
 
     print("\n" + "=" * 80)
 

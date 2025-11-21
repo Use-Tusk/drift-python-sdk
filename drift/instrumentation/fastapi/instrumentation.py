@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import time
 import uuid
@@ -112,6 +113,8 @@ async def _handle_request(
         nonlocal response_body_size, response_body_truncated
         if message.get("type") == "http.response.start":
             response_data["status_code"] = message.get("status", 200)
+            # ASGI doesn't provide status message directly, derive from status code
+            response_data["status_message"] = _get_status_message(message.get("status", 200))
             # Convert headers from list of tuples to dict
             raw_headers = message.get("headers", [])
             response_data["headers"] = {
@@ -176,41 +179,54 @@ def _capture_span(
     if isinstance(query_string, bytes):
         query_string = query_string.decode("utf-8", errors="replace")
 
+    # Build target (path + query string) to match Node SDK
+    target = f"{path}?{query_string}" if query_string else path
+
+    # Get HTTP version from scope
+    http_version = scope.get("http_version", "1.1")
+
+    # Get remote address info from scope
+    client = scope.get("client")
+    remote_address = client[0] if client else None
+    remote_port = client[1] if client and len(client) > 1 else None
+
     input_value: dict[str, Any] = {
         "method": method,
-        "path": path,
         "url": _build_url(scope),
-        "query": query_string,
+        "target": target,  # Path + query string combined, matches Node SDK
         "headers": _extract_headers(scope),
+        "httpVersion": http_version,
     }
+    # Add optional fields only if present
+    if remote_address:
+        input_value["remoteAddress"] = remote_address
+    if remote_port:
+        input_value["remotePort"] = remote_port
 
     if request_body:
-        try:
-            input_value["body"] = json.loads(request_body)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            input_value["body"] = request_body.decode("utf-8", errors="replace")
-        input_value["body_size"] = len(request_body)
+        # Store body as Base64 encoded string to match Node SDK behavior
+        input_value["body"] = base64.b64encode(request_body).decode("ascii")
+        input_value["bodySize"] = len(request_body)
         if request_body_truncated:
-            input_value["body_truncated"] = True
+            input_value["hasBodyParsingError"] = True  # Match Node SDK field name
 
     output_value: dict[str, Any] = {
-        "status_code": response_data.get("status_code", 200),
+        "statusCode": response_data.get("status_code", 200),  # camelCase to match Node SDK
+        "statusMessage": response_data.get("status_message", ""),
         "headers": response_data.get("headers", {}),
     }
 
     if response_body:
-        try:
-            output_value["body"] = json.loads(response_body)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            output_value["body"] = response_body.decode("utf-8", errors="replace")
-        output_value["body_size"] = len(response_body)
+        # Store body as Base64 encoded string to match Node SDK behavior
+        output_value["body"] = base64.b64encode(response_body).decode("ascii")
+        output_value["bodySize"] = len(response_body)
         if response_body_truncated:
-            output_value["body_truncated"] = True
+            output_value["bodyProcessingError"] = "truncated"  # Match Node SDK field name
 
     if "error" in response_data:
-        output_value["error"] = response_data["error"]
+        output_value["errorMessage"] = response_data["error"]  # Match Node SDK field name
     if "error_type" in response_data:
-        output_value["error_type"] = response_data["error_type"]
+        output_value["errorName"] = response_data["error_type"]  # Match Node SDK field name
 
     sdk = TuskDrift.get_instance()
     # Derive timestamp from start_time_ns (not datetime.now() which would be end time)
@@ -310,3 +326,35 @@ def _extract_headers(scope: Scope) -> dict[str, str]:
         # Convert to title case for consistency with Flask
         headers[header_name.title()] = header_value
     return headers
+
+
+# HTTP status code to message mapping (standard codes)
+_HTTP_STATUS_MESSAGES: dict[int, str] = {
+    100: "Continue",
+    101: "Switching Protocols",
+    200: "OK",
+    201: "Created",
+    202: "Accepted",
+    204: "No Content",
+    301: "Moved Permanently",
+    302: "Found",
+    304: "Not Modified",
+    400: "Bad Request",
+    401: "Unauthorized",
+    403: "Forbidden",
+    404: "Not Found",
+    405: "Method Not Allowed",
+    409: "Conflict",
+    422: "Unprocessable Entity",
+    429: "Too Many Requests",
+    500: "Internal Server Error",
+    501: "Not Implemented",
+    502: "Bad Gateway",
+    503: "Service Unavailable",
+    504: "Gateway Timeout",
+}
+
+
+def _get_status_message(status_code: int) -> str:
+    """Get HTTP status message for a status code."""
+    return _HTTP_STATUS_MESSAGES.get(status_code, "")

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import json
+import base64
 import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from functools import wraps
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, override
@@ -29,6 +29,8 @@ from ..base import InstrumentationBase
 HEADER_SCHEMA_MERGES = {
     "headers": SchemaMerge(match_importance=0.0),
 }
+
+MAX_BODY_SIZE = 10000  # 10KB limit
 
 
 class FlaskInstrumentation(InstrumentationBase):
@@ -60,6 +62,74 @@ class FlaskInstrumentation(InstrumentationBase):
         print("Flask instrumentation applied")
 
 
+class _ResponseBodyCapture(Iterable[bytes]):
+    """
+    Wrapper for WSGI response iterable that captures the response body.
+
+    Captures body chunks up to MAX_BODY_SIZE and calls the span capture
+    function when the response is closed.
+    """
+
+    def __init__(
+        self,
+        response: Iterable[bytes],
+        environ: WSGIEnvironment,
+        response_data: dict[str, Any],
+    ):
+        self._response = response
+        self._environ = environ
+        self._response_data = response_data
+        self._body_parts: list[bytes] = []
+        self._body_size = 0
+        self._body_truncated = False
+        self._closed = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        try:
+            for chunk in self._response:
+                # Capture chunk for body
+                if chunk and not self._body_truncated:
+                    if self._body_size >= MAX_BODY_SIZE:
+                        self._body_truncated = True
+                    else:
+                        remaining = MAX_BODY_SIZE - self._body_size
+                        if len(chunk) > remaining:
+                            self._body_parts.append(chunk[:remaining])
+                            self._body_size += remaining
+                            self._body_truncated = True
+                        else:
+                            self._body_parts.append(chunk)
+                            self._body_size += len(chunk)
+                # Pass chunk through to actual response
+                yield chunk
+        finally:
+            # Capture span when iteration completes
+            self._finalize()
+
+    def close(self) -> None:
+        """Called by WSGI server when response is done."""
+        self._finalize()
+        # Call close on wrapped response if it has one
+        if hasattr(self._response, "close"):
+            self._response.close()  # type: ignore
+
+    def _finalize(self) -> None:
+        """Capture the span with collected response body."""
+        if self._closed:
+            return
+        self._closed = True
+
+        # Add response body to response_data
+        if self._body_parts:
+            body = b"".join(self._body_parts)
+            self._response_data["body"] = body
+            self._response_data["body_size"] = len(body)
+            if self._body_truncated:
+                self._response_data["body_truncated"] = True
+
+        _capture_span(self._environ, self._response_data)
+
+
 def _handle_request(
     app: Any,
     environ: WSGIEnvironment,
@@ -76,7 +146,7 @@ def _handle_request(
     if environ.get("REQUEST_METHOD") in ("POST", "PUT", "PATCH"):
         try:
             content_length = int(environ.get("CONTENT_LENGTH", 0))
-            if content_length > 0 and content_length <= 10000:  # 10KB limit
+            if content_length > 0 and content_length <= MAX_BODY_SIZE:
                 wsgi_input = environ.get("wsgi.input")
                 if wsgi_input:
                     request_body = wsgi_input.read(content_length)
@@ -94,8 +164,12 @@ def _handle_request(
         response_headers: list[tuple[str, str]],
         exc_info: OptExcInfo | None = None,
     ):
-        status_code = int(status.split()[0])
+        # Parse status like "200 OK" -> (200, "OK")
+        status_parts = status.split(None, 1)
+        status_code = int(status_parts[0])
+        status_message = status_parts[1] if len(status_parts) > 1 else ""
         response_data["status_code"] = status_code
+        response_data["status_message"] = status_message
         response_data["headers"] = dict(response_headers)
         return start_response(status, response_headers, exc_info)
 
@@ -105,8 +179,8 @@ def _handle_request(
 
     try:
         response = original_wsgi_app(app, environ, wrapped_start_response)
-        _capture_span(environ, response_data)
-        return response
+        # Wrap response to capture body and defer span creation
+        return _ResponseBodyCapture(response, environ, response_data)
     except Exception as e:
         response_data["status_code"] = 500
         response_data["error"] = str(e)
@@ -126,28 +200,49 @@ def _capture_span(environ: WSGIEnvironment, response_data: dict[str, Any]) -> No
     end_time_ns = time.time_ns()
     duration_ns = end_time_ns - start_time_ns
 
+    # Build target (path + query string) to match Node SDK
+    path = environ.get("PATH_INFO", "")
+    query_string = environ.get("QUERY_STRING", "")
+    target = f"{path}?{query_string}" if query_string else path
+
+    # Get HTTP version from SERVER_PROTOCOL (e.g., "HTTP/1.1" -> "1.1")
+    server_protocol = environ.get("SERVER_PROTOCOL", "HTTP/1.1")
+    http_version = server_protocol.replace("HTTP/", "") if server_protocol.startswith("HTTP/") else "1.1"
+
     input_value = {
         "method": environ.get("REQUEST_METHOD", ""),
-        "path": environ.get("PATH_INFO", ""),
         "url": _build_url(environ),
-        "query": environ.get("QUERY_STRING", ""),
+        "target": target,  # Path + query string combined, matches Node SDK
         "headers": _extract_headers(environ),
+        "httpVersion": http_version,
+        "remoteAddress": environ.get("REMOTE_ADDR"),
+        "remotePort": int(environ["REMOTE_PORT"]) if environ.get("REMOTE_PORT") else None,
     }
+    # Remove None values to keep span clean
+    input_value = {k: v for k, v in input_value.items() if v is not None}
 
     request_body = environ.get("_drift_request_body")
     if request_body:
-        try:
-            input_value["body"] = json.loads(request_body)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            input_value["body"] = request_body.decode("utf-8", errors="replace")
+        # Store body as Base64 encoded string to match Node SDK behavior
+        input_value["body"] = base64.b64encode(request_body).decode("ascii")
+        input_value["bodySize"] = len(request_body)
 
-    output_value = {
-        "status_code": response_data.get("status_code", 200),
+    output_value: dict[str, Any] = {
+        "statusCode": response_data.get("status_code", 200),  # camelCase to match Node SDK
+        "statusMessage": response_data.get("status_message", ""),
         "headers": response_data.get("headers", {}),
     }
 
+    # Add response body if captured
+    response_body = response_data.get("body")
+    if response_body:
+        output_value["body"] = base64.b64encode(response_body).decode("ascii")
+        output_value["bodySize"] = response_data.get("body_size", len(response_body))
+        if response_data.get("body_truncated"):
+            output_value["bodyProcessingError"] = "truncated"
+
     if "error" in response_data:
-        output_value["error"] = response_data["error"]
+        output_value["errorMessage"] = response_data["error"]  # Match Node SDK field name
 
     sdk = TuskDrift.get_instance()
     # Derive timestamp from start_time_ns (not datetime.now() which would be end time)
@@ -170,7 +265,6 @@ def _capture_span(environ: WSGIEnvironment, response_data: dict[str, Any]) -> No
     )
 
     method = environ.get("REQUEST_METHOD", "")
-    path = environ.get("PATH_INFO", "")
     span_name = f"{method} {path}"
 
     span = CleanSpanData(
