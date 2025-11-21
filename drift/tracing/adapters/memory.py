@@ -1,47 +1,69 @@
-from enum import Enum
+"""In-memory span adapter for testing and development."""
 
-from ...core.types import CleanSpanData, SpanKind
+from __future__ import annotations
 
+from typing import TYPE_CHECKING, override
 
-class ExportResultCode(Enum):
-    SUCCESS = 0
-    FAILED = 1
+from .base import ExportResult, SpanExportAdapter
 
-
-class ExportResult:
-    code: ExportResultCode
-    error: Exception | None
-
-    def __init__(self, code: ExportResultCode, error: Exception | None = None):
-        self.code = code
-        self.error = error
+if TYPE_CHECKING:
+    from ...core.types import CleanSpanData, SpanKind
 
 
-class InMemorySpanAdapter:
-    name: str = "in-memory"
+class InMemorySpanAdapter(SpanExportAdapter):
+    """
+    Stores spans in memory - useful for testing and development.
 
-    def __init__(self):
+    Provides helper methods to query spans by instrumentation name or kind.
+    """
+
+    def __init__(self) -> None:
         self._spans: list[CleanSpanData] = []
 
-    def collect_span(self, span: CleanSpanData) -> None:
+    def __repr__(self) -> str:
+        return f"InMemorySpanAdapter(spans={len(self._spans)})"
+
+    @property
+    @override
+    def name(self) -> str:
+        return "in-memory"
+
+    def collect_span(self, span: "CleanSpanData") -> None:
+        """Add a single span to the in-memory store."""
         self._spans.append(span)
 
-    def get_all_spans(self) -> list[CleanSpanData]:
+    def get_all_spans(self) -> list["CleanSpanData"]:
+        """Get all stored spans."""
         return list(self._spans)
 
-    def get_spans_by_instrumentation(self, instrumentation_name: str) -> list[CleanSpanData]:
-        return [span for span in self._spans if instrumentation_name in span.instrumentation_name]
+    def get_spans_by_instrumentation(self, instrumentation_name: str) -> list["CleanSpanData"]:
+        """Get spans matching an instrumentation name (partial match)."""
+        return [
+            span for span in self._spans if instrumentation_name in span.instrumentation_name
+        ]
 
-    def get_spans_by_kind(self, kind: SpanKind) -> list[CleanSpanData]:
+    def get_spans_by_kind(self, kind: "SpanKind") -> list["CleanSpanData"]:
+        """Get spans of a specific kind."""
         return [span for span in self._spans if span.kind == kind]
 
     def clear(self) -> None:
+        """Clear all stored spans."""
         self._spans.clear()
 
-    def export_spans(self, spans: list[CleanSpanData]) -> ExportResult:
+    @override
+    async def export_spans(self, spans: list["CleanSpanData"]) -> ExportResult:
+        """Export spans by storing them in memory."""
         for span in spans:
             self.collect_span(span)
-        return ExportResult(ExportResultCode.SUCCESS)
+        return ExportResult.success()
 
-    def shutdown(self) -> None:
+    @override
+    async def shutdown(self) -> None:
+        """Shutdown by clearing all spans."""
         self.clear()
+
+
+# Re-export for backwards compatibility
+__all__ = ["InMemorySpanAdapter", "ExportResult", "ExportResultCode"]
+
+from .base import ExportResultCode
