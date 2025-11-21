@@ -4,7 +4,6 @@ import json
 import time
 import uuid
 from collections.abc import Iterable
-from datetime import datetime
 from functools import wraps
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, override
@@ -151,9 +150,9 @@ def _capture_span(environ: WSGIEnvironment, response_data: dict[str, Any]) -> No
         output_value["error"] = response_data["error"]
 
     sdk = TuskDrift.get_instance()
-    timestamp_dt = datetime.now()
-    timestamp_seconds = int(timestamp_dt.timestamp())
-    timestamp_nanos = int((timestamp_dt.timestamp() % 1) * 1_000_000_000)
+    # Derive timestamp from start_time_ns (not datetime.now() which would be end time)
+    timestamp_seconds = start_time_ns // 1_000_000_000
+    timestamp_nanos = start_time_ns % 1_000_000_000
     duration_seconds = duration_ns // 1_000_000_000
     duration_nanos = duration_ns % 1_000_000_000
 

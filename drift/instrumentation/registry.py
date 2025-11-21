@@ -14,6 +14,10 @@ _installed = False
 
 def register_patch(module_name: str, patch_fn: PatchFn) -> None:
     _registry[module_name] = patch_fn
+    # If the module is already imported, patch it immediately
+    module = sys.modules.get(module_name)
+    if module:
+        _apply_patch(module, patch_fn)
 
 
 def install_hooks() -> None:
