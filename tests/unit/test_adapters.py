@@ -2,23 +2,12 @@
 
 import asyncio
 import json
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from drift.core.types import (
-    CleanSpanData,
-    Duration,
-    PackageType,
-    SpanKind,
-    SpanStatus,
-    StatusCode,
-    Timestamp,
-)
+from drift.core.types import SpanKind
 from drift.tracing.adapters import (
     ApiSpanAdapter,
     ApiSpanAdapterConfig,
@@ -27,30 +16,7 @@ from drift.tracing.adapters import (
     FilesystemSpanAdapter,
     InMemorySpanAdapter,
 )
-
-
-def create_test_span(
-    trace_id: str = "a" * 32,
-    span_id: str = "b" * 16,
-    name: str = "test-span",
-) -> CleanSpanData:
-    """Create a minimal test span."""
-    return CleanSpanData(
-        trace_id=trace_id,
-        span_id=span_id,
-        parent_span_id="",
-        name=name,
-        package_name="test",
-        instrumentation_name="TestInstrumentation",
-        submodule_name="test",
-        package_type=PackageType.HTTP,
-        kind=SpanKind.SERVER,
-        input_value={"method": "GET"},
-        output_value={"status": 200},
-        status=SpanStatus(code=StatusCode.OK),
-        timestamp=Timestamp(seconds=1700000000, nanos=0),
-        duration=Duration(seconds=0, nanos=1000000),
-    )
+from tests.utils import create_test_span
 
 
 class TestExportResult(unittest.TestCase):
@@ -144,6 +110,60 @@ class TestInMemorySpanAdapter(unittest.TestCase):
         self.adapter.collect_span(create_test_span())
         asyncio.run(self.adapter.shutdown())
         self.assertEqual(len(self.adapter.get_all_spans()), 0)
+
+    def test_get_spans_by_name(self):
+        """Test filtering spans by name."""
+        span1 = create_test_span(name="GET /api/users")
+        span2 = create_test_span(name="POST /api/users")
+        span3 = create_test_span(name="GET /api/orders")
+
+        self.adapter.collect_span(span1)
+        self.adapter.collect_span(span2)
+        self.adapter.collect_span(span3)
+
+        # Get all spans with GET in name
+        all_spans = self.adapter.get_all_spans()
+        get_spans = [s for s in all_spans if "GET" in s.name]
+        self.assertEqual(len(get_spans), 2)
+
+    def test_get_spans_by_trace_id(self):
+        """Test filtering spans by trace ID."""
+        trace1 = "trace1" + "0" * 26
+        trace2 = "trace2" + "0" * 26
+
+        span1 = create_test_span(trace_id=trace1, name="span1")
+        span2 = create_test_span(trace_id=trace1, name="span2")
+        span3 = create_test_span(trace_id=trace2, name="span3")
+
+        self.adapter.collect_span(span1)
+        self.adapter.collect_span(span2)
+        self.adapter.collect_span(span3)
+
+        all_spans = self.adapter.get_all_spans()
+        trace1_spans = [s for s in all_spans if s.trace_id == trace1]
+        self.assertEqual(len(trace1_spans), 2)
+
+    def test_get_spans_preserves_order(self):
+        """Test that spans are returned in insertion order."""
+        for i in range(5):
+            span = create_test_span(span_id=str(i) * 16, name=f"span-{i}")
+            self.adapter.collect_span(span)
+
+        spans = self.adapter.get_all_spans()
+        for i, span in enumerate(spans):
+            self.assertEqual(span.name, f"span-{i}")
+
+    def test_concurrent_exports(self):
+        """Test concurrent exports don't cause issues."""
+        async def export_multiple():
+            tasks = []
+            for i in range(10):
+                span = create_test_span(span_id=str(i) * 16)
+                tasks.append(self.adapter.export_spans([span]))
+            await asyncio.gather(*tasks)
+
+        asyncio.run(export_multiple())
+        self.assertEqual(len(self.adapter.get_all_spans()), 10)
 
 
 class TestFilesystemSpanAdapter(unittest.TestCase):
