@@ -27,7 +27,7 @@ class TestFlaskBasicSpanCapture(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Set up the SDK and Flask app once for all tests."""
-        cls.sdk = TuskDrift.initialize()
+        cls.sdk = TuskDrift.initialize(use_batching=False)
         cls.flask_instrumentation = FlaskInstrumentation()
 
         # Import Flask after instrumentation is set up

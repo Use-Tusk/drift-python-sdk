@@ -24,6 +24,7 @@ from ...core.types import (
     Timestamp,
 )
 from ..base import InstrumentationBase
+from ..http import HttpSpanData, HttpTransformEngine
 
 
 HEADER_SCHEMA_MERGES = {
@@ -34,13 +35,30 @@ MAX_BODY_SIZE = 10000  # 10KB limit
 
 
 class FlaskInstrumentation(InstrumentationBase):
-    def __init__(self, enabled: bool = True):
+    def __init__(self, enabled: bool = True, transforms: dict[str, Any] | None = None):
+        self._transform_engine = HttpTransformEngine(
+            self._resolve_http_transforms(transforms)
+        )
         super().__init__(
             name="FlaskInstrumentation",
             module_name="flask",
             supported_versions=">=2.0.0",
             enabled=enabled,
         )
+
+    def _resolve_http_transforms(
+        self, provided: dict[str, Any] | list[dict[str, Any]] | None
+    ) -> list[dict[str, Any]] | None:
+        if isinstance(provided, list):
+            return provided
+        if isinstance(provided, dict) and isinstance(provided.get("http"), list):
+            return provided["http"]
+
+        sdk = TuskDrift.get_instance()
+        transforms = getattr(sdk.config, "transforms", None)
+        if isinstance(transforms, dict) and isinstance(transforms.get("http"), list):
+            return transforms["http"]
+        return None
 
     @override
     def patch(self, module: ModuleType) -> None:
@@ -51,12 +69,19 @@ class FlaskInstrumentation(InstrumentationBase):
             return
 
         original_wsgi_app = flask_class.wsgi_app
+        transform_engine = self._transform_engine
 
         @wraps(original_wsgi_app)
         def instrumented_wsgi_app(
             self, environ: WSGIEnvironment, start_response: StartResponse
         ) -> Iterable[bytes]:
-            return _handle_request(self, environ, start_response, original_wsgi_app)
+            return _handle_request(
+                self,
+                environ,
+                start_response,
+                original_wsgi_app,
+                transform_engine,
+            )
 
         flask_class.wsgi_app = instrumented_wsgi_app  # type: ignore
         print("Flask instrumentation applied")
@@ -75,10 +100,12 @@ class _ResponseBodyCapture(Iterable[bytes]):
         response: Iterable[bytes],
         environ: WSGIEnvironment,
         response_data: dict[str, Any],
+        transform_engine: HttpTransformEngine | None,
     ):
         self._response = response
         self._environ = environ
         self._response_data = response_data
+        self._transform_engine = transform_engine
         self._body_parts: list[bytes] = []
         self._body_size = 0
         self._body_truncated = False
@@ -127,7 +154,7 @@ class _ResponseBodyCapture(Iterable[bytes]):
             if self._body_truncated:
                 self._response_data["body_truncated"] = True
 
-        _capture_span(self._environ, self._response_data)
+        _capture_span(self._environ, self._response_data, self._transform_engine)
 
 
 def _handle_request(
@@ -135,12 +162,18 @@ def _handle_request(
     environ: WSGIEnvironment,
     start_response: StartResponse,
     original_wsgi_app: WSGIApplication,
+    transform_engine: HttpTransformEngine | None,
 ) -> Iterable[bytes]:
     """Handle a single Flask request by capturing request/response data"""
     start_time_ns = time.time_ns()
     trace_id = str(uuid.uuid4()).replace("-", "")
     span_id = str(uuid.uuid4()).replace("-", "")[:16]
     response_data: dict[str, Any] = {}
+
+    method = environ.get("REQUEST_METHOD", "GET")
+    path = environ.get("PATH_INFO", "")
+    query_string = environ.get("QUERY_STRING", "")
+    target = f"{path}?{query_string}" if query_string else path
 
     request_body = None
     if environ.get("REQUEST_METHOD") in ("POST", "PUT", "PATCH"):
@@ -158,6 +191,12 @@ def _handle_request(
             pass
 
     environ["_drift_request_body"] = request_body
+
+    request_headers_for_drop = _extract_headers(environ)
+    if transform_engine and transform_engine.should_drop_inbound_request(
+        method, target, request_headers_for_drop
+    ):
+        return original_wsgi_app(app, environ, start_response)
 
     def wrapped_start_response(
         status: str,
@@ -180,15 +219,19 @@ def _handle_request(
     try:
         response = original_wsgi_app(app, environ, wrapped_start_response)
         # Wrap response to capture body and defer span creation
-        return _ResponseBodyCapture(response, environ, response_data)
+        return _ResponseBodyCapture(response, environ, response_data, transform_engine)
     except Exception as e:
         response_data["status_code"] = 500
         response_data["error"] = str(e)
-        _capture_span(environ, response_data)
+        _capture_span(environ, response_data, transform_engine)
         raise
 
 
-def _capture_span(environ: WSGIEnvironment, response_data: dict[str, Any]) -> None:
+def _capture_span(
+    environ: WSGIEnvironment,
+    response_data: dict[str, Any],
+    transform_engine: HttpTransformEngine | None,
+) -> None:
     """Create and collect a span from request/response data"""
     start_time_ns = environ.get("_drift_start_time_ns", 0)
     trace_id = environ.get("_drift_trace_id", "")
@@ -244,6 +287,18 @@ def _capture_span(environ: WSGIEnvironment, response_data: dict[str, Any]) -> No
     if "error" in response_data:
         output_value["errorMessage"] = response_data["error"]  # Match Node SDK field name
 
+    transform_metadata = None
+    if transform_engine:
+        span_data = HttpSpanData(
+            kind=SpanKind.SERVER,
+            input_value=input_value,
+            output_value=output_value,
+        )
+        transform_engine.apply_transforms(span_data)
+        transform_metadata = span_data.transform_metadata
+        input_value = span_data.input_value or input_value
+        output_value = span_data.output_value or output_value
+
     sdk = TuskDrift.get_instance()
     # Derive timestamp from start_time_ns (not datetime.now() which would be end time)
     timestamp_seconds = start_time_ns // 1_000_000_000
@@ -290,6 +345,7 @@ def _capture_span(environ: WSGIEnvironment, response_data: dict[str, Any]) -> No
         is_root_span=True,
         timestamp=Timestamp(seconds=timestamp_seconds, nanos=timestamp_nanos),
         duration=Duration(seconds=duration_seconds, nanos=duration_nanos),
+        transform_metadata=transform_metadata,
     )
 
     sdk.collect_span(span)

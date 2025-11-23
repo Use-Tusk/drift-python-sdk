@@ -27,6 +27,7 @@ from ...core.types import (
     Timestamp,
 )
 from ..base import InstrumentationBase
+from ..http import HttpSpanData, HttpTransformEngine
 
 
 HEADER_SCHEMA_MERGES = {
@@ -37,13 +38,30 @@ MAX_BODY_SIZE = 10000  # 10KB limit
 
 
 class FastAPIInstrumentation(InstrumentationBase):
-    def __init__(self, enabled: bool = True):
+    def __init__(self, enabled: bool = True, transforms: dict[str, Any] | None = None):
+        self._transform_engine = HttpTransformEngine(
+            self._resolve_http_transforms(transforms)
+        )
         super().__init__(
             name="FastAPIInstrumentation",
             module_name="fastapi",
             supported_versions=">=0.68.0",
             enabled=enabled,
         )
+
+    def _resolve_http_transforms(
+        self, provided: dict[str, Any] | list[dict[str, Any]] | None
+    ) -> list[dict[str, Any]] | None:
+        if isinstance(provided, list):
+            return provided
+        if isinstance(provided, dict) and isinstance(provided.get("http"), list):
+            return provided["http"]
+
+        sdk = TuskDrift.get_instance()
+        transforms = getattr(sdk.config, "transforms", None)
+        if isinstance(transforms, dict) and isinstance(transforms.get("http"), list):
+            return transforms["http"]
+        return None
 
     @override
     def patch(self, module: ModuleType) -> None:
@@ -54,6 +72,7 @@ class FastAPIInstrumentation(InstrumentationBase):
             return
 
         original_call = fastapi_class.__call__
+        transform_engine = self._transform_engine
 
         @wraps(original_call)
         async def instrumented_call(
@@ -63,7 +82,14 @@ class FastAPIInstrumentation(InstrumentationBase):
             if scope.get("type") != "http":
                 return await original_call(self, scope, receive, send)
 
-            return await _handle_request(self, scope, receive, send, original_call)
+            return await _handle_request(
+                self,
+                scope,
+                receive,
+                send,
+                original_call,
+                transform_engine,
+            )
 
         fastapi_class.__call__ = instrumented_call
         print("FastAPI instrumentation applied")
@@ -75,6 +101,7 @@ async def _handle_request(
     receive: Receive,
     send: Send,
     original_call: Callable[..., Any],
+    transform_engine: HttpTransformEngine | None,
 ) -> None:
     """Handle a single FastAPI request by capturing request/response data"""
     start_time_ns = time.time_ns()
@@ -87,6 +114,23 @@ async def _handle_request(
     response_body_parts: list[bytes] = []
     response_body_size = 0
     response_body_truncated = False
+
+    method = scope.get("method", "GET")
+    raw_path = scope.get("path", "/")
+    query_bytes = scope.get("query_string", b"")
+    if isinstance(query_bytes, bytes):
+        query_string = query_bytes.decode("utf-8", errors="replace")
+    else:
+        query_string = str(query_bytes)
+    target_for_drop = f"{raw_path}?{query_string}" if query_string else raw_path
+    headers_for_drop = _extract_headers(scope)
+
+    if transform_engine and transform_engine.should_drop_inbound_request(
+        method,
+        target_for_drop,
+        headers_for_drop,
+    ):
+        return await original_call(app, scope, receive, send)
 
     # Wrap receive to capture request body
     async def wrapped_receive() -> dict[str, Any]:
@@ -140,9 +184,16 @@ async def _handle_request(
         request_body = b"".join(request_body_parts) if request_body_parts else None
         response_body = b"".join(response_body_parts) if response_body_parts else None
         _capture_span(
-            scope, response_data, request_body, body_truncated,
-            response_body, response_body_truncated,
-            start_time_ns, trace_id, span_id
+            scope,
+            response_data,
+            request_body,
+            body_truncated,
+            response_body,
+            response_body_truncated,
+            start_time_ns,
+            trace_id,
+            span_id,
+            transform_engine,
         )
     except Exception as e:
         response_data["status_code"] = 500
@@ -151,9 +202,16 @@ async def _handle_request(
         request_body = b"".join(request_body_parts) if request_body_parts else None
         response_body = b"".join(response_body_parts) if response_body_parts else None
         _capture_span(
-            scope, response_data, request_body, body_truncated,
-            response_body, response_body_truncated,
-            start_time_ns, trace_id, span_id
+            scope,
+            response_data,
+            request_body,
+            body_truncated,
+            response_body,
+            response_body_truncated,
+            start_time_ns,
+            trace_id,
+            span_id,
+            transform_engine,
         )
         raise
 
@@ -168,6 +226,7 @@ def _capture_span(
     start_time_ns: int,
     trace_id: str,
     span_id: str,
+    transform_engine: HttpTransformEngine | None,
 ) -> None:
     """Create and collect a span from request/response data"""
     end_time_ns = time.time_ns()
@@ -228,6 +287,18 @@ def _capture_span(
     if "error_type" in response_data:
         output_value["errorName"] = response_data["error_type"]  # Match Node SDK field name
 
+    transform_metadata = None
+    if transform_engine:
+        span_data = HttpSpanData(
+            kind=SpanKind.SERVER,
+            input_value=input_value,
+            output_value=output_value,
+        )
+        transform_engine.apply_transforms(span_data)
+        input_value = span_data.input_value or input_value
+        output_value = span_data.output_value or output_value
+        transform_metadata = span_data.transform_metadata
+
     sdk = TuskDrift.get_instance()
     # Derive timestamp from start_time_ns (not datetime.now() which would be end time)
     timestamp_seconds = start_time_ns // 1_000_000_000
@@ -277,6 +348,7 @@ def _capture_span(
         is_root_span=True,
         timestamp=Timestamp(seconds=timestamp_seconds, nanos=timestamp_nanos),
         duration=Duration(seconds=duration_seconds, nanos=duration_nanos),
+        transform_metadata=transform_metadata,
     )
 
     sdk.collect_span(span)

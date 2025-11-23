@@ -29,7 +29,7 @@ class TestFastAPIBasicSpanCapture(unittest.TestCase):
         """Set up the SDK and FastAPI app once for all tests."""
         cls.sdk = TuskDrift.get_instance()
         if not TuskDrift._initialized:
-            cls.sdk = TuskDrift.initialize()
+            cls.sdk = TuskDrift.initialize(use_batching=False)
         cls.fastapi_instrumentation = FastAPIInstrumentation()
 
         # Import FastAPI after instrumentation is set up

@@ -7,7 +7,7 @@ import logging
 import os
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .batch_processor import BatchSpanProcessor, BatchSpanProcessorConfig
 from .config import TuskConfig
@@ -50,6 +50,7 @@ class TuskDrift:
         self._sampling_rate: float = 1.0
         self._batch_processor: BatchSpanProcessor | None = None
         self._use_batching: bool = True
+        self._transform_configs: dict[str, Any] | None = None
 
         # Always add in-memory adapter for testing/debugging
         self._adapters.append(self._in_memory_adapter)
@@ -73,6 +74,7 @@ class TuskDrift:
         sdk_version: str = "0.1.0",
         use_batching: bool = True,
         batch_config: BatchSpanProcessorConfig | None = None,
+        transforms: dict[str, Any] | None = None,
     ) -> TuskDrift:
         """
         Initialize the TuskDrift SDK.
@@ -87,6 +89,7 @@ class TuskDrift:
             sdk_version: Version of the SDK
             use_batching: Whether to batch spans before export (default: True)
             batch_config: Optional batch processor configuration
+            transforms: Optional transform configuration matching the Node SDK schema
 
         Returns:
             The initialized TuskDrift instance
@@ -101,7 +104,9 @@ class TuskDrift:
             api_key=api_key,
             env=env,
             sampling_rate=sampling_rate or 1.0,
+            transforms=transforms,
         )
+        instance._transform_configs = transforms
 
         # Determine sampling rate
         instance._sampling_rate = instance._determine_sampling_rate(sampling_rate)
@@ -315,6 +320,10 @@ class TuskDrift:
     def get_sampling_rate(self) -> float:
         """Get the current sampling rate (method for compatibility)."""
         return self._sampling_rate
+
+    def get_transform_configs(self) -> dict[str, Any] | None:
+        """Return transform configuration passed during initialization (if any)."""
+        return self._transform_configs
 
     @property
     def batch_processor(self) -> BatchSpanProcessor | None:
