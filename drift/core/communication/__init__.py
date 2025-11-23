@@ -14,6 +14,14 @@ from .types import (
     GetMockResponse,
     EnvVarRequest,
     EnvVarResponse,
+    MockRequestInput,
+    MockResponseOutput,
+    # Protobuf types (re-exported)
+    SdkMessage,
+    CliMessage,
+    span_to_proto,
+    dict_to_span,
+    extract_response_data,
 )
 from .communicator import ProtobufCommunicator, CommunicatorConfig
 
@@ -29,6 +37,15 @@ __all__ = [
     "GetMockResponse",
     "EnvVarRequest",
     "EnvVarResponse",
+    "MockRequestInput",
+    "MockResponseOutput",
+    # Protobuf types
+    "SdkMessage",
+    "CliMessage",
+    # Utilities
+    "span_to_proto",
+    "dict_to_span",
+    "extract_response_data",
     # Communicator
     "ProtobufCommunicator",
     "CommunicatorConfig",

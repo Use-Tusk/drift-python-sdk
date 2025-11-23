@@ -30,9 +30,12 @@ from drift.core.communication import (
     ConnectResponse,
     GetMockRequest,
     GetMockResponse,
-    SDKMessageType,
-    CLIMessageType,
+    SdkMessage,
+    CliMessage,
+    MockRequestInput,
+    MockResponseOutput,
 )
+from tusk.drift.core.v1 import MessageType
 
 
 class MockCLIServer:
@@ -220,36 +223,7 @@ class TestConnectionHandshake(unittest.TestCase):
     @unittest.skip("Requires mock server implementation")
     def test_successful_connection(self):
         """SDK should successfully connect to CLI."""
-        # Start mock server
-        self.mock_server.start()
-
-        # Queue successful response
-        import json
-        response = json.dumps({
-            "type": CLIMessageType.CONNECT_RESPONSE.value,
-            "payload": {
-                "success": True,
-                "cli_version": "0.2.0",
-                "session_id": "session-123",
-            },
-        }).encode()
-        self.mock_server.queue_response(response)
-
-        # Connect
-        config = CommunicatorConfig(socket_path=self.socket_path)
-        communicator = ProtobufCommunicator(config)
-
-        request = ConnectRequest(
-            service_id="test-service",
-            sdk_version="0.1.0",
-            min_cli_version="0.1.0",
-        )
-
-        response = asyncio.run(communicator.connect(request))
-
-        self.assertTrue(response.success)
-        self.assertTrue(communicator.is_connected)
-        self.assertEqual(communicator.session_id, "session-123")
+        pass
 
     def test_connection_timeout(self):
         """SDK should timeout if CLI doesn't respond."""
@@ -260,14 +234,11 @@ class TestConnectionHandshake(unittest.TestCase):
         )
         communicator = ProtobufCommunicator(config)
 
-        request = ConnectRequest(
-            service_id="test-service",
-            sdk_version="0.1.0",
-            min_cli_version="0.1.0",
-        )
-
-        with self.assertRaises((ConnectionError, TimeoutError, FileNotFoundError)):
-            asyncio.run(communicator.connect(request))
+        with self.assertRaises((ConnectionError, TimeoutError, FileNotFoundError, OSError)):
+            asyncio.run(communicator.connect(
+                connection_info={"socketPath": self.socket_path},
+                service_id="test-service",
+            ))
 
 
 class TestMockRequests(unittest.TestCase):
@@ -363,20 +334,12 @@ class TestProtocolConformance(unittest.TestCase):
     def test_sdk_message_types_match_nodejs(self):
         """SDK message types should match Node.js SDK."""
         # These values must match the protobuf schema
-        self.assertEqual(SDKMessageType.UNSPECIFIED.value, 0)
-        self.assertEqual(SDKMessageType.SDK_CONNECT.value, 1)
-        self.assertEqual(SDKMessageType.MOCK_REQUEST.value, 2)
-        self.assertEqual(SDKMessageType.ENV_VAR_REQUEST.value, 3)
-        self.assertEqual(SDKMessageType.INBOUND_SPAN.value, 4)
-        self.assertEqual(SDKMessageType.ALERT.value, 5)
-
-    def test_cli_message_types_match_nodejs(self):
-        """CLI message types should match Node.js SDK."""
-        self.assertEqual(CLIMessageType.UNSPECIFIED.value, 0)
-        self.assertEqual(CLIMessageType.CONNECT_RESPONSE.value, 1)
-        self.assertEqual(CLIMessageType.MOCK_RESPONSE.value, 2)
-        self.assertEqual(CLIMessageType.ENV_VAR_RESPONSE.value, 3)
-        self.assertEqual(CLIMessageType.INBOUND_SPAN_RESPONSE.value, 4)
+        self.assertEqual(MessageType.UNSPECIFIED.value, 0)
+        self.assertEqual(MessageType.SDK_CONNECT.value, 1)
+        self.assertEqual(MessageType.MOCK_REQUEST.value, 2)
+        self.assertEqual(MessageType.INBOUND_SPAN.value, 3)
+        self.assertEqual(MessageType.ALERT.value, 4)
+        self.assertEqual(MessageType.ENV_VAR_REQUEST.value, 5)
 
 
 class TestErrorHandling(unittest.TestCase):
@@ -387,15 +350,12 @@ class TestErrorHandling(unittest.TestCase):
         config = CommunicatorConfig(socket_path="/nonexistent/path.sock")
         communicator = ProtobufCommunicator(config)
 
-        request = ConnectRequest(
-            service_id="test",
-            sdk_version="0.1.0",
-            min_cli_version="0.1.0",
-        )
-
         try:
-            asyncio.run(communicator.connect(request))
-        except (ConnectionError, FileNotFoundError):
+            asyncio.run(communicator.connect(
+                connection_info={"socketPath": "/nonexistent/path.sock"},
+                service_id="test",
+            ))
+        except (ConnectionError, FileNotFoundError, OSError):
             pass
 
         self.assertFalse(communicator.is_connected)
@@ -409,6 +369,58 @@ class TestErrorHandling(unittest.TestCase):
         # Should not raise
         asyncio.run(communicator.disconnect())
         asyncio.run(communicator.disconnect())
+
+
+class TestProtobufSerialization(unittest.TestCase):
+    """Tests for protobuf message serialization."""
+
+    def test_sdk_message_serialization(self):
+        """SdkMessage should serialize and deserialize correctly."""
+        from drift.version import SDK_VERSION, MIN_CLI_VERSION
+
+        # Create a connect request
+        connect_request = ConnectRequest(
+            service_id="test-service",
+            sdk_version=SDK_VERSION,
+            min_cli_version=MIN_CLI_VERSION,
+        )
+
+        # Create SDK message
+        msg = SdkMessage(
+            type=MessageType.SDK_CONNECT,
+            request_id="test-123",
+            connect_request=connect_request.to_proto(),
+        )
+
+        # Serialize
+        data = bytes(msg)
+        self.assertGreater(len(data), 0)
+
+        # Deserialize
+        msg2 = SdkMessage().parse(data)
+        self.assertEqual(msg2.type, MessageType.SDK_CONNECT)
+        self.assertEqual(msg2.request_id, "test-123")
+        self.assertEqual(msg2.connect_request.service_id, "test-service")
+
+    def test_mock_request_to_proto(self):
+        """GetMockRequest should convert to proto correctly."""
+        request = GetMockRequest(
+            request_id="req-test",
+            test_id="test-1",
+            outbound_span={
+                "trace_id": "abc123",
+                "span_id": "def456",
+                "name": "HTTP GET",
+                "kind": "CLIENT",
+                "input_value": {"method": "GET"},
+            },
+            tags={"env": "test"},
+        )
+
+        proto = request.to_proto()
+        self.assertEqual(proto.request_id, "req-test")
+        self.assertEqual(proto.test_id, "test-1")
+        self.assertEqual(proto.outbound_span.trace_id, "abc123")
 
 
 if __name__ == "__main__":
