@@ -9,6 +9,11 @@ from fnmatch import fnmatch
 from typing import Any, Callable, Literal, Sequence
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+try:
+    from python_jsonpath import JSONPath
+except Exception:  # pragma: no cover - optional dependency
+    JSONPath = None
+
 from ...core.types import SpanKind, TransformAction as MetadataAction, TransformMetadata
 
 ActionFunction = Callable[[str], str]
@@ -308,18 +313,30 @@ class HttpTransformEngine:
     def _compile_json_path_action(
         self, json_path: str, action_fn: ActionFunction, direction: Direction
     ) -> Callable[[HttpSpanData], bool]:
-        tokens = _parse_json_path_expression(json_path)
+        jsonpath_expr = None
+        fallback_tokens: list[str | int] | None = None
+        if JSONPath is not None:
+            try:
+                jsonpath_expr = JSONPath(json_path)
+            except Exception:
+                jsonpath_expr = None
+        if jsonpath_expr is None:
+            fallback_tokens = _parse_json_path_expression(json_path)
 
         def _apply(span: HttpSpanData) -> bool:
             target = span.input_value if direction == "inbound" else span.output_value
             if not isinstance(target, dict):
                 return False
             body = target.get("body")
-            parsed, original_encoding = _load_json_body(body)
+            parsed, _ = _load_json_body(body)
             if parsed is None:
                 return False
 
-            applied = _apply_json_path_tokens(parsed, tokens, action_fn)
+            if jsonpath_expr is not None:
+                applied = _apply_with_python_jsonpath(jsonpath_expr, parsed, action_fn)
+            else:
+                applied = _apply_json_path_tokens(parsed, fallback_tokens or [], action_fn)
+
             if applied:
                 encoded = json.dumps(parsed, separators=(",", ":")).encode("utf-8")
                 target["body"] = base64.b64encode(encoded).decode("ascii")
@@ -564,3 +581,140 @@ def _apply_json_path_tokens(
         parent[key] = action_fn(str(original))
         applied = True
     return applied
+
+
+def _apply_with_python_jsonpath(expr: Any, body: Any, action_fn: ActionFunction) -> bool:
+    applied = False
+    for match in _execute_jsonpath_expression(expr, body):
+        container, key, current_value = _locate_container_from_match(match, body)
+        if container is None or key is None:
+            continue
+        existing_value = current_value
+        if existing_value is None:
+            try:
+                existing_value = container[key]
+            except Exception:
+                continue
+        container[key] = action_fn(str(existing_value))
+        applied = True
+    return applied
+
+
+def _execute_jsonpath_expression(expr: Any, body: Any) -> list[Any]:
+    for method_name in ("find", "parse", "match"):
+        method = getattr(expr, method_name, None)
+        if callable(method):
+            try:
+                result = method(body)
+            except Exception:
+                continue
+            if result is None:
+                continue
+            if isinstance(result, list):
+                return result
+            try:
+                return list(result)
+            except TypeError:
+                return [result]
+    return []
+
+
+def _locate_container_from_match(match: Any, root: Any) -> tuple[Any | None, str | int | None, Any | None]:
+    path = _extract_path_from_match(match)
+    if not path:
+        return None, None, None
+    tokens = _jsonpath_path_to_tokens(path)
+    if not tokens:
+        return None, None, None
+    container, key = _navigate_to_parent(root, tokens)
+    if container is None:
+        return None, None, None
+    value = _extract_value_from_match(match)
+    return container, key, value
+
+
+def _extract_path_from_match(match: Any) -> str | None:
+    if isinstance(match, dict):
+        for key in ("path", "jsonpath", "full_path"):
+            value = match.get(key)
+            if isinstance(value, str):
+                return value
+    if isinstance(match, tuple):
+        for item in match:
+            if isinstance(item, str):
+                return item
+    for attr in ("path", "jsonpath", "full_path"):
+        value = getattr(match, attr, None)
+        if isinstance(value, str):
+            return value
+    return None
+
+
+def _extract_value_from_match(match: Any) -> Any:
+    if isinstance(match, dict):
+        return match.get("value")
+    if isinstance(match, tuple):
+        for item in match:
+            if not isinstance(item, str):
+                return item
+        return None
+    return getattr(match, "value", None)
+
+
+def _jsonpath_path_to_tokens(path: str) -> list[str | int]:
+    if not path:
+        return []
+    tokens: list[str | int] = []
+    i = 0
+    length = len(path)
+    # Skip leading root symbol
+    if path.startswith("$"):
+        i = 1
+
+    while i < length:
+        char = path[i]
+        if char == ".":
+            i += 1
+            start = i
+            while i < length and path[i] not in ".[":
+                i += 1
+            if start < i:
+                tokens.append(path[start:i])
+            continue
+        if char == "[":
+            end = path.find("]", i)
+            if end == -1:
+                break
+            content = path[i + 1 : end]
+            if content and content[0] in "'\"" and content[-1] in "'\"":
+                tokens.append(content[1:-1])
+            elif content == "*":
+                return []
+            else:
+                try:
+                    tokens.append(int(content))
+                except ValueError:
+                    tokens.append(content)
+            i = end + 1
+            continue
+        i += 1
+
+    return tokens
+
+
+def _navigate_to_parent(
+    data: Any, tokens: list[str | int]
+) -> tuple[Any | None, str | int | None]:
+    if not tokens:
+        return None, None
+    current = data
+    for token in tokens[:-1]:
+        if isinstance(token, int):
+            if not isinstance(current, list) or token >= len(current):
+                return None, None
+            current = current[token]
+        else:
+            if not isinstance(current, dict) or token not in current:
+                return None, None
+            current = current[token]
+    return current, tokens[-1]
