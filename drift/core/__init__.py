@@ -2,7 +2,16 @@
 
 from .drift_sdk import TuskDrift
 from .types import DriftMode, CleanSpanData, PackageType, SpanKind, StatusCode
-from .config import TuskConfig
+from .config import (
+    TuskConfig,
+    TuskFileConfig,
+    ServiceConfig,
+    RecordingConfig,
+    TracesConfig,
+    TuskApiConfig,
+    load_tusk_config,
+    find_project_root,
+)
 from .batch_processor import BatchSpanProcessor, BatchSpanProcessorConfig
 from .sampling import should_sample, validate_sampling_rate
 from .data_normalization import (
@@ -15,7 +24,15 @@ from .data_normalization import (
 __all__ = [
     # Main SDK
     "TuskDrift",
+    # Config
     "TuskConfig",
+    "TuskFileConfig",
+    "ServiceConfig",
+    "RecordingConfig",
+    "TracesConfig",
+    "TuskApiConfig",
+    "load_tusk_config",
+    "find_project_root",
     # Types
     "DriftMode",
     "CleanSpanData",

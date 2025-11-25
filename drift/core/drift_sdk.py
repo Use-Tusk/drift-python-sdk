@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .batch_processor import BatchSpanProcessor, BatchSpanProcessorConfig
-from .config import TuskConfig
+from .config import TuskConfig, TuskFileConfig, load_tusk_config
 from .sampling import should_sample, validate_sampling_rate
 from .types import CleanSpanData, DriftMode
 from ..instrumentation.registry import install_hooks
@@ -43,6 +43,7 @@ class TuskDrift:
     def __init__(self) -> None:
         self.mode: DriftMode = self._detect_mode()
         self.config = TuskConfig()
+        self.file_config: TuskFileConfig | None = None
         self.app_ready = False
         self._adapters: list[SpanExportAdapter] = []
         self._in_memory_adapter = InMemorySpanAdapter()
@@ -51,6 +52,9 @@ class TuskDrift:
         self._batch_processor: BatchSpanProcessor | None = None
         self._use_batching: bool = True
         self._transform_configs: dict[str, Any] | None = None
+
+        # Load config file early
+        self.file_config = load_tusk_config()
 
         # Always add in-memory adapter for testing/debugging
         self._adapters.append(self._in_memory_adapter)
@@ -100,25 +104,43 @@ class TuskDrift:
             logger.warning("TuskDrift already initialized")
             return instance
 
+        # Get file config (already loaded in __init__)
+        file_config = instance.file_config
+
+        # Merge transforms: init param takes precedence over config file
+        effective_transforms = transforms
+        if effective_transforms is None and file_config and file_config.transforms:
+            effective_transforms = file_config.transforms
+
         instance.config = TuskConfig(
             api_key=api_key,
             env=env,
             sampling_rate=sampling_rate or 1.0,
-            transforms=transforms,
+            transforms=effective_transforms,
         )
-        instance._transform_configs = transforms
+        instance._transform_configs = effective_transforms
 
-        # Determine sampling rate
+        # Determine sampling rate (includes config file as a source)
         instance._sampling_rate = instance._determine_sampling_rate(sampling_rate)
         instance._use_batching = use_batching
+
+        # Determine export directory: init param > config file > None
+        effective_export_directory = export_directory
+        if effective_export_directory is None and file_config and file_config.traces and file_config.traces.dir:
+            effective_export_directory = file_config.traces.dir
+
+        # Determine tusk backend URL: init param > config file > default
+        effective_backend_url = tusk_backend_base_url
+        if tusk_backend_base_url == "https://api.usetusk.ai" and file_config and file_config.tusk_api and file_config.tusk_api.url:
+            effective_backend_url = file_config.tusk_api.url
 
         # Setup adapters based on configuration
         instance._setup_adapters(
             api_key=api_key,
             observable_service_id=observable_service_id,
             environment=env or "development",
-            export_directory=export_directory,
-            tusk_backend_base_url=tusk_backend_base_url,
+            export_directory=effective_export_directory,
+            tusk_backend_base_url=effective_backend_url,
             sdk_version=sdk_version,
         )
 
@@ -160,7 +182,15 @@ class TuskDrift:
             except ValueError:
                 logger.warning(f"Invalid TUSK_SAMPLING_RATE env var: {env_rate}")
 
-        # 3. Default
+        # 3. Config file
+        if self.file_config and self.file_config.recording and self.file_config.recording.sampling_rate is not None:
+            config_rate = self.file_config.recording.sampling_rate
+            validated = validate_sampling_rate(config_rate, "config file")
+            if validated is not None:
+                logger.debug(f"Using sampling rate from config file: {validated}")
+                return validated
+
+        # 4. Default
         logger.debug("Using default sampling rate: 1.0")
         return 1.0
 
@@ -329,6 +359,10 @@ class TuskDrift:
     def batch_processor(self) -> BatchSpanProcessor | None:
         """Get the batch processor (if batching is enabled)."""
         return self._batch_processor
+
+    def get_file_config(self) -> TuskFileConfig | None:
+        """Get the loaded config file (if any)."""
+        return self.file_config
 
     def shutdown(self) -> None:
         """Shutdown the SDK and all adapters."""

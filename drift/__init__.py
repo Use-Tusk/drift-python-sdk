@@ -8,6 +8,15 @@ from .core import (
     StatusCode,
     DriftMode,
     BatchSpanProcessorConfig,
+    # Config
+    TuskConfig,
+    TuskFileConfig,
+    ServiceConfig,
+    RecordingConfig,
+    TracesConfig,
+    TuskApiConfig,
+    load_tusk_config,
+    find_project_root,
 )
 from .instrumentation.flask import FlaskInstrumentation
 from .instrumentation.fastapi import FastAPIInstrumentation
@@ -33,6 +42,15 @@ __all__ = [
     "StatusCode",
     "DriftMode",
     "BatchSpanProcessorConfig",
+    # Config
+    "TuskConfig",
+    "TuskFileConfig",
+    "ServiceConfig",
+    "RecordingConfig",
+    "TracesConfig",
+    "TuskApiConfig",
+    "load_tusk_config",
+    "find_project_root",
     # Instrumentations
     "FlaskInstrumentation",
     "FastAPIInstrumentation",

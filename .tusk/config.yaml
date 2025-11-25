@@ -1,0 +1,36 @@
+service:
+  id: 'python-sdk-example'
+  name: 'drift-python-sdk'
+  port: 8000
+  start:
+    command: 'python -m uvicorn app:app --port 8000'
+
+traces:
+  dir: '.tusk/traces'
+
+tusk_api:
+  url: 'https://api.usetusk.ai'
+
+recording:
+  sampling_rate: 1.0
+  export_spans: false
+  enable_env_var_recording: false
+  enable_analytics: false
+  exclude_paths:
+    - '/health'
+    - '/metrics'
+
+test_execution:
+  concurrency: 5
+  timeout: '30s'
+
+comparison:
+  ignore_fields:
+    - 'timestamp'
+    - 'duration'
+
+transforms:
+  http:
+    - path: '/api/users/*'
+      action: 'redact'
+      field: 'password'
