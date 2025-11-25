@@ -5,14 +5,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import stat
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .batch_processor import BatchSpanProcessor, BatchSpanProcessorConfig
+from .communication.communicator import CommunicatorConfig, ProtobufCommunicator
+from .communication.types import MockRequestInput, MockResponseOutput
 from .config import TuskConfig, TuskFileConfig, load_tusk_config
 from .sampling import should_sample, validate_sampling_rate
-from .types import CleanSpanData, DriftMode
+from .trace_blocking_manager import TraceBlockingManager, should_block_span
+from .types import CleanSpanData, DriftMode, SpanKind
 from ..instrumentation.registry import install_hooks
 from ..tracing.adapters.base import SpanExportAdapter
 from ..tracing.adapters.memory import InMemorySpanAdapter
@@ -52,6 +56,11 @@ class TuskDrift:
         self._batch_processor: BatchSpanProcessor | None = None
         self._use_batching: bool = True
         self._transform_configs: dict[str, Any] | None = None
+
+        # CLI communication for replay mode
+        self.communicator: ProtobufCommunicator | None = None
+        self._cli_connection_task: asyncio.Task | None = None
+        self._is_connected_with_cli = False
 
         # Load config file early
         self.file_config = load_tusk_config()
@@ -144,6 +153,10 @@ class TuskDrift:
             sdk_version=sdk_version,
         )
 
+        # Initialize communicator for REPLAY mode
+        if instance.mode == "REPLAY":
+            instance._init_communicator_for_replay()
+
         # Setup batch processor if batching is enabled
         if use_batching:
             instance._batch_processor = BatchSpanProcessor(
@@ -203,8 +216,18 @@ class TuskDrift:
         tusk_backend_base_url: str,
         sdk_version: str,
     ) -> None:
-        """Setup export adapters based on configuration."""
-        # Filesystem adapter
+        """Setup export adapters based on configuration and mode.
+
+        - RECORD mode: Filesystem and/or API adapters (+ in-memory)
+        - REPLAY mode: Only in-memory adapter
+        - DISABLED mode: Only in-memory adapter
+        """
+        # Only setup filesystem/API adapters in RECORD mode
+        if self.mode != "RECORD":
+            logger.debug(f"Mode is {self.mode}, skipping filesystem/API adapters")
+            return
+
+        # Filesystem adapter (RECORD mode only)
         if export_directory is not None:
             from ..tracing.adapters.filesystem import FilesystemSpanAdapter
 
@@ -212,7 +235,7 @@ class TuskDrift:
             self._adapters.append(filesystem_adapter)
             logger.info(f"Filesystem adapter enabled, exporting to: {export_directory}")
 
-        # API adapter (requires api_key and observable_service_id)
+        # API adapter (RECORD mode only, requires api_key and observable_service_id)
         if api_key and observable_service_id:
             from ..tracing.adapters.api import ApiSpanAdapter, ApiSpanAdapterConfig
 
@@ -241,6 +264,67 @@ class TuskDrift:
         else:
             return "RECORD"
 
+    def _init_communicator_for_replay(self) -> None:
+        """Initialize CLI communicator for REPLAY mode."""
+        # Check for TCP or Unix socket mode
+        mock_host = os.environ.get("TUSK_MOCK_HOST")
+        mock_port = os.environ.get("TUSK_MOCK_PORT")
+        mock_socket = os.environ.get("TUSK_MOCK_SOCKET")
+
+        connection_info: dict[str, Any]
+
+        if mock_host and mock_port:
+            # TCP mode (Docker)
+            connection_info = {
+                "host": mock_host,
+                "port": int(mock_port),
+            }
+            logger.debug(f"Using TCP connection to CLI: {mock_host}:{mock_port}")
+        else:
+            # Unix socket mode (default)
+            socket_path = mock_socket or "/tmp/tusk-connect.sock"
+
+            # Check if socket exists and is ready
+            socket_file = Path(socket_path)
+            if not socket_file.exists():
+                raise FileNotFoundError(
+                    f"Socket not found at {socket_path}. Make sure Tusk CLI is running."
+                )
+
+            # Check if it's actually a socket
+            file_stat = socket_file.stat()
+            if not stat.S_ISSOCK(file_stat.st_mode):
+                raise ValueError(f"Path exists but is not a socket: {socket_path}")
+
+            logger.debug(f"Socket found and verified at {socket_path}")
+            connection_info = {"socketPath": socket_path}
+
+        # Initialize communicator
+        self.communicator = ProtobufCommunicator(CommunicatorConfig.from_env())
+
+        # Start connection early (will be awaited on first mock request)
+        async def connect_to_cli():
+            try:
+                service_id = (
+                    self.file_config.service.id
+                    if self.file_config and self.file_config.service
+                    else "unknown"
+                )
+                await self.communicator.connect(connection_info, service_id)
+                self._is_connected_with_cli = True
+                logger.debug("SDK successfully connected to CLI")
+            except Exception as e:
+                logger.error(f"Failed to connect to CLI: {e}")
+                self._is_connected_with_cli = False
+
+        # Start connection task
+        try:
+            loop = asyncio.get_event_loop()
+            self._cli_connection_task = loop.create_task(connect_to_cli())
+        except RuntimeError:
+            # No event loop running yet, will connect on first request
+            logger.debug("No event loop running, will connect on first mock request")
+
     def mark_app_as_ready(self) -> None:
         """Mark the application as ready (started listening)."""
         self.app_ready = True
@@ -248,11 +332,27 @@ class TuskDrift:
 
     def collect_span(self, span: CleanSpanData) -> None:
         """
-        Collect a span and export to all configured adapters.
+        Collect a span and export to configured adapters (mode-aware).
+
+        Behavior by mode:
+        - DISABLED: Skip collection
+        - RECORD: Export to filesystem/API adapters (respects sampling + trace blocking)
+        - REPLAY: Send inbound SERVER spans to CLI, store in memory
 
         Respects sampling rate and uses batching if enabled.
         """
         if self.mode == "DISABLED":
+            return
+
+        # Check if trace is blocked (exceeds size limit)
+        trace_blocking_manager = TraceBlockingManager.get_instance()
+        if trace_blocking_manager.is_trace_blocked(span.trace_id):
+            logger.debug(f"Span {span.name} skipped - trace {span.trace_id} is blocked")
+            return
+
+        # Check for oversized spans and block entire trace if needed
+        if should_block_span(span):
+            logger.warning(f"Span {span.name} blocked due to size - blocking trace {span.trace_id}")
             return
 
         # Check sampling
@@ -261,13 +361,175 @@ class TuskDrift:
             return
 
         # Validate span can be serialized to protobuf
-        span.to_proto()
+        try:
+            span.to_proto()
+        except Exception as e:
+            logger.error(f"Failed to serialize span to protobuf: {e}")
+            return
+
+        # REPLAY mode: Send inbound SERVER spans to CLI
+        if self.mode == "REPLAY" and span.kind == SpanKind.SERVER:
+            asyncio.create_task(self.send_inbound_span_for_replay(span))
 
         # Export via batch processor or directly
         if self._batch_processor is not None:
             self._batch_processor.add_span(span)
         else:
             self._export_to_adapters_sync([span])
+
+    # ========== Mock Request Methods (REPLAY mode) ==========
+
+    async def request_mock_async(self, mock_request: MockRequestInput) -> MockResponseOutput:
+        """Request mocked response data from CLI (async).
+
+        Args:
+            mock_request: Mock request with test_id and outbound_span
+
+        Returns:
+            MockResponseOutput with found status and response data
+        """
+        if self.mode != "REPLAY":
+            logger.error("Cannot request mock: not in replay mode")
+            return MockResponseOutput(found=False, error="Not in replay mode")
+
+        if not self.communicator:
+            logger.error("Cannot request mock: communicator not initialized")
+            return MockResponseOutput(found=False, error="Communicator not initialized")
+
+        # Wait for CLI connection if not yet established
+        if self._cli_connection_task and not self._is_connected_with_cli:
+            logger.debug("Waiting for CLI connection to be established")
+            try:
+                await self._cli_connection_task
+            except Exception as e:
+                logger.error(f"Failed to connect to CLI: {e}")
+                return MockResponseOutput(found=False, error=f"Connection failed: {e}")
+
+        if not self._is_connected_with_cli:
+            return MockResponseOutput(found=False, error="Not connected to CLI")
+
+        try:
+            logger.debug(f"Sending mock request to CLI (async), testId: {mock_request.test_id}")
+            response = await self.communicator.request_mock_async(mock_request)
+            logger.debug(f"Received mock response from CLI: found={response.found}")
+            return response
+        except Exception as e:
+            logger.error(f"Error sending mock request to CLI: {e}")
+            return MockResponseOutput(found=False, error=f"Request failed: {e}")
+
+    def request_mock_sync(self, mock_request: MockRequestInput) -> MockResponseOutput:
+        """Request mocked response data from CLI (synchronous).
+
+        This blocks the current thread. Use for instrumentations that
+        require synchronous mock fetching.
+
+        Args:
+            mock_request: Mock request with test_id and outbound_span
+
+        Returns:
+            MockResponseOutput with found status and response data
+        """
+        if self.mode != "REPLAY":
+            logger.error("Cannot request mock: not in replay mode")
+            return MockResponseOutput(found=False, error="Not in replay mode")
+
+        if not self.communicator:
+            logger.error("Cannot request mock: communicator not initialized")
+            return MockResponseOutput(found=False, error="Communicator not initialized")
+
+        if not self._is_connected_with_cli:
+            logger.error("Cannot request mock: not connected to CLI")
+            return MockResponseOutput(found=False, error="Not connected to CLI")
+
+        try:
+            logger.debug(f"Sending mock request to CLI (sync), testId: {mock_request.test_id}")
+            response = self.communicator.request_mock_sync(mock_request)
+            logger.debug(f"Received mock response from CLI: found={response.found}")
+            return response
+        except Exception as e:
+            logger.error(f"Error sending mock request to CLI: {e}")
+            return MockResponseOutput(found=False, error=f"Request failed: {e}")
+
+    def request_env_vars_sync(self, trace_test_server_span_id: str) -> dict[str, str]:
+        """Request environment variables from CLI (synchronous).
+
+        Args:
+            trace_test_server_span_id: Span ID for trace context
+
+        Returns:
+            Dictionary of environment variable names to values
+        """
+        if self.mode != "REPLAY":
+            logger.debug("Cannot request env vars: not in replay mode")
+            return {}
+
+        if not self.communicator:
+            logger.debug("Cannot request env vars: communicator not initialized")
+            return {}
+
+        if not self._is_connected_with_cli:
+            logger.error("Cannot request env vars: not connected to CLI")
+            return {}
+
+        try:
+            logger.debug(f"Requesting env vars (sync) for trace: {trace_test_server_span_id}")
+            env_vars = self.communicator.request_env_vars_sync(trace_test_server_span_id)
+            logger.debug(f"Received env vars from CLI, count: {len(env_vars)}")
+            return env_vars
+        except Exception as e:
+            logger.error(f"Error requesting env vars from CLI: {e}")
+            return {}
+
+    async def send_inbound_span_for_replay(self, span: CleanSpanData) -> None:
+        """Send an inbound span to CLI for replay validation.
+
+        Args:
+            span: The inbound span data to send
+        """
+        if self.mode != "REPLAY" or not self.communicator:
+            return
+
+        if not self._is_connected_with_cli:
+            logger.debug("Cannot send inbound span: not connected to CLI")
+            return
+
+        try:
+            await self.communicator.send_inbound_span_for_replay(span)
+        except Exception as e:
+            logger.error(f"Error sending inbound span to CLI: {e}")
+
+    async def send_instrumentation_version_mismatch_alert(
+        self,
+        module_name: str,
+        requested_version: str | None,
+        supported_versions: list[str],
+    ) -> None:
+        """Send instrumentation version mismatch alert to CLI."""
+        if not self.communicator or not self._is_connected_with_cli:
+            return
+
+        try:
+            await self.communicator.send_instrumentation_version_mismatch_alert(
+                module_name, requested_version, supported_versions
+            )
+        except Exception as e:
+            logger.debug(f"Failed to send version mismatch alert: {e}")
+
+    async def send_unpatched_dependency_alert(
+        self,
+        stack_trace: str,
+        trace_test_server_span_id: str,
+    ) -> None:
+        """Send unpatched dependency alert to CLI."""
+        if not self.communicator or not self._is_connected_with_cli:
+            return
+
+        try:
+            await self.communicator.send_unpatched_dependency_alert(
+                stack_trace, trace_test_server_span_id
+            )
+        except Exception:
+            pass  # Alerts are non-critical
 
     def _export_to_adapters_sync(self, spans: list[CleanSpanData]) -> None:
         """Export spans to all configured adapters synchronously."""
@@ -372,6 +634,20 @@ class TuskDrift:
         if self._batch_processor is not None:
             self._batch_processor.stop()
             logger.debug("Batch processor stopped")
+
+        # Disconnect from CLI if connected
+        if self.communicator:
+            try:
+                asyncio.run(self.communicator.disconnect())
+                logger.debug("Disconnected from CLI")
+            except Exception as e:
+                logger.error(f"Error disconnecting from CLI: {e}")
+
+        # Shutdown trace blocking manager
+        try:
+            TraceBlockingManager.get_instance().shutdown()
+        except Exception as e:
+            logger.error(f"Error shutting down trace blocking manager: {e}")
 
         # Shutdown adapters
         for adapter in self._adapters:

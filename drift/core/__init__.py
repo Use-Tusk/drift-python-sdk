@@ -20,6 +20,13 @@ from .data_normalization import (
     create_span_input_value,
     create_mock_input_value,
 )
+from .trace_blocking_manager import (
+    TraceBlockingManager,
+    estimate_span_size,
+    should_block_span,
+    MAX_SPAN_SIZE_MB,
+    MAX_SPAN_SIZE_BYTES,
+)
 
 __all__ = [
     # Main SDK
@@ -50,4 +57,10 @@ __all__ = [
     "remove_none_values",
     "create_span_input_value",
     "create_mock_input_value",
+    # Trace blocking
+    "TraceBlockingManager",
+    "estimate_span_size",
+    "should_block_span",
+    "MAX_SPAN_SIZE_MB",
+    "MAX_SPAN_SIZE_BYTES",
 ]
