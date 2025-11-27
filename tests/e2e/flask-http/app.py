@@ -15,10 +15,10 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))))
 
 # Initialize SDK before importing Flask
-from drift import TuskDrift, FlaskInstrumentation
+from drift import TuskDrift
 
 sdk = TuskDrift.initialize(use_batching=False)
-flask_instrumentation = FlaskInstrumentation()
+# Flask and requests are auto-instrumented by SDK initialization
 
 from flask import Flask, jsonify, request
 import requests as http_requests

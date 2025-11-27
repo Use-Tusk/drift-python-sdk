@@ -10,16 +10,14 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .batch_processor import BatchSpanProcessor, BatchSpanProcessorConfig
+from ..instrumentation.registry import install_hooks
 from .communication.communicator import CommunicatorConfig, ProtobufCommunicator
 from .communication.types import MockRequestInput, MockResponseOutput
 from .config import TuskConfig, TuskFileConfig, load_tusk_config
 from .sampling import should_sample, validate_sampling_rate
 from .trace_blocking_manager import TraceBlockingManager, should_block_span
+from .tracing import TdSpanExporter, TdSpanExporterConfig
 from .types import CleanSpanData, DriftMode, SpanKind
-from ..instrumentation.registry import install_hooks
-from ..tracing.adapters.base import SpanExportAdapter
-from ..tracing.adapters.memory import InMemorySpanAdapter
 
 if TYPE_CHECKING:
     pass
@@ -49,24 +47,18 @@ class TuskDrift:
         self.config = TuskConfig()
         self.file_config: TuskFileConfig | None = None
         self.app_ready = False
-        self._adapters: list[SpanExportAdapter] = []
-        self._in_memory_adapter = InMemorySpanAdapter()
         self._sdk_instance_id = str(uuid.uuid4())
         self._sampling_rate: float = 1.0
-        self._batch_processor: BatchSpanProcessor | None = None
-        self._use_batching: bool = True
         self._transform_configs: dict[str, Any] | None = None
 
-        # CLI communication for replay mode
+        self.span_exporter: TdSpanExporter | None = None
+
         self.communicator: ProtobufCommunicator | None = None
         self._cli_connection_task: asyncio.Task | None = None
         self._is_connected_with_cli = False
 
         # Load config file early
         self.file_config = load_tusk_config()
-
-        # Always add in-memory adapter for testing/debugging
-        self._adapters.append(self._in_memory_adapter)
 
     @classmethod
     def get_instance(cls) -> TuskDrift:
@@ -85,8 +77,6 @@ class TuskDrift:
         export_directory: str | Path | None = None,
         tusk_backend_base_url: str = "https://api.usetusk.ai",
         sdk_version: str = "0.1.0",
-        use_batching: bool = True,
-        batch_config: BatchSpanProcessorConfig | None = None,
         transforms: dict[str, Any] | None = None,
     ) -> TuskDrift:
         """
@@ -100,8 +90,6 @@ class TuskDrift:
             export_directory: Directory for filesystem export (optional)
             tusk_backend_base_url: Base URL for the Tusk backend
             sdk_version: Version of the SDK
-            use_batching: Whether to batch spans before export (default: True)
-            batch_config: Optional batch processor configuration
             transforms: Optional transform configuration matching the Node SDK schema
 
         Returns:
@@ -113,10 +101,8 @@ class TuskDrift:
             logger.warning("TuskDrift already initialized")
             return instance
 
-        # Get file config (already loaded in __init__)
         file_config = instance.file_config
 
-        # Merge transforms: init param takes precedence over config file
         effective_transforms = transforms
         if effective_transforms is None and file_config and file_config.transforms:
             effective_transforms = file_config.transforms
@@ -129,48 +115,56 @@ class TuskDrift:
         )
         instance._transform_configs = effective_transforms
 
-        # Determine sampling rate (includes config file as a source)
         instance._sampling_rate = instance._determine_sampling_rate(sampling_rate)
-        instance._use_batching = use_batching
 
-        # Determine export directory: init param > config file > None
         effective_export_directory = export_directory
-        if effective_export_directory is None and file_config and file_config.traces and file_config.traces.dir:
+        if (
+            effective_export_directory is None
+            and file_config
+            and file_config.traces
+            and file_config.traces.dir
+        ):
             effective_export_directory = file_config.traces.dir
 
         # Determine tusk backend URL: init param > config file > default
         effective_backend_url = tusk_backend_base_url
-        if tusk_backend_base_url == "https://api.usetusk.ai" and file_config and file_config.tusk_api and file_config.tusk_api.url:
+        if (
+            tusk_backend_base_url == "https://api.usetusk.ai"
+            and file_config
+            and file_config.tusk_api
+            and file_config.tusk_api.url
+        ):
             effective_backend_url = file_config.tusk_api.url
 
-        # Setup adapters based on configuration
-        instance._setup_adapters(
-            api_key=api_key,
-            observable_service_id=observable_service_id,
-            environment=env or "development",
-            export_directory=effective_export_directory,
-            tusk_backend_base_url=effective_backend_url,
-            sdk_version=sdk_version,
+        base_dir = (
+            Path(effective_export_directory)
+            if effective_export_directory
+            else Path.cwd() / ".tusk" / "traces"
         )
+        exporter_config = TdSpanExporterConfig(
+            base_directory=base_dir,
+            mode=instance.mode,
+            observable_service_id=observable_service_id,
+            use_remote_export=api_key is not None and observable_service_id is not None,
+            api_key=api_key,
+            tusk_backend_base_url=effective_backend_url,
+            environment=env or "development",
+            sdk_version=sdk_version,
+            sdk_instance_id=instance._sdk_instance_id,
+        )
+        instance.span_exporter = TdSpanExporter(exporter_config)
 
-        # Initialize communicator for REPLAY mode
         if instance.mode == "REPLAY":
             instance._init_communicator_for_replay()
 
-        # Setup batch processor if batching is enabled
-        if use_batching:
-            instance._batch_processor = BatchSpanProcessor(
-                adapters=instance._adapters,
-                config=batch_config,
-            )
-            instance._batch_processor.start()
-            logger.debug("Batch span processor started")
-
-        # Install instrumentation hooks
         install_hooks()
 
+        instance._init_auto_instrumentations()
+
         cls._initialized = True
-        print(f"Drift SDK initialized in {instance.mode} mode (sampling: {instance._sampling_rate * 100:.0f}%)")
+        print(
+            f"Drift SDK initialized in {instance.mode} mode (sampling: {instance._sampling_rate * 100:.0f}%)"
+        )
 
         return instance
 
@@ -196,7 +190,11 @@ class TuskDrift:
                 logger.warning(f"Invalid TUSK_SAMPLING_RATE env var: {env_rate}")
 
         # 3. Config file
-        if self.file_config and self.file_config.recording and self.file_config.recording.sampling_rate is not None:
+        if (
+            self.file_config
+            and self.file_config.recording
+            and self.file_config.recording.sampling_rate is not None
+        ):
             config_rate = self.file_config.recording.sampling_rate
             validated = validate_sampling_rate(config_rate, "config file")
             if validated is not None:
@@ -206,50 +204,6 @@ class TuskDrift:
         # 4. Default
         logger.debug("Using default sampling rate: 1.0")
         return 1.0
-
-    def _setup_adapters(
-        self,
-        api_key: str | None,
-        observable_service_id: str | None,
-        environment: str,
-        export_directory: str | Path | None,
-        tusk_backend_base_url: str,
-        sdk_version: str,
-    ) -> None:
-        """Setup export adapters based on configuration and mode.
-
-        - RECORD mode: Filesystem and/or API adapters (+ in-memory)
-        - REPLAY mode: Only in-memory adapter
-        - DISABLED mode: Only in-memory adapter
-        """
-        # Only setup filesystem/API adapters in RECORD mode
-        if self.mode != "RECORD":
-            logger.debug(f"Mode is {self.mode}, skipping filesystem/API adapters")
-            return
-
-        # Filesystem adapter (RECORD mode only)
-        if export_directory is not None:
-            from ..tracing.adapters.filesystem import FilesystemSpanAdapter
-
-            filesystem_adapter = FilesystemSpanAdapter(export_directory)
-            self._adapters.append(filesystem_adapter)
-            logger.info(f"Filesystem adapter enabled, exporting to: {export_directory}")
-
-        # API adapter (RECORD mode only, requires api_key and observable_service_id)
-        if api_key and observable_service_id:
-            from ..tracing.adapters.api import ApiSpanAdapter, ApiSpanAdapterConfig
-
-            api_config = ApiSpanAdapterConfig(
-                api_key=api_key,
-                tusk_backend_base_url=tusk_backend_base_url,
-                observable_service_id=observable_service_id,
-                environment=environment,
-                sdk_version=sdk_version,
-                sdk_instance_id=self._sdk_instance_id,
-            )
-            api_adapter = ApiSpanAdapter(api_config)
-            self._adapters.append(api_adapter)
-            logger.info("API adapter enabled")
 
     def _detect_mode(self) -> DriftMode:
         """Detect the SDK mode from environment variable."""
@@ -325,6 +279,38 @@ class TuskDrift:
             # No event loop running yet, will connect on first request
             logger.debug("No event loop running, will connect on first mock request")
 
+    def _init_auto_instrumentations(self) -> None:
+        """Auto-detect and initialize all available instrumentations."""
+        try:
+            import flask  # pyright: ignore[reportUnusedImport]
+
+            from ..instrumentation.flask import FlaskInstrumentation
+
+            _ = FlaskInstrumentation()
+            logger.info("initialized flask instrumentation")
+        except ImportError:
+            logger.warning("failed to initialize flask instrumentation")
+
+        try:
+            import fastapi  # pyright: ignore[reportUnusedImport]
+
+            from ..instrumentation.fastapi import FastAPIInstrumentation
+
+            _ = FastAPIInstrumentation()
+            logger.info("initialized fastapi instrumentation")
+        except ImportError:
+            logger.warning("failed to initialize fastapi instrumentation")
+
+        try:
+            import requests  # pyright: ignore[reportUnusedImport]
+
+            from ..instrumentation.requests import RequestsInstrumentation
+
+            _ = RequestsInstrumentation()
+            logger.info("initialized requests instrumentation")
+        except ImportError:
+            logger.warning("failed to initialize requests instrumentation")
+
     def mark_app_as_ready(self) -> None:
         """Mark the application as ready (started listening)."""
         self.app_ready = True
@@ -338,8 +324,6 @@ class TuskDrift:
         - DISABLED: Skip collection
         - RECORD: Export to filesystem/API adapters (respects sampling + trace blocking)
         - REPLAY: Send inbound SERVER spans to CLI, store in memory
-
-        Respects sampling rate and uses batching if enabled.
         """
         if self.mode == "DISABLED":
             return
@@ -352,7 +336,9 @@ class TuskDrift:
 
         # Check for oversized spans and block entire trace if needed
         if should_block_span(span):
-            logger.warning(f"Span {span.name} blocked due to size - blocking trace {span.trace_id}")
+            logger.warning(
+                f"Span {span.name} blocked due to size - blocking trace {span.trace_id}"
+            )
             return
 
         # Check sampling
@@ -369,17 +355,24 @@ class TuskDrift:
 
         # REPLAY mode: Send inbound SERVER spans to CLI
         if self.mode == "REPLAY" and span.kind == SpanKind.SERVER:
-            asyncio.create_task(self.send_inbound_span_for_replay(span))
+            try:
+                asyncio.create_task(self.send_inbound_span_for_replay(span))
+            except RuntimeError:
+                # No event loop running, skip CLI communication
+                pass
 
-        # Export via batch processor or directly
-        if self._batch_processor is not None:
-            self._batch_processor.add_span(span)
-        else:
-            self._export_to_adapters_sync([span])
+        # Export to all adapters via span exporter
+        if self.span_exporter:
+            try:
+                # Try to create task if event loop is running
+                asyncio.create_task(self.span_exporter.export_spans([span]))
+            except RuntimeError:
+                # No event loop, run synchronously
+                asyncio.run(self.span_exporter.export_spans([span]))
 
-    # ========== Mock Request Methods (REPLAY mode) ==========
-
-    async def request_mock_async(self, mock_request: MockRequestInput) -> MockResponseOutput:
+    async def request_mock_async(
+        self, mock_request: MockRequestInput
+    ) -> MockResponseOutput:
         """Request mocked response data from CLI (async).
 
         Args:
@@ -409,7 +402,9 @@ class TuskDrift:
             return MockResponseOutput(found=False, error="Not connected to CLI")
 
         try:
-            logger.debug(f"Sending mock request to CLI (async), testId: {mock_request.test_id}")
+            logger.debug(
+                f"Sending mock request to CLI (async), testId: {mock_request.test_id}"
+            )
             response = await self.communicator.request_mock_async(mock_request)
             logger.debug(f"Received mock response from CLI: found={response.found}")
             return response
@@ -442,7 +437,9 @@ class TuskDrift:
             return MockResponseOutput(found=False, error="Not connected to CLI")
 
         try:
-            logger.debug(f"Sending mock request to CLI (sync), testId: {mock_request.test_id}")
+            logger.debug(
+                f"Sending mock request to CLI (sync), testId: {mock_request.test_id}"
+            )
             response = self.communicator.request_mock_sync(mock_request)
             logger.debug(f"Received mock response from CLI: found={response.found}")
             return response
@@ -472,8 +469,12 @@ class TuskDrift:
             return {}
 
         try:
-            logger.debug(f"Requesting env vars (sync) for trace: {trace_test_server_span_id}")
-            env_vars = self.communicator.request_env_vars_sync(trace_test_server_span_id)
+            logger.debug(
+                f"Requesting env vars (sync) for trace: {trace_test_server_span_id}"
+            )
+            env_vars = self.communicator.request_env_vars_sync(
+                trace_test_server_span_id
+            )
             logger.debug(f"Received env vars from CLI, count: {len(env_vars)}")
             return env_vars
         except Exception as e:
@@ -531,79 +532,6 @@ class TuskDrift:
         except Exception:
             pass  # Alerts are non-critical
 
-    def _export_to_adapters_sync(self, spans: list[CleanSpanData]) -> None:
-        """Export spans to all configured adapters synchronously."""
-        import asyncio
-
-        for adapter in self._adapters:
-            try:
-                # Handle async adapters
-                if asyncio.iscoroutinefunction(adapter.export_spans):
-                    try:
-                        loop = asyncio.get_running_loop()
-                        task = asyncio.create_task(
-                            self._export_with_error_handling(adapter, spans)
-                        )
-                        task.add_done_callback(self._handle_export_task_done)
-                    except RuntimeError:
-                        asyncio.run(adapter.export_spans(spans))
-                else:
-                    adapter.export_spans(spans)  # type: ignore
-            except Exception as e:
-                logger.error("Failed to export spans via %s: %s", adapter.name, e)
-
-    async def _export_with_error_handling(
-        self, adapter: SpanExportAdapter, spans: list[CleanSpanData]
-    ) -> None:
-        """Wrap adapter export with error handling."""
-        try:
-            result = await adapter.export_spans(spans)
-            if result.code.value != 0:  # Not SUCCESS
-                logger.error(
-                    "Adapter %s failed to export spans: %s",
-                    adapter.name,
-                    result.error,
-                )
-        except Exception as e:
-            logger.error("Adapter %s raised exception: %s", adapter.name, e)
-
-    def _handle_export_task_done(self, task: "asyncio.Task[None]") -> None:
-        """Handle completed export task, logging any unhandled exceptions."""
-        if task.cancelled():
-            return
-        exc = task.exception()
-        if exc:
-            logger.error("Export task failed with unhandled exception: %s", exc)
-
-    def add_adapter(self, adapter: SpanExportAdapter) -> None:
-        """Add a custom span export adapter."""
-        self._adapters.append(adapter)
-        logger.info(f"Added adapter: {adapter.name}")
-
-    def remove_adapter(self, adapter: SpanExportAdapter) -> None:
-        """Remove a span export adapter."""
-        if adapter in self._adapters:
-            self._adapters.remove(adapter)
-            logger.info(f"Removed adapter: {adapter.name}")
-
-    def clear_adapters(self) -> None:
-        """Remove all adapters except the in-memory adapter."""
-        self._adapters = [self._in_memory_adapter]
-        logger.info("Cleared all adapters (keeping in-memory)")
-
-    def get_in_memory_spans(self) -> list[CleanSpanData]:
-        """Get all spans from the in-memory adapter."""
-        return self._in_memory_adapter.get_all_spans()
-
-    def clear_in_memory_spans(self) -> None:
-        """Clear all spans from the in-memory adapter."""
-        self._in_memory_adapter.clear()
-
-    @property
-    def adapters(self) -> list[SpanExportAdapter]:
-        """Get the list of configured adapters."""
-        return list(self._adapters)
-
     @property
     def sampling_rate(self) -> float:
         """Get the current sampling rate."""
@@ -617,11 +545,6 @@ class TuskDrift:
         """Return transform configuration passed during initialization (if any)."""
         return self._transform_configs
 
-    @property
-    def batch_processor(self) -> BatchSpanProcessor | None:
-        """Get the batch processor (if batching is enabled)."""
-        return self._batch_processor
-
     def get_file_config(self) -> TuskFileConfig | None:
         """Get the loaded config file (if any)."""
         return self.file_config
@@ -630,12 +553,10 @@ class TuskDrift:
         """Shutdown the SDK and all adapters."""
         import asyncio
 
-        # Stop batch processor first (flushes remaining spans)
-        if self._batch_processor is not None:
-            self._batch_processor.stop()
-            logger.debug("Batch processor stopped")
+        if self.span_exporter is not None:
+            asyncio.run(self.span_exporter.shutdown())
+            logger.debug("Span exporter shut down")
 
-        # Disconnect from CLI if connected
         if self.communicator:
             try:
                 asyncio.run(self.communicator.disconnect())
@@ -643,24 +564,9 @@ class TuskDrift:
             except Exception as e:
                 logger.error(f"Error disconnecting from CLI: {e}")
 
-        # Shutdown trace blocking manager
         try:
             TraceBlockingManager.get_instance().shutdown()
         except Exception as e:
             logger.error(f"Error shutting down trace blocking manager: {e}")
-
-        # Shutdown adapters
-        for adapter in self._adapters:
-            try:
-                if asyncio.iscoroutinefunction(adapter.shutdown):
-                    try:
-                        loop = asyncio.get_running_loop()
-                        asyncio.create_task(adapter.shutdown())
-                    except RuntimeError:
-                        asyncio.run(adapter.shutdown())
-                else:
-                    adapter.shutdown()  # type: ignore
-            except Exception as e:
-                logger.error(f"Error shutting down adapter {adapter.name}: {e}")
 
         print("Drift SDK shutdown complete")

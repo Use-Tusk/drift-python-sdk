@@ -20,6 +20,7 @@ from .core import (
 )
 from .instrumentation.flask import FlaskInstrumentation
 from .instrumentation.fastapi import FastAPIInstrumentation
+from .instrumentation.requests import RequestsInstrumentation
 from .tracing.adapters import (
     SpanExportAdapter,
     ExportResult,
@@ -54,6 +55,7 @@ __all__ = [
     # Instrumentations
     "FlaskInstrumentation",
     "FastAPIInstrumentation",
+    "RequestsInstrumentation",
     # Adapters
     "SpanExportAdapter",
     "ExportResult",

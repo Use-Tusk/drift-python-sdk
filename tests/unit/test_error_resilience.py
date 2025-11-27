@@ -157,11 +157,14 @@ class TestSDKErrorResilience(unittest.TestCase):
     def test_sdk_continues_after_collect_span_error(self):
         """SDK should continue operation after collect_span errors."""
         from drift import TuskDrift
+        from drift.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
 
         sdk = TuskDrift.get_instance()
+        adapter = InMemorySpanAdapter()
+        register_in_memory_adapter(adapter)
 
         # Get initial span count
-        initial_count = len(sdk.get_in_memory_spans())
+        initial_count = len(adapter.get_all_spans())
 
         # Collect a valid span
         span1 = create_test_span(name="valid-span-1")
@@ -178,7 +181,7 @@ class TestSDKErrorResilience(unittest.TestCase):
         sdk.collect_span(span2)
 
         # SDK should still be functional
-        final_count = len(sdk.get_in_memory_spans())
+        final_count = len(adapter.get_all_spans())
         # We should have at least 2 more spans than initial (the valid ones)
         self.assertGreaterEqual(final_count - initial_count, 2)
 

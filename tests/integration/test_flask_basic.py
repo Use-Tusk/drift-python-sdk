@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import requests
 
-from drift import FlaskInstrumentation, TuskDrift
+from drift import TuskDrift
 from drift.core.types import SpanKind, StatusCode
 
 
@@ -27,10 +27,14 @@ class TestFlaskBasicSpanCapture(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Set up the SDK and Flask app once for all tests."""
-        cls.sdk = TuskDrift.initialize(use_batching=False)
-        cls.flask_instrumentation = FlaskInstrumentation()
+        from drift.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
 
-        # Import Flask after instrumentation is set up
+        cls.sdk = TuskDrift.initialize()
+        cls.adapter = InMemorySpanAdapter()
+        register_in_memory_adapter(cls.adapter)
+
+        # Flask is auto-instrumented by SDK initialization
+        # Import Flask after SDK is set up
         from flask import Flask, jsonify, request
 
         cls.app = Flask(__name__)
@@ -77,7 +81,7 @@ class TestFlaskBasicSpanCapture(unittest.TestCase):
 
     def setUp(self):
         """Clear spans before each test."""
-        self.sdk.clear_in_memory_spans()
+        self.adapter.clear()
 
     def wait_for_spans(self, timeout: float = 0.5):
         """Wait for spans to be processed."""
@@ -90,7 +94,7 @@ class TestFlaskBasicSpanCapture(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.wait_for_spans()
 
-        spans = self.sdk.get_in_memory_spans()
+        spans = self.adapter.get_all_spans()
         self.assertGreaterEqual(len(spans), 1)
 
         # Find the server span (inbound request)
@@ -108,7 +112,7 @@ class TestFlaskBasicSpanCapture(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.wait_for_spans()
 
-        spans = self.sdk.get_in_memory_spans()
+        spans = self.adapter.get_all_spans()
         server_spans = [s for s in spans if s.kind == SpanKind.SERVER]
         self.assertGreaterEqual(len(server_spans), 1)
 
@@ -127,7 +131,7 @@ class TestFlaskBasicSpanCapture(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.wait_for_spans()
 
-        spans = self.sdk.get_in_memory_spans()
+        spans = self.adapter.get_all_spans()
         server_spans = [s for s in spans if s.kind == SpanKind.SERVER]
         self.assertGreaterEqual(len(server_spans), 1)
 
@@ -139,7 +143,7 @@ class TestFlaskBasicSpanCapture(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.wait_for_spans()
 
-        spans = self.sdk.get_in_memory_spans()
+        spans = self.adapter.get_all_spans()
         server_spans = [s for s in spans if s.kind == SpanKind.SERVER]
         self.assertGreaterEqual(len(server_spans), 1)
 
@@ -155,7 +159,7 @@ class TestFlaskBasicSpanCapture(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         self.wait_for_spans()
 
-        spans = self.sdk.get_in_memory_spans()
+        spans = self.adapter.get_all_spans()
         server_spans = [s for s in spans if s.kind == SpanKind.SERVER]
         self.assertGreaterEqual(len(server_spans), 1)
 
@@ -174,7 +178,7 @@ class TestFlaskBasicSpanCapture(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.wait_for_spans()
 
-        spans = self.sdk.get_in_memory_spans()
+        spans = self.adapter.get_all_spans()
         server_spans = [s for s in spans if s.kind == SpanKind.SERVER]
         self.assertGreaterEqual(len(server_spans), 1)
 
@@ -191,7 +195,7 @@ class TestFlaskBasicSpanCapture(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.wait_for_spans()
 
-        spans = self.sdk.get_in_memory_spans()
+        spans = self.adapter.get_all_spans()
         self.assertGreaterEqual(len(spans), 1)
 
         span = spans[0]
@@ -205,7 +209,7 @@ class TestFlaskBasicSpanCapture(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.wait_for_spans()
 
-        spans = self.sdk.get_in_memory_spans()
+        spans = self.adapter.get_all_spans()
         self.assertGreaterEqual(len(spans), 1)
 
         span = spans[0]
@@ -219,7 +223,7 @@ class TestFlaskBasicSpanCapture(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.wait_for_spans()
 
-        spans = self.sdk.get_in_memory_spans()
+        spans = self.adapter.get_all_spans()
         self.assertGreaterEqual(len(spans), 1)
 
         span = spans[0]
@@ -236,7 +240,11 @@ class TestFlaskMultipleRequests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Set up the SDK and Flask app once for all tests."""
+        from drift.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
+
         cls.sdk = TuskDrift.get_instance()
+        cls.adapter = InMemorySpanAdapter()
+        register_in_memory_adapter(cls.adapter)
 
         # Import Flask after instrumentation is set up
         from flask import Flask, jsonify
@@ -265,7 +273,7 @@ class TestFlaskMultipleRequests(unittest.TestCase):
 
     def setUp(self):
         """Clear spans before each test."""
-        self.sdk.clear_in_memory_spans()
+        self.adapter.clear()
 
     def wait_for_spans(self, timeout: float = 0.5):
         """Wait for spans to be processed."""
@@ -280,7 +288,7 @@ class TestFlaskMultipleRequests(unittest.TestCase):
         self.assertEqual(response2.status_code, 200)
         self.wait_for_spans()
 
-        spans = self.sdk.get_in_memory_spans()
+        spans = self.adapter.get_all_spans()
         server_spans = [s for s in spans if s.kind == SpanKind.SERVER]
 
         # Should have at least 2 server spans
@@ -299,7 +307,7 @@ class TestFlaskMultipleRequests(unittest.TestCase):
         self.assertEqual(response2.status_code, 200)
         self.wait_for_spans()
 
-        spans = self.sdk.get_in_memory_spans()
+        spans = self.adapter.get_all_spans()
         server_spans = [s for s in spans if s.kind == SpanKind.SERVER]
 
         self.assertGreaterEqual(len(server_spans), 2)

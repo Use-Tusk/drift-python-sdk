@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import requests
 
-from drift import FastAPIInstrumentation, TuskDrift
+from drift import TuskDrift
 from drift.core.types import SpanKind, StatusCode
 
 
@@ -27,12 +27,17 @@ class TestFastAPIBasicSpanCapture(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Set up the SDK and FastAPI app once for all tests."""
+        from drift.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
+
         cls.sdk = TuskDrift.get_instance()
         if not TuskDrift._initialized:
-            cls.sdk = TuskDrift.initialize(use_batching=False)
-        cls.fastapi_instrumentation = FastAPIInstrumentation()
+            cls.sdk = TuskDrift.initialize()
 
-        # Import FastAPI after instrumentation is set up
+        cls.adapter = InMemorySpanAdapter()
+        register_in_memory_adapter(cls.adapter)
+
+        # FastAPI is auto-instrumented by SDK initialization
+        # Import FastAPI after SDK is set up
         from fastapi import FastAPI
         from pydantic import BaseModel
 
@@ -78,7 +83,7 @@ class TestFastAPIBasicSpanCapture(unittest.TestCase):
 
     def setUp(self):
         """Clear spans before each test."""
-        self.sdk.clear_in_memory_spans()
+        self.adapter.clear()
 
     def wait_for_spans(self, timeout: float = 0.5):
         """Wait for spans to be processed."""
@@ -91,7 +96,7 @@ class TestFastAPIBasicSpanCapture(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.wait_for_spans()
 
-        spans = self.sdk.get_in_memory_spans()
+        spans = self.adapter.get_all_spans()
         self.assertGreaterEqual(len(spans), 1)
 
         # Find the server span (inbound request)
@@ -109,7 +114,7 @@ class TestFastAPIBasicSpanCapture(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.wait_for_spans()
 
-        spans = self.sdk.get_in_memory_spans()
+        spans = self.adapter.get_all_spans()
         server_spans = [s for s in spans if s.kind == SpanKind.SERVER]
         self.assertGreaterEqual(len(server_spans), 1)
 
@@ -124,7 +129,7 @@ class TestFastAPIBasicSpanCapture(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.wait_for_spans()
 
-        spans = self.sdk.get_in_memory_spans()
+        spans = self.adapter.get_all_spans()
         server_spans = [s for s in spans if s.kind == SpanKind.SERVER]
         self.assertGreaterEqual(len(server_spans), 1)
 
@@ -136,7 +141,7 @@ class TestFastAPIBasicSpanCapture(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.wait_for_spans()
 
-        spans = self.sdk.get_in_memory_spans()
+        spans = self.adapter.get_all_spans()
         server_spans = [s for s in spans if s.kind == SpanKind.SERVER]
         self.assertGreaterEqual(len(server_spans), 1)
 
@@ -152,7 +157,7 @@ class TestFastAPIBasicSpanCapture(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.wait_for_spans()
 
-        spans = self.sdk.get_in_memory_spans()
+        spans = self.adapter.get_all_spans()
         self.assertGreaterEqual(len(spans), 1)
 
         span = spans[0]
@@ -166,7 +171,7 @@ class TestFastAPIBasicSpanCapture(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.wait_for_spans()
 
-        spans = self.sdk.get_in_memory_spans()
+        spans = self.adapter.get_all_spans()
         self.assertGreaterEqual(len(spans), 1)
 
         span = spans[0]
@@ -180,7 +185,7 @@ class TestFastAPIBasicSpanCapture(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.wait_for_spans()
 
-        spans = self.sdk.get_in_memory_spans()
+        spans = self.adapter.get_all_spans()
         self.assertGreaterEqual(len(spans), 1)
 
         span = spans[0]
@@ -197,7 +202,7 @@ class TestFastAPIBasicSpanCapture(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.wait_for_spans()
 
-        spans = self.sdk.get_in_memory_spans()
+        spans = self.adapter.get_all_spans()
         server_spans = [s for s in spans if s.kind == SpanKind.SERVER]
         self.assertGreaterEqual(len(server_spans), 1)
 
@@ -214,7 +219,11 @@ class TestFastAPIMultipleRequests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Set up the SDK and FastAPI app once for all tests."""
+        from drift.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
+
         cls.sdk = TuskDrift.get_instance()
+        cls.adapter = InMemorySpanAdapter()
+        register_in_memory_adapter(cls.adapter)
 
         from fastapi import FastAPI
 
@@ -241,7 +250,7 @@ class TestFastAPIMultipleRequests(unittest.TestCase):
 
     def setUp(self):
         """Clear spans before each test."""
-        self.sdk.clear_in_memory_spans()
+        self.adapter.clear()
 
     def wait_for_spans(self, timeout: float = 0.5):
         """Wait for spans to be processed."""
@@ -256,7 +265,7 @@ class TestFastAPIMultipleRequests(unittest.TestCase):
         self.assertEqual(response2.status_code, 200)
         self.wait_for_spans()
 
-        spans = self.sdk.get_in_memory_spans()
+        spans = self.adapter.get_all_spans()
         server_spans = [s for s in spans if s.kind == SpanKind.SERVER]
 
         self.assertGreaterEqual(len(server_spans), 2)
@@ -273,7 +282,7 @@ class TestFastAPIMultipleRequests(unittest.TestCase):
         self.assertEqual(response2.status_code, 200)
         self.wait_for_spans()
 
-        spans = self.sdk.get_in_memory_spans()
+        spans = self.adapter.get_all_spans()
         server_spans = [s for s in spans if s.kind == SpanKind.SERVER]
 
         self.assertGreaterEqual(len(server_spans), 2)

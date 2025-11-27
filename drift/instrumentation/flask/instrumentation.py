@@ -26,7 +26,6 @@ from ...core.types import (
 from ..base import InstrumentationBase
 from ..http import HttpSpanData, HttpTransformEngine
 
-
 HEADER_SCHEMA_MERGES = {
     "headers": SchemaMerge(match_importance=0.0),
 }
@@ -68,12 +67,16 @@ class FlaskInstrumentation(InstrumentationBase):
             print("Warning: Flask.Flask class not found")
             return
 
-        original_wsgi_app = flask_class.wsgi_app
+        original_wsgi_app: WSGIApplication = flask_class.wsgi_app  # pyright: ignore[reportAny]
         transform_engine = self._transform_engine
 
+        # wraps(original) = functools.update_wrapper(instrumented, original)
+        # copies some metadata over to instrumented
         @wraps(original_wsgi_app)
         def instrumented_wsgi_app(
-            self, environ: WSGIEnvironment, start_response: StartResponse
+            self: WSGIApplication,
+            environ: WSGIEnvironment,
+            start_response: StartResponse,
         ) -> Iterable[bytes]:
             return _handle_request(
                 self,
@@ -158,7 +161,7 @@ class _ResponseBodyCapture(Iterable[bytes]):
 
 
 def _handle_request(
-    app: Any,
+    app: WSGIApplication,
     environ: WSGIEnvironment,
     start_response: StartResponse,
     original_wsgi_app: WSGIApplication,
@@ -168,7 +171,7 @@ def _handle_request(
     start_time_ns = time.time_ns()
     trace_id = str(uuid.uuid4()).replace("-", "")
     span_id = str(uuid.uuid4()).replace("-", "")[:16]
-    response_data: dict[str, Any] = {}
+    response_data: dict[str, Any] = {}  # pyright: ignore[reportExplicitAny]
 
     method = environ.get("REQUEST_METHOD", "GET")
     path = environ.get("PATH_INFO", "")
@@ -250,7 +253,11 @@ def _capture_span(
 
     # Get HTTP version from SERVER_PROTOCOL (e.g., "HTTP/1.1" -> "1.1")
     server_protocol = environ.get("SERVER_PROTOCOL", "HTTP/1.1")
-    http_version = server_protocol.replace("HTTP/", "") if server_protocol.startswith("HTTP/") else "1.1"
+    http_version = (
+        server_protocol.replace("HTTP/", "")
+        if server_protocol.startswith("HTTP/")
+        else "1.1"
+    )
 
     input_value = {
         "method": environ.get("REQUEST_METHOD", ""),
@@ -259,7 +266,9 @@ def _capture_span(
         "headers": _extract_headers(environ),
         "httpVersion": http_version,
         "remoteAddress": environ.get("REMOTE_ADDR"),
-        "remotePort": int(environ["REMOTE_PORT"]) if environ.get("REMOTE_PORT") else None,
+        "remotePort": int(environ["REMOTE_PORT"])
+        if environ.get("REMOTE_PORT")
+        else None,
     }
     # Remove None values to keep span clean
     input_value = {k: v for k, v in input_value.items() if v is not None}
@@ -271,7 +280,9 @@ def _capture_span(
         input_value["bodySize"] = len(request_body)
 
     output_value: dict[str, Any] = {
-        "statusCode": response_data.get("status_code", 200),  # camelCase to match Node SDK
+        "statusCode": response_data.get(
+            "status_code", 200
+        ),  # camelCase to match Node SDK
         "statusMessage": response_data.get("status_message", ""),
         "headers": response_data.get("headers", {}),
     }
@@ -285,7 +296,9 @@ def _capture_span(
             output_value["bodyProcessingError"] = "truncated"
 
     if "error" in response_data:
-        output_value["errorMessage"] = response_data["error"]  # Match Node SDK field name
+        output_value["errorMessage"] = response_data[
+            "error"
+        ]  # Match Node SDK field name
 
     transform_metadata = None
     if transform_engine:

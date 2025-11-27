@@ -15,10 +15,10 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))))
 
 # Initialize SDK before importing FastAPI
-from drift import TuskDrift, FastAPIInstrumentation
+from drift import TuskDrift
 
 sdk = TuskDrift.initialize(use_batching=False)
-fastapi_instrumentation = FastAPIInstrumentation()
+# FastAPI and httpx are auto-instrumented by SDK initialization
 
 from fastapi import FastAPI, Request
 from pydantic import BaseModel
