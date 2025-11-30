@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirna
 # Initialize SDK before importing Flask
 from drift import TuskDrift
 
-sdk = TuskDrift.initialize(use_batching=False)
+sdk = TuskDrift.initialize()
 # Flask and requests are auto-instrumented by SDK initialization
 
 from flask import Flask, jsonify, request

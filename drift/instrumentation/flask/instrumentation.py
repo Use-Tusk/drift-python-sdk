@@ -7,6 +7,7 @@ from collections.abc import Iterable, Iterator
 from functools import wraps
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, override
+from venv import logger
 
 if TYPE_CHECKING:
     from _typeshed import OptExcInfo
@@ -22,6 +23,8 @@ from ...core.types import (
     SpanStatus,
     StatusCode,
     Timestamp,
+    current_trace_id_context,
+    current_span_id_context,
 )
 from ..base import InstrumentationBase
 from ..http import HttpSpanData, HttpTransformEngine
@@ -64,7 +67,7 @@ class FlaskInstrumentation(InstrumentationBase):
         """Patch Flask to capture HTTP requests/responses"""
         flask_class = getattr(module, "Flask", None)
         if not flask_class:
-            print("Warning: Flask.Flask class not found")
+            logger.warning("Flask.Flask class not found")
             return
 
         original_wsgi_app: WSGIApplication = flask_class.wsgi_app  # pyright: ignore[reportAny]
@@ -130,18 +133,15 @@ class _ResponseBodyCapture(Iterable[bytes]):
                         else:
                             self._body_parts.append(chunk)
                             self._body_size += len(chunk)
-                # Pass chunk through to actual response
                 yield chunk
         finally:
-            # Capture span when iteration completes
             self._finalize()
 
     def close(self) -> None:
         """Called by WSGI server when response is done."""
         self._finalize()
-        # Call close on wrapped response if it has one
         if hasattr(self._response, "close"):
-            self._response.close()  # type: ignore
+            self._response.close()
 
     def _finalize(self) -> None:
         """Capture the span with collected response body."""
@@ -159,6 +159,14 @@ class _ResponseBodyCapture(Iterable[bytes]):
 
         _capture_span(self._environ, self._response_data, self._transform_engine)
 
+        # Reset trace context after span is captured
+        trace_token = self._environ.get("_drift_trace_token")
+        span_token = self._environ.get("_drift_span_token")
+        if trace_token:
+            current_trace_id_context.reset(trace_token)
+        if span_token:
+            current_span_id_context.reset(span_token)
+
 
 def _handle_request(
     app: WSGIApplication,
@@ -171,6 +179,11 @@ def _handle_request(
     start_time_ns = time.time_ns()
     trace_id = str(uuid.uuid4()).replace("-", "")
     span_id = str(uuid.uuid4()).replace("-", "")[:16]
+
+    # Set trace context for child spans (e.g., outbound HTTP calls)
+    trace_token = current_trace_id_context.set(trace_id)
+    span_token = current_span_id_context.set(span_id)
+
     response_data: dict[str, Any] = {}  # pyright: ignore[reportExplicitAny]
 
     method = environ.get("REQUEST_METHOD", "GET")
@@ -218,6 +231,8 @@ def _handle_request(
     environ["_drift_start_time_ns"] = start_time_ns
     environ["_drift_trace_id"] = trace_id
     environ["_drift_span_id"] = span_id
+    environ["_drift_trace_token"] = trace_token
+    environ["_drift_span_token"] = span_token
 
     try:
         response = original_wsgi_app(app, environ, wrapped_start_response)
@@ -227,6 +242,9 @@ def _handle_request(
         response_data["status_code"] = 500
         response_data["error"] = str(e)
         _capture_span(environ, response_data, transform_engine)
+        # Reset trace context on error
+        current_trace_id_context.reset(trace_token)
+        current_span_id_context.reset(span_token)
         raise
 
 
@@ -266,11 +284,10 @@ def _capture_span(
         "headers": _extract_headers(environ),
         "httpVersion": http_version,
         "remoteAddress": environ.get("REMOTE_ADDR"),
-        "remotePort": int(environ["REMOTE_PORT"])
+        "remotePort": int(environ.get("REMOTE_PORT"))
         if environ.get("REMOTE_PORT")
         else None,
     }
-    # Remove None values to keep span clean
     input_value = {k: v for k, v in input_value.items() if v is not None}
 
     request_body = environ.get("_drift_request_body")

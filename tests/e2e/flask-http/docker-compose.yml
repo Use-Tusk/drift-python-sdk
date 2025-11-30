@@ -1,10 +1,8 @@
-version: '3.8'
-
 services:
   app:
     build:
-      context: ../../../..
-      dockerfile: python/tests/e2e/flask-http/Dockerfile
+      context: ../../..
+      dockerfile: tests/e2e/flask-http/Dockerfile
       args:
         - CACHEBUST=${CACHEBUST:-1}
         - TUSK_CLI_VERSION=${TUSK_CLI_VERSION:-latest}
@@ -16,12 +14,19 @@ services:
       - TUSK_DRIFT_MODE=${TUSK_DRIFT_MODE:-RECORD}
     volumes:
       # Mount SDK source for hot reload
-      - ../../../..:/sdk:ro
+      - ../../..:/sdk:ro
       # Mount .tusk folder to persist traces
       - ./.tusk:/app/.tusk
       # Mount app source for development
       - ./app.py:/app/app.py
+      - ./test_requests.py:/app/test_requests.py
+      - ./start_server.sh:/app/start_server.sh
     working_dir: /app
-    # Keep container running without starting the app
-    # The CLI will control starting/stopping the app
-    command: tail -f /dev/null
+    # Start the server and generate traces
+    command: bash start_server.sh
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
