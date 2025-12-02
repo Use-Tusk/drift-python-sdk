@@ -5,7 +5,10 @@ import json
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
-from drift.instrumentation.requests.instrumentation import RequestsInstrumentation
+from drift.instrumentation.requests.instrumentation import (
+    RequestsInstrumentation,
+    RequestDroppedByTransform,
+)
 from drift.core.json_schema_helper import EncodingType, DecodedType
 
 
@@ -387,6 +390,164 @@ class TestSchemaMergeHints(unittest.TestCase):
         self.assertIn("body", input_merges)
         self.assertEqual(input_merges["body"].encoding, EncodingType.BASE64)
         self.assertEqual(input_merges["body"].decoded_type, DecodedType.JSON)
+
+
+class TestMockRequestMetadata(unittest.TestCase):
+    """Test that mock requests include schema/hash metadata and stack traces."""
+
+    @patch('drift.instrumentation.requests.instrumentation.replay_trace_id_context')
+    @patch('drift.instrumentation.requests.instrumentation.JsonSchemaHelper')
+    @patch('drift.instrumentation.requests.instrumentation.TuskDrift')
+    def test_mock_request_includes_schema_hashes(self, mock_tusk_drift, mock_schema_helper, mock_replay_context):
+        """Test that mock requests include schema and hash metadata for CLI matching."""
+        instrumentation = RequestsInstrumentation()
+
+        # Mock schema helper to return specific hashes
+        mock_schema_result = Mock()
+        mock_schema_result.schema = {"type": "object"}
+        mock_schema_result.decoded_schema_hash = "schema-hash-123"
+        mock_schema_result.decoded_value_hash = "value-hash-456"
+        mock_schema_helper.generate_schema_and_hash.return_value = mock_schema_result
+
+        mock_sdk = MagicMock()
+        mock_sdk.request_mock_sync.return_value = Mock(found=False)
+        mock_replay_context.get.return_value = "replay-trace-123"
+
+        # Call _try_get_mock
+        result = instrumentation._try_get_mock(
+            mock_sdk,
+            "POST",
+            "http://example.com/api",
+            trace_id="trace-123",
+            span_id="span-456",
+            stack_trace="test stack trace",
+            json={"test": "data"}
+        )
+
+        # Verify schema generation was called
+        mock_schema_helper.generate_schema_and_hash.assert_called_once()
+
+        # Verify mock request was sent with outbound_span containing schema/hash metadata
+        mock_sdk.request_mock_sync.assert_called_once()
+        mock_request = mock_sdk.request_mock_sync.call_args[0][0]
+        outbound_span = mock_request.outbound_span
+
+        # Verify schema and hash fields are present
+        self.assertIsNotNone(outbound_span.input_schema)
+        self.assertEqual(outbound_span.input_schema_hash, "schema-hash-123")
+        self.assertEqual(outbound_span.input_value_hash, "value-hash-456")
+
+    @patch('drift.instrumentation.requests.instrumentation.replay_trace_id_context')
+    @patch('drift.instrumentation.requests.instrumentation.TuskDrift')
+    def test_mock_request_includes_stack_trace(self, mock_tusk_drift, mock_replay_context):
+        """Test that mock requests include stack trace for CLI alerts."""
+        instrumentation = RequestsInstrumentation()
+
+        mock_sdk = MagicMock()
+        mock_sdk.request_mock_sync.return_value = Mock(found=False)
+        mock_replay_context.get.return_value = "replay-trace-123"
+
+        test_stack_trace = "File test.py, line 10, in test_function\n  requests.get('http://api.com')"
+
+        # Call _try_get_mock
+        result = instrumentation._try_get_mock(
+            mock_sdk,
+            "GET",
+            "http://example.com/api",
+            trace_id="trace-123",
+            span_id="span-456",
+            stack_trace=test_stack_trace,
+        )
+
+        # Verify mock request was sent with stack trace in outbound_span
+        mock_sdk.request_mock_sync.assert_called_once()
+        mock_request = mock_sdk.request_mock_sync.call_args[0][0]
+        outbound_span = mock_request.outbound_span
+
+        # Verify stack_trace is included
+        self.assertEqual(outbound_span.stack_trace, test_stack_trace)
+
+
+class TestDropTransforms(unittest.TestCase):
+    """Test that drop transforms prevent outbound HTTP calls."""
+
+    @patch('drift.instrumentation.requests.instrumentation.TuskDrift')
+    @patch('drift.instrumentation.requests.instrumentation.current_trace_id_context')
+    @patch('drift.instrumentation.requests.instrumentation.current_span_id_context')
+    def test_drop_transform_prevents_outbound_request(self, mock_span_context, mock_trace_context, mock_tusk_drift):
+        """Test that drop transforms prevent HTTP request and raise exception (matches Node SDK)."""
+        # Setup - no parent context
+        mock_trace_context.get.return_value = None
+        mock_span_context.get.return_value = None
+
+        # Create instrumentation with mocked transform engine
+        instrumentation = RequestsInstrumentation()
+        mock_transform_engine = Mock()
+        mock_transform_engine.should_drop_outbound_request.return_value = True  # Should drop
+        instrumentation._transform_engine = mock_transform_engine
+
+        mock_sdk = MagicMock()
+        mock_sdk.mode = "RECORD"
+        mock_sdk.app_ready = True
+        mock_tusk_drift.get_instance.return_value = mock_sdk
+
+        # Mock the requests module
+        import requests
+        original_request = Mock(return_value=Mock(status_code=200))
+
+        # Patch the requests.Session.request method
+        with patch.object(requests.Session, 'request', original_request):
+            # Apply instrumentation
+            instrumentation.patch(requests)
+
+            # Make a request - should raise RequestDroppedByTransform exception
+            session = requests.Session()
+
+            with self.assertRaises(RequestDroppedByTransform) as context:
+                session.request("GET", "http://example.com/api", headers={})
+
+            # Verify exception has correct details
+            exception = context.exception
+            self.assertEqual(exception.method, "GET")
+            self.assertEqual(exception.url, "http://example.com/api")
+            self.assertIn("dropped by transform rule", str(exception))
+
+            # Verify drop check was called BEFORE request
+            mock_transform_engine.should_drop_outbound_request.assert_called_once_with(
+                "GET", "http://example.com/api", {}
+            )
+
+            # Verify original_request was NOT called (request was dropped)
+            original_request.assert_not_called()
+
+            # Verify span was still created (showing the drop)
+            mock_sdk.collect_span.assert_called_once()
+            span = mock_sdk.collect_span.call_args[0][0]
+
+            # Verify span shows it was dropped with clear markers (matches Node SDK)
+            # 1. Output value indicates drop
+            self.assertEqual(span.output_value, {"bodyProcessingError": "dropped"})
+
+            # 2. Status is ERROR with "Dropped by transform" message
+            from drift.core.types import StatusCode
+            self.assertEqual(span.status.code, StatusCode.ERROR)
+            self.assertEqual(span.status.message, "Dropped by transform")
+
+            # 3. Transform metadata shows drop action
+            self.assertIsNotNone(span.transform_metadata)
+            self.assertTrue(span.transform_metadata.transformed)
+            self.assertEqual(len(span.transform_metadata.actions), 1)
+            drop_action = span.transform_metadata.actions[0]
+            self.assertEqual(drop_action.type, "drop")
+            self.assertEqual(drop_action.field, "entire_span")
+            self.assertEqual(drop_action.reason, "transforms")
+
+            # 4. Span is marked as unused (isUsed=false in Node SDK)
+            self.assertFalse(span.is_used)
+
+            # 5. Input value should be preserved (not scrubbed)
+            self.assertIn("method", span.input_value)
+            self.assertEqual(span.input_value["method"], "GET")
 
 
 class TestTraceContextPropagation(unittest.TestCase):

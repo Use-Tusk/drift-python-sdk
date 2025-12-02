@@ -23,6 +23,7 @@ comparison:
   ignore_fields:
     - timestamp
     - received_at
+    - X-Amzn-Trace-Id  # Amazon trace ID changes on each request
 
 recording:
   sampling_rate: 1.0 # 100%

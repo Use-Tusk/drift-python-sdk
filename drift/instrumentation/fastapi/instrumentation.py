@@ -431,7 +431,7 @@ def _capture_span(
         input_value["body"] = base64.b64encode(request_body).decode("ascii")
         input_value["bodySize"] = len(request_body)
         if request_body_truncated:
-            input_value["hasBodyParsingError"] = True  # Match Node SDK field name
+            input_value["bodyProcessingError"] = "truncated"  # Match Node SDK field name
 
     output_value: dict[str, Any] = {
         "statusCode": response_data.get("status_code", 200),  # camelCase to match Node SDK
@@ -476,11 +476,28 @@ def _capture_span(
     else:
         status = SpanStatus(code=StatusCode.OK, message="")
 
+    # Build schema merge hints including body encoding and truncation flags
+    input_schema_merges = dict(HEADER_SCHEMA_MERGES)
+    if "body" in input_value:
+        from ...core.json_schema_helper import EncodingType
+        input_schema_merges["body"] = SchemaMerge(encoding=EncodingType.BASE64)
+    # Add bodyProcessingError to schema merges if truncated (matches Node SDK)
+    if request_body_truncated:
+        input_schema_merges["bodyProcessingError"] = SchemaMerge(match_importance=1.0)
+
+    output_schema_merges = dict(HEADER_SCHEMA_MERGES)
+    if "body" in output_value:
+        from ...core.json_schema_helper import EncodingType
+        output_schema_merges["body"] = SchemaMerge(encoding=EncodingType.BASE64)
+    # Add bodyProcessingError to schema merges if truncated (matches Node SDK)
+    if response_body_truncated:
+        output_schema_merges["bodyProcessingError"] = SchemaMerge(match_importance=1.0)
+
     input_schema_info = JsonSchemaHelper.generate_schema_and_hash(
-        input_value, HEADER_SCHEMA_MERGES
+        input_value, input_schema_merges
     )
     output_schema_info = JsonSchemaHelper.generate_schema_and_hash(
-        output_value, HEADER_SCHEMA_MERGES
+        output_value, output_schema_merges
     )
 
     # Use route template if available (e.g., "/greet/{name}") to avoid cardinality explosion

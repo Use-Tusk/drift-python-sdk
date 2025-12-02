@@ -5,15 +5,14 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
 # Install tusk CLI
-ARG TUSK_CLI_VERSION=latest
-RUN curl -fsSL https://get.tusk.dev | bash -s -- --version ${TUSK_CLI_VERSION} || \
-    echo "Warning: tusk CLI installation skipped (may not be available yet)"
+
+RUN curl -fsSL https://raw.githubusercontent.com/Use-Tusk/tusk-drift-cli/main/install.sh | sh
 
 # Copy SDK source (context is python/ directory)
 COPY . /sdk
 
 # Install SDK dependencies
-RUN pip install --no-cache-dir -r /sdk/requirements.txt
+RUN pip install -r /sdk/requirements.txt
 
 # Set Python path
 ENV PYTHONPATH=/sdk:$PYTHONPATH

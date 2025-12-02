@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import logging
 import os
 import stat
@@ -161,6 +162,9 @@ class TuskDrift:
 
         instance._init_auto_instrumentations()
 
+        # Register shutdown handler for graceful cleanup
+        atexit.register(instance.shutdown)
+
         cls._initialized = True
         print(
             f"Drift SDK initialized in {instance.mode} mode (sampling: {instance._sampling_rate * 100:.0f}%)"
@@ -274,10 +278,16 @@ class TuskDrift:
         # Start connection task
         try:
             loop = asyncio.get_event_loop()
-            self._cli_connection_task = loop.create_task(connect_to_cli())
+            if loop.is_running():
+                self._cli_connection_task = loop.create_task(connect_to_cli())
+            else:
+                # Event loop exists but not running - run connection synchronously
+                loop.run_until_complete(connect_to_cli())
         except RuntimeError:
-            # No event loop running yet, will connect on first request
-            logger.debug("No event loop running, will connect on first mock request")
+            # No event loop running yet - create one and connect synchronously
+            # This is critical for tusk CLI which expects immediate acknowledgement
+            logger.debug("No event loop found, creating one to connect to CLI")
+            asyncio.run(connect_to_cli())
 
     def _init_auto_instrumentations(self) -> None:
         """Auto-detect and initialize all available instrumentations."""
@@ -364,10 +374,15 @@ class TuskDrift:
         # Export to all adapters via span exporter
         if self.span_exporter:
             try:
-                # Try to create task if event loop is running
-                asyncio.create_task(self.span_exporter.export_spans([span]))
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Event loop is running, create task
+                    asyncio.create_task(self.span_exporter.export_spans([span]))
+                else:
+                    # Event loop exists but not running, run synchronously
+                    loop.run_until_complete(self.span_exporter.export_spans([span]))
             except RuntimeError:
-                # No event loop, run synchronously
+                # No event loop, create one and run synchronously
                 asyncio.run(self.span_exporter.export_spans([span]))
 
     async def request_mock_async(

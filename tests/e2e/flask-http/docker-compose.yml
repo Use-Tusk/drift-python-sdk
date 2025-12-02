@@ -19,14 +19,13 @@ services:
       - ./.tusk:/app/.tusk
       # Mount app source for development
       - ./app.py:/app/app.py
-      - ./test_requests.py:/app/test_requests.py
-      - ./start_server.sh:/app/start_server.sh
+      - ./record_traces.py:/app/record_traces.py
     working_dir: /app
-    # Start the server and generate traces
-    command: bash start_server.sh
+    # Record traces, then keep container running
+    command: bash -c "python record_traces.py && tail -f /dev/null"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
-      interval: 5s
+      test: ["CMD", "test", "-f", "/app/.record_complete"]
+      interval: 2s
       timeout: 3s
-      retries: 10
-      start_period: 10s
+      retries: 30
+      start_period: 5s

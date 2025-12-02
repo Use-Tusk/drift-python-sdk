@@ -107,6 +107,34 @@ class HttpTransformEngine:
             if drop.direction == "inbound"
         )
 
+    def should_drop_outbound_request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, Any] | None = None,
+    ) -> bool:
+        """Check if an outbound CLIENT request should be dropped.
+
+        This should be called BEFORE making the HTTP request to prevent
+        network traffic for dropped requests.
+        """
+        if not self._drop_transforms:
+            return False
+
+        span = HttpSpanData(
+            kind=SpanKind.CLIENT,
+            input_value={
+                "method": method,
+                "url": url,
+                "headers": headers or {},
+            },
+        )
+        return any(
+            drop.matches(span)
+            for drop in self._drop_transforms
+            if drop.direction == "outbound"
+        )
+
     def apply_transforms(self, span: HttpSpanData) -> TransformMetadata | None:
         actions: list[MetadataAction] = []
 

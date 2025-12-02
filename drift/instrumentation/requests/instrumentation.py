@@ -11,6 +11,25 @@ import traceback
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
+
+class RequestDroppedByTransform(Exception):
+    """Exception raised when an outbound HTTP request is dropped by a transform rule.
+
+    This matches Node SDK behavior where drop transforms prevent the HTTP call
+    and raise an error rather than returning a fake response.
+
+    Attributes:
+        message: Error message explaining the drop
+        method: HTTP method (GET, POST, etc.)
+        url: Request URL that was dropped
+    """
+
+    def __init__(self, message: str, method: str, url: str):
+        self.message = message
+        self.method = method
+        self.url = url
+        super().__init__(message)
+
 from ..base import InstrumentationBase
 from ..http import HttpSpanData, HttpTransformEngine
 from ...core.communication.types import MockRequestInput
@@ -115,6 +134,38 @@ class RequestsInstrumentation(InstrumentationBase):
                     )
                     if mock_response is not None:
                         return mock_response
+
+                # ===== CHECK DROP TRANSFORMS (matches Node SDK) =====
+                # Check BEFORE making the HTTP request to prevent network traffic
+                if self._transform_engine and self._transform_engine.should_drop_outbound_request(
+                    method.upper(), url, kwargs.get("headers", {})
+                ):
+                    # Request should be dropped - create span and raise exception (matches Node SDK)
+                    start_time = time.time()
+                    duration_ms = (time.time() - start_time) * 1000
+
+                    # Create dropped span (will be marked as dropped by transforms)
+                    self._create_span(
+                        sdk,
+                        method,
+                        url,
+                        trace_id,
+                        span_id,
+                        parent_span_id,
+                        duration_ms,
+                        None,  # No response
+                        None,  # No error
+                        kwargs,
+                        is_dropped_by_transform=True,  # Mark as dropped (matches Node SDK)
+                    )
+
+                    # Raise exception to indicate drop (matches Node SDK behavior)
+                    # The application receives an error, not a fake response
+                    raise RequestDroppedByTransform(
+                        f"Outbound request to {url} was dropped by transform rule",
+                        method.upper(),
+                        url,
+                    )
 
                 # RECORD mode or mock not found: Make real request
                 start_time = time.time()
@@ -268,6 +319,21 @@ class RequestsInstrumentation(InstrumentationBase):
 
             input_value = create_mock_input_value(raw_input_value)
 
+            # ===== GENERATE SCHEMAS AND HASHES (matches Node SDK) =====
+            # Create schema merge hints for input (same as in _create_span)
+            input_schema_merges = {
+                "headers": SchemaMerge(match_importance=0.0),
+            }
+            if body_base64 is not None:
+                request_content_type = self._get_content_type_header(headers)
+                input_schema_merges["body"] = SchemaMerge(
+                    encoding=EncodingType.BASE64,
+                    decoded_type=self._get_decoded_type_from_content_type(request_content_type),
+                )
+
+            # Generate schema and hashes for CLI matching
+            input_result = JsonSchemaHelper.generate_schema_and_hash(input_value, input_schema_merges)
+
             # Create mock span for matching
             # Convert timestamp from milliseconds to Timestamp object
             timestamp_ms = time.time() * 1000
@@ -287,6 +353,12 @@ class RequestsInstrumentation(InstrumentationBase):
                 submodule_name=method.upper(),
                 input_value=input_value,
                 output_value=None,
+                # ===== ADD SCHEMA/HASH METADATA (matches Node SDK) =====
+                input_schema=input_result.schema,
+                input_schema_hash=input_result.decoded_schema_hash,
+                input_value_hash=input_result.decoded_value_hash,
+                # ===== INCLUDE STACK TRACE FOR CLI ALERTS =====
+                stack_trace=stack_trace,
                 kind=SpanKind.CLIENT,
                 status=SpanStatus(code=StatusCode.UNSPECIFIED, message=""),
                 timestamp=Timestamp(seconds=timestamp_seconds, nanos=timestamp_nanos),
@@ -382,6 +454,7 @@ class RequestsInstrumentation(InstrumentationBase):
         response: Any,
         error: Exception | None,
         request_kwargs: dict[str, Any],
+        is_dropped_by_transform: bool = False,
     ) -> None:
         """Create and collect a CLIENT span for the HTTP request.
 
@@ -396,6 +469,7 @@ class RequestsInstrumentation(InstrumentationBase):
             response: Response object (if successful)
             error: Exception (if failed)
             request_kwargs: Original request kwargs
+            is_dropped_by_transform: If True, request was dropped by transform (matches Node SDK)
         """
         try:
             parsed_url = urlparse(url)
@@ -434,6 +508,8 @@ class RequestsInstrumentation(InstrumentationBase):
             # ===== BUILD OUTPUT VALUE =====
             output_value = {}
             status = SpanStatus(code=StatusCode.OK, message="")
+            response_body_base64 = None  # Initialize for later use in schema merges
+            response_body_truncated = False  # Track if response body was truncated
 
             if error:
                 output_value = {
@@ -444,16 +520,16 @@ class RequestsInstrumentation(InstrumentationBase):
             elif response:
                 # Extract response data
                 response_headers = dict(response.headers)
-                response_body_base64 = None
                 response_body_size = 0
 
                 try:
                     # Get response content as bytes (respects encoding)
                     response_bytes = response.content
 
-                    # Truncate if needed (10KB limit)
+                    # Truncate if needed (10KB limit) - matches Node SDK behavior
                     if len(response_bytes) > 10240:
                         response_bytes = response_bytes[:10240]
+                        response_body_truncated = True
 
                     # Encode to base64
                     response_body_base64, response_body_size = self._encode_body_to_base64(response_bytes)
@@ -471,16 +547,47 @@ class RequestsInstrumentation(InstrumentationBase):
                 if response_body_base64 is not None:
                     output_value["body"] = response_body_base64
                     output_value["bodySize"] = response_body_size
+                    # Flag truncated bodies (matches Node SDK httpBodyEncoder)
+                    if response_body_truncated:
+                        output_value["bodyProcessingError"] = "truncated"
 
                 if response.status_code >= 400:
                     status = SpanStatus(
                         code=StatusCode.ERROR,
                         message=f"HTTP {response.status_code}",
                     )
+            else:
+                # No response and no error - this happens when request is dropped by transforms
+                output_value = {}
 
-            # ===== APPLY TRANSFORMS =====
+            # ===== APPLY TRANSFORMS OR MARK AS DROPPED =====
             transform_metadata = None
-            if self._transform_engine:
+            if is_dropped_by_transform:
+                # Request was dropped - create metadata showing drop action (matches Node SDK)
+                from ...core.types import TransformMetadata, TransformAction
+
+                # Set output to indicate drop
+                output_value = {
+                    "bodyProcessingError": "dropped",  # Matches Node SDK marker
+                }
+
+                # Set status to ERROR to indicate drop
+                status = SpanStatus(code=StatusCode.ERROR, message="Dropped by transform")
+
+                # Create transform metadata with drop action
+                transform_metadata = TransformMetadata(
+                    transformed=True,
+                    actions=[
+                        TransformAction(
+                            type="drop",
+                            field="entire_span",
+                            reason="transforms",
+                            description="Request dropped by outbound transform rule",
+                        )
+                    ],
+                )
+            elif self._transform_engine:
+                # Normal transform application (not dropped)
                 span_data = HttpSpanData(
                     kind=SpanKind.CLIENT,
                     input_value=input_value,
@@ -519,6 +626,9 @@ class RequestsInstrumentation(InstrumentationBase):
                     encoding=EncodingType.BASE64,
                     decoded_type=self._get_decoded_type_from_content_type(response_content_type),
                 )
+            # Add bodyProcessingError to schema merges if truncated (matches Node SDK)
+            if response_body_truncated:
+                output_schema_merges["bodyProcessingError"] = SchemaMerge(match_importance=1.0)
 
             # ===== GENERATE SCHEMAS AND HASHES =====
             input_result = JsonSchemaHelper.generate_schema_and_hash(input_value, input_schema_merges)
@@ -559,6 +669,7 @@ class RequestsInstrumentation(InstrumentationBase):
                 is_root_span=False,
                 is_pre_app_start=not sdk.app_ready,
                 transform_metadata=transform_metadata,  # ✅ Include transform metadata
+                is_used=False if is_dropped_by_transform else None,  # Mark dropped spans as unused (matches Node SDK)
             )
 
             sdk.collect_span(span)

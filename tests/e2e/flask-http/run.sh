@@ -17,6 +17,13 @@ echo "Step 2: Building and starting docker container..."
 docker compose -p $PROJECT_NAME -f "$SCRIPT_DIR/docker-compose.yml" build --no-cache
 docker compose -p $PROJECT_NAME -f "$SCRIPT_DIR/docker-compose.yml" up -d --wait
 
+echo ""
+echo "Container logs (RECORD mode):"
+echo "---"
+docker compose -p $PROJECT_NAME -f "$SCRIPT_DIR/docker-compose.yml" logs app
+echo "---"
+echo ""
+
 echo "Step 3: Running tests using tusk CLI..."
 EXIT_CODE=0
 
@@ -26,8 +33,7 @@ if docker compose -p $PROJECT_NAME -f "$SCRIPT_DIR/docker-compose.yml" exec -T a
     echo "Test Results:"
     echo "$TEST_RESULTS"
 else
-    echo "  tusk CLI not found - skipping replay tests"
-    echo "  Traces have been recorded successfully"
+    echo "  !!!tusk CLI not found!!!"
 fi
 
 echo ""

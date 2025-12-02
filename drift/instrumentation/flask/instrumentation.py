@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import base64
+import logging
 import time
 import uuid
 from collections.abc import Iterable, Iterator
 from functools import wraps
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, override
-from venv import logger
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from _typeshed import OptExcInfo
@@ -212,6 +214,9 @@ def _handle_request(
     if transform_engine and transform_engine.should_drop_inbound_request(
         method, target, request_headers_for_drop
     ):
+        # Reset trace context before early return (prevents context leak)
+        current_trace_id_context.reset(trace_token)
+        current_span_id_context.reset(span_token)
         return original_wsgi_app(app, environ, start_response)
 
     def wrapped_start_response(
@@ -342,11 +347,25 @@ def _capture_span(
     else:
         status = SpanStatus(code=StatusCode.OK, message="")
 
+    # Build schema merge hints including body encoding and truncation flags
+    input_schema_merges = dict(HEADER_SCHEMA_MERGES)
+    if "body" in input_value:
+        from ...core.json_schema_helper import EncodingType
+        input_schema_merges["body"] = SchemaMerge(encoding=EncodingType.BASE64)
+
+    output_schema_merges = dict(HEADER_SCHEMA_MERGES)
+    if "body" in output_value:
+        from ...core.json_schema_helper import EncodingType
+        output_schema_merges["body"] = SchemaMerge(encoding=EncodingType.BASE64)
+    # Add bodyProcessingError to schema merges if truncated (matches Node SDK)
+    if response_data.get("body_truncated"):
+        output_schema_merges["bodyProcessingError"] = SchemaMerge(match_importance=1.0)
+
     input_schema_info = JsonSchemaHelper.generate_schema_and_hash(
-        input_value, HEADER_SCHEMA_MERGES
+        input_value, input_schema_merges
     )
     output_schema_info = JsonSchemaHelper.generate_schema_and_hash(
-        output_value, HEADER_SCHEMA_MERGES
+        output_value, output_schema_merges
     )
 
     method = environ.get("REQUEST_METHOD", "")
