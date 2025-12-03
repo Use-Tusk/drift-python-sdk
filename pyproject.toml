@@ -27,7 +27,7 @@ dependencies = [
     "protobuf>=6.0",
     "PyYAML>=6.0",
     "requests>=2.32.5",
-    "tusk-drift-schemas>=0.1.9",
+    "tusk-drift-schemas>=0.1.9.dev1",
     "aiohttp>=3.9.0",
     "aiofiles>=23.0.0",
 ]
@@ -48,8 +48,9 @@ Documentation = "https://docs.usetusk.ai"
 Repository = "https://github.com/Use-Tusk/drift-node-sdk"
 Issues = "https://github.com/Use-Tusk/drift-node-sdk/issues"
 
-[tool.setuptools]
-packages = ["drift"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["drift*"]
 
 [tool.setuptools.package-data]
 drift = ["py.typed"]
