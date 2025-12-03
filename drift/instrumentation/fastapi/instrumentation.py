@@ -25,8 +25,11 @@ from ...core.types import (
     SpanStatus,
     StatusCode,
     Timestamp,
+    current_trace_id_context,
+    current_span_id_context,
 )
 from ..base import InstrumentationBase
+from ..http import HttpSpanData, HttpTransformEngine
 
 
 HEADER_SCHEMA_MERGES = {
@@ -37,13 +40,30 @@ MAX_BODY_SIZE = 10000  # 10KB limit
 
 
 class FastAPIInstrumentation(InstrumentationBase):
-    def __init__(self, enabled: bool = True):
+    def __init__(self, enabled: bool = True, transforms: dict[str, Any] | None = None):
+        self._transform_engine = HttpTransformEngine(
+            self._resolve_http_transforms(transforms)
+        )
         super().__init__(
             name="FastAPIInstrumentation",
             module_name="fastapi",
             supported_versions=">=0.68.0",
             enabled=enabled,
         )
+
+    def _resolve_http_transforms(
+        self, provided: dict[str, Any] | list[dict[str, Any]] | None
+    ) -> list[dict[str, Any]] | None:
+        if isinstance(provided, list):
+            return provided
+        if isinstance(provided, dict) and isinstance(provided.get("http"), list):
+            return provided["http"]
+
+        sdk = TuskDrift.get_instance()
+        transforms = getattr(sdk.config, "transforms", None)
+        if isinstance(transforms, dict) and isinstance(transforms.get("http"), list):
+            return transforms["http"]
+        return None
 
     @override
     def patch(self, module: ModuleType) -> None:
@@ -54,6 +74,7 @@ class FastAPIInstrumentation(InstrumentationBase):
             return
 
         original_call = fastapi_class.__call__
+        transform_engine = self._transform_engine
 
         @wraps(original_call)
         async def instrumented_call(
@@ -63,10 +84,161 @@ class FastAPIInstrumentation(InstrumentationBase):
             if scope.get("type") != "http":
                 return await original_call(self, scope, receive, send)
 
-            return await _handle_request(self, scope, receive, send, original_call)
+            return await _handle_request(
+                self,
+                scope,
+                receive,
+                send,
+                original_call,
+                transform_engine,
+            )
 
         fastapi_class.__call__ = instrumented_call
         print("FastAPI instrumentation applied")
+
+
+async def _handle_replay_request(
+    app: Any,
+    scope: Scope,
+    receive: Receive,
+    send: Send,
+    original_call: Callable[..., Any],
+    transform_engine: HttpTransformEngine | None,
+    method: str,
+    raw_path: str,
+    target: str,
+) -> None:
+    """Handle FastAPI request in REPLAY mode.
+
+    In replay mode, server requests:
+    - Extract trace context from headers (x-td-trace-id)
+    - Fetch environment variables if requested (x-td-fetch-env-vars)
+    - Execute the request normally (NOT mocked!)
+    - Create SERVER span for tracking
+    """
+    import logging
+    from ...core.types import replay_trace_id_context
+
+    logger = logging.getLogger(__name__)
+    sdk = TuskDrift.get_instance()
+
+    # Extract trace ID from headers (case-insensitive lookup)
+    request_headers = _extract_headers(scope)
+    # Convert headers to lowercase for case-insensitive lookup
+    headers_lower = {k.lower(): v for k, v in request_headers.items()}
+    replay_trace_id = headers_lower.get("x-td-trace-id")
+
+    if not replay_trace_id:
+        logger.debug(f"[FastAPIInstrumentation] No trace ID found in headers for {method} {raw_path}")
+        # No trace context; proceed without span
+        return await original_call(app, scope, receive, send)
+
+    logger.debug(f"[FastAPIInstrumentation] Setting replay trace ID: {replay_trace_id}")
+
+    # Fetch env vars from CLI if requested
+    should_fetch_env_vars = headers_lower.get("x-td-fetch-env-vars") == "true"
+    if should_fetch_env_vars:
+        try:
+            env_vars = sdk.request_env_vars_sync(replay_trace_id)
+            # TODO: Store env vars somewhere (EnvVarTracker needs to be implemented)
+            logger.debug(f"[FastAPIInstrumentation] Fetched {len(env_vars)} env vars from CLI for trace {replay_trace_id}")
+        except Exception as e:
+            logger.error(f"[FastAPIInstrumentation] Failed to fetch env vars from CLI: {e}")
+
+    # Remove accept-encoding header to prevent compression during replay
+    # (responses are stored decompressed, compression would double-compress)
+    if "accept-encoding" in headers_lower:
+        # Modify headers in scope
+        headers_list = scope.get("headers", [])
+        scope["headers"] = [
+            (k, v) for k, v in headers_list
+            if k.decode("utf-8", errors="replace").lower() != "accept-encoding"
+        ]
+
+    # Set replay trace context using context variable
+    replay_token = replay_trace_id_context.set(replay_trace_id)
+
+    try:
+        # Generate span IDs
+        start_time_ns = time.time_ns()
+        trace_id = replay_trace_id
+        span_id = str(uuid.uuid4()).replace("-", "")[:16]
+
+        # Set trace context for child spans (e.g., outbound HTTP calls)
+        trace_token = current_trace_id_context.set(trace_id)
+        span_token = current_span_id_context.set(span_id)
+
+        response_data: dict[str, Any] = {}
+        request_body_parts: list[bytes] = []
+        total_body_size = 0
+        body_truncated = False
+        response_body_parts: list[bytes] = []
+        response_body_size = 0
+        response_body_truncated = False
+
+        # Wrap receive to capture request body
+        async def wrapped_receive() -> dict[str, Any]:
+            nonlocal total_body_size, body_truncated
+            message = await receive()
+            if message.get("type") == "http.request":
+                body_chunk = message.get("body", b"")
+                if body_chunk:
+                    if total_body_size >= MAX_BODY_SIZE:
+                        body_truncated = True
+                    else:
+                        remaining_space = MAX_BODY_SIZE - total_body_size
+                        if len(body_chunk) > remaining_space:
+                            body_chunk = body_chunk[:remaining_space]
+                            body_truncated = True
+                        request_body_parts.append(body_chunk)
+                        total_body_size += len(body_chunk)
+            return message
+
+        # Wrap send to capture response status, headers, and body
+        async def wrapped_send(message: dict[str, Any]) -> None:
+            nonlocal response_body_size, response_body_truncated
+            if message.get("type") == "http.response.start":
+                response_data["status_code"] = message.get("status", 200)
+                response_data["status_message"] = _get_status_message(message.get("status", 200))
+                raw_headers = message.get("headers", [])
+                response_data["headers"] = {
+                    k.decode("utf-8", errors="replace") if isinstance(k, bytes) else k: v.decode("utf-8", errors="replace") if isinstance(v, bytes) else v
+                    for k, v in raw_headers
+                }
+            elif message.get("type") == "http.response.body":
+                body_chunk = message.get("body", b"")
+                if body_chunk:
+                    if response_body_size >= MAX_BODY_SIZE:
+                        response_body_truncated = True
+                    else:
+                        remaining_space = MAX_BODY_SIZE - response_body_size
+                        if len(body_chunk) > remaining_space:
+                            body_chunk = body_chunk[:remaining_space]
+                            response_body_truncated = True
+                        response_body_parts.append(body_chunk)
+                        response_body_size += len(body_chunk)
+            await send(message)
+
+        await original_call(app, scope, wrapped_receive, wrapped_send)
+        request_body = b"".join(request_body_parts) if request_body_parts else None
+        response_body = b"".join(response_body_parts) if response_body_parts else None
+        _capture_span(
+            scope,
+            response_data,
+            request_body,
+            body_truncated,
+            response_body,
+            response_body_truncated,
+            start_time_ns,
+            trace_id,
+            span_id,
+            transform_engine,
+        )
+    finally:
+        # Reset context
+        replay_trace_id_context.reset(replay_token)
+        current_trace_id_context.reset(trace_token)
+        current_span_id_context.reset(span_token)
 
 
 async def _handle_request(
@@ -75,11 +247,43 @@ async def _handle_request(
     receive: Receive,
     send: Send,
     original_call: Callable[..., Any],
+    transform_engine: HttpTransformEngine | None,
 ) -> None:
     """Handle a single FastAPI request by capturing request/response data"""
+    sdk = TuskDrift.get_instance()
+
+    method = scope.get("method", "GET")
+    raw_path = scope.get("path", "/")
+    query_bytes = scope.get("query_string", b"")
+    if isinstance(query_bytes, bytes):
+        query_string = query_bytes.decode("utf-8", errors="replace")
+    else:
+        query_string = str(query_bytes)
+    target_for_drop = f"{raw_path}?{query_string}" if query_string else raw_path
+    headers_for_drop = _extract_headers(scope)
+
+    if transform_engine and transform_engine.should_drop_inbound_request(
+        method,
+        target_for_drop,
+        headers_for_drop,
+    ):
+        return await original_call(app, scope, receive, send)
+
+    # Handle REPLAY mode
+    if sdk.mode == "REPLAY":
+        return await _handle_replay_request(
+            app, scope, receive, send, original_call, transform_engine, method, raw_path, target_for_drop
+        )
+
+    # RECORD mode or DISABLED mode
     start_time_ns = time.time_ns()
     trace_id = str(uuid.uuid4()).replace("-", "")
     span_id = str(uuid.uuid4()).replace("-", "")[:16]
+
+    # Set trace context for child spans (e.g., outbound HTTP calls)
+    trace_token = current_trace_id_context.set(trace_id)
+    span_token = current_span_id_context.set(span_id)
+
     response_data: dict[str, Any] = {}
     request_body_parts: list[bytes] = []
     total_body_size = 0
@@ -140,9 +344,16 @@ async def _handle_request(
         request_body = b"".join(request_body_parts) if request_body_parts else None
         response_body = b"".join(response_body_parts) if response_body_parts else None
         _capture_span(
-            scope, response_data, request_body, body_truncated,
-            response_body, response_body_truncated,
-            start_time_ns, trace_id, span_id
+            scope,
+            response_data,
+            request_body,
+            body_truncated,
+            response_body,
+            response_body_truncated,
+            start_time_ns,
+            trace_id,
+            span_id,
+            transform_engine,
         )
     except Exception as e:
         response_data["status_code"] = 500
@@ -151,11 +362,22 @@ async def _handle_request(
         request_body = b"".join(request_body_parts) if request_body_parts else None
         response_body = b"".join(response_body_parts) if response_body_parts else None
         _capture_span(
-            scope, response_data, request_body, body_truncated,
-            response_body, response_body_truncated,
-            start_time_ns, trace_id, span_id
+            scope,
+            response_data,
+            request_body,
+            body_truncated,
+            response_body,
+            response_body_truncated,
+            start_time_ns,
+            trace_id,
+            span_id,
+            transform_engine,
         )
         raise
+    finally:
+        # Reset trace context
+        current_trace_id_context.reset(trace_token)
+        current_span_id_context.reset(span_token)
 
 
 def _capture_span(
@@ -168,6 +390,7 @@ def _capture_span(
     start_time_ns: int,
     trace_id: str,
     span_id: str,
+    transform_engine: HttpTransformEngine | None,
 ) -> None:
     """Create and collect a span from request/response data"""
     end_time_ns = time.time_ns()
@@ -208,7 +431,7 @@ def _capture_span(
         input_value["body"] = base64.b64encode(request_body).decode("ascii")
         input_value["bodySize"] = len(request_body)
         if request_body_truncated:
-            input_value["hasBodyParsingError"] = True  # Match Node SDK field name
+            input_value["bodyProcessingError"] = "truncated"  # Match Node SDK field name
 
     output_value: dict[str, Any] = {
         "statusCode": response_data.get("status_code", 200),  # camelCase to match Node SDK
@@ -228,6 +451,18 @@ def _capture_span(
     if "error_type" in response_data:
         output_value["errorName"] = response_data["error_type"]  # Match Node SDK field name
 
+    transform_metadata = None
+    if transform_engine:
+        span_data = HttpSpanData(
+            kind=SpanKind.SERVER,
+            input_value=input_value,
+            output_value=output_value,
+        )
+        transform_engine.apply_transforms(span_data)
+        input_value = span_data.input_value or input_value
+        output_value = span_data.output_value or output_value
+        transform_metadata = span_data.transform_metadata
+
     sdk = TuskDrift.get_instance()
     # Derive timestamp from start_time_ns (not datetime.now() which would be end time)
     timestamp_seconds = start_time_ns // 1_000_000_000
@@ -241,11 +476,28 @@ def _capture_span(
     else:
         status = SpanStatus(code=StatusCode.OK, message="")
 
+    # Build schema merge hints including body encoding and truncation flags
+    input_schema_merges = dict(HEADER_SCHEMA_MERGES)
+    if "body" in input_value:
+        from ...core.json_schema_helper import EncodingType
+        input_schema_merges["body"] = SchemaMerge(encoding=EncodingType.BASE64)
+    # Add bodyProcessingError to schema merges if truncated (matches Node SDK)
+    if request_body_truncated:
+        input_schema_merges["bodyProcessingError"] = SchemaMerge(match_importance=1.0)
+
+    output_schema_merges = dict(HEADER_SCHEMA_MERGES)
+    if "body" in output_value:
+        from ...core.json_schema_helper import EncodingType
+        output_schema_merges["body"] = SchemaMerge(encoding=EncodingType.BASE64)
+    # Add bodyProcessingError to schema merges if truncated (matches Node SDK)
+    if response_body_truncated:
+        output_schema_merges["bodyProcessingError"] = SchemaMerge(match_importance=1.0)
+
     input_schema_info = JsonSchemaHelper.generate_schema_and_hash(
-        input_value, HEADER_SCHEMA_MERGES
+        input_value, input_schema_merges
     )
     output_schema_info = JsonSchemaHelper.generate_schema_and_hash(
-        output_value, HEADER_SCHEMA_MERGES
+        output_value, output_schema_merges
     )
 
     # Use route template if available (e.g., "/greet/{name}") to avoid cardinality explosion
@@ -277,6 +529,7 @@ def _capture_span(
         is_root_span=True,
         timestamp=Timestamp(seconds=timestamp_seconds, nanos=timestamp_nanos),
         duration=Duration(seconds=duration_seconds, nanos=duration_nanos),
+        transform_metadata=transform_metadata,
     )
 
     sdk.collect_span(span)

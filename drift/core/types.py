@@ -198,6 +198,15 @@ calling_library_context: ContextVar[Optional[str]] = ContextVar(
     "calling_library", default=None
 )
 
+# Trace context propagation (matches OpenTelemetry behavior)
+# These allow child spans to inherit trace_id and set parent_span_id correctly
+current_trace_id_context: ContextVar[Optional[str]] = ContextVar(
+    "current_trace_id", default=None
+)
+current_span_id_context: ContextVar[Optional[str]] = ContextVar(
+    "current_span_id", default=None
+)
+
 
 class TdSpanAttributes(str, Enum):
     """Span attribute keys used by the SDK."""
