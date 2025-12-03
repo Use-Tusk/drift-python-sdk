@@ -666,7 +666,7 @@ class RequestsInstrumentation(InstrumentationBase):
                 status=status,
                 timestamp=Timestamp(seconds=timestamp_seconds, nanos=timestamp_nanos),
                 duration=Duration(seconds=duration_seconds, nanos=duration_nanos),
-                is_root_span=False,
+                is_root_span=parent_span_id is None,  # Root span if no parent
                 is_pre_app_start=not sdk.app_ready,
                 transform_metadata=transform_metadata,  # ✅ Include transform metadata
                 is_used=False if is_dropped_by_transform else None,  # Mark dropped spans as unused (matches Node SDK)
