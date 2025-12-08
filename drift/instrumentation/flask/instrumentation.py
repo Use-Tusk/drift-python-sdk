@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import base64
 import logging
 import time
 import uuid
-from collections.abc import Iterable, Iterator
 from functools import wraps
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, override
@@ -16,7 +14,6 @@ if TYPE_CHECKING:
     from _typeshed.wsgi import StartResponse, WSGIApplication, WSGIEnvironment
 
 from ...core.drift_sdk import TuskDrift
-from ...core.json_schema_helper import JsonSchemaHelper, SchemaMerge
 from ...core.types import (
     CleanSpanData,
     Duration,
@@ -27,15 +24,20 @@ from ...core.types import (
     Timestamp,
     current_trace_id_context,
     current_span_id_context,
+    replay_trace_id_context,
 )
 from ..base import InstrumentationBase
 from ..http import HttpSpanData, HttpTransformEngine
-
-HEADER_SCHEMA_MERGES = {
-    "headers": SchemaMerge(match_importance=0.0),
-}
-
-MAX_BODY_SIZE = 10000  # 10KB limit
+from ..wsgi import (
+    ResponseBodyCapture,
+    build_input_value,
+    build_output_value,
+    capture_request_body,
+    extract_headers,
+    generate_input_schema_info,
+    generate_output_schema_info,
+    parse_status_line,
+)
 
 
 class FlaskInstrumentation(InstrumentationBase):
@@ -95,81 +97,6 @@ class FlaskInstrumentation(InstrumentationBase):
         print("Flask instrumentation applied")
 
 
-class _ResponseBodyCapture(Iterable[bytes]):
-    """
-    Wrapper for WSGI response iterable that captures the response body.
-
-    Captures body chunks up to MAX_BODY_SIZE and calls the span capture
-    function when the response is closed.
-    """
-
-    def __init__(
-        self,
-        response: Iterable[bytes],
-        environ: WSGIEnvironment,
-        response_data: dict[str, Any],
-        transform_engine: HttpTransformEngine | None,
-    ):
-        self._response = response
-        self._environ = environ
-        self._response_data = response_data
-        self._transform_engine = transform_engine
-        self._body_parts: list[bytes] = []
-        self._body_size = 0
-        self._body_truncated = False
-        self._closed = False
-
-    def __iter__(self) -> Iterator[bytes]:
-        try:
-            for chunk in self._response:
-                # Capture chunk for body
-                if chunk and not self._body_truncated:
-                    if self._body_size >= MAX_BODY_SIZE:
-                        self._body_truncated = True
-                    else:
-                        remaining = MAX_BODY_SIZE - self._body_size
-                        if len(chunk) > remaining:
-                            self._body_parts.append(chunk[:remaining])
-                            self._body_size += remaining
-                            self._body_truncated = True
-                        else:
-                            self._body_parts.append(chunk)
-                            self._body_size += len(chunk)
-                yield chunk
-        finally:
-            self._finalize()
-
-    def close(self) -> None:
-        """Called by WSGI server when response is done."""
-        self._finalize()
-        if hasattr(self._response, "close"):
-            self._response.close()
-
-    def _finalize(self) -> None:
-        """Capture the span with collected response body."""
-        if self._closed:
-            return
-        self._closed = True
-
-        # Add response body to response_data
-        if self._body_parts:
-            body = b"".join(self._body_parts)
-            self._response_data["body"] = body
-            self._response_data["body_size"] = len(body)
-            if self._body_truncated:
-                self._response_data["body_truncated"] = True
-
-        _capture_span(self._environ, self._response_data, self._transform_engine)
-
-        # Reset trace context after span is captured
-        trace_token = self._environ.get("_drift_trace_token")
-        span_token = self._environ.get("_drift_span_token")
-        if trace_token:
-            current_trace_id_context.reset(trace_token)
-        if span_token:
-            current_span_id_context.reset(span_token)
-
-
 def _handle_request(
     app: WSGIApplication,
     environ: WSGIEnvironment,
@@ -178,8 +105,41 @@ def _handle_request(
     transform_engine: HttpTransformEngine | None,
 ) -> Iterable[bytes]:
     """Handle a single Flask request by capturing request/response data"""
+    sdk = TuskDrift.get_instance()
+
+    # Check if we're in REPLAY mode and handle trace ID extraction
+    replay_trace_id = None
+    replay_token = None
+    if sdk.mode == "REPLAY":
+        # Extract trace ID from headers (case-insensitive lookup)
+        request_headers = extract_headers(environ)
+        headers_lower = {k.lower(): v for k, v in request_headers.items()}
+        replay_trace_id = headers_lower.get("x-td-trace-id")
+
+        if not replay_trace_id:
+            # No trace context in REPLAY mode; proceed without span
+            return original_wsgi_app(app, environ, start_response)
+
+        # Fetch env vars from CLI if requested
+        should_fetch_env_vars = headers_lower.get("x-td-fetch-env-vars") == "true"
+        if should_fetch_env_vars:
+            try:
+                env_vars = sdk.request_env_vars_sync(replay_trace_id)
+                logger.debug(f"[FlaskInstrumentation] Fetched {len(env_vars)} env vars from CLI for trace {replay_trace_id}")
+            except Exception as e:
+                logger.error(f"[FlaskInstrumentation] Failed to fetch env vars from CLI: {e}")
+
+        # Set replay trace context
+        replay_token = replay_trace_id_context.set(replay_trace_id)
+
     start_time_ns = time.time_ns()
-    trace_id = str(uuid.uuid4()).replace("-", "")
+
+    # Use replay trace ID if in REPLAY mode, otherwise generate new IDs
+    if replay_trace_id:
+        trace_id = replay_trace_id
+    else:
+        trace_id = str(uuid.uuid4()).replace("-", "")
+
     span_id = str(uuid.uuid4()).replace("-", "")[:16]
 
     # Set trace context for child spans (e.g., outbound HTTP calls)
@@ -188,31 +148,20 @@ def _handle_request(
 
     response_data: dict[str, Any] = {}  # pyright: ignore[reportExplicitAny]
 
+    # Capture request body using WSGI utilities
+    request_body, body_truncated = capture_request_body(environ)
+    environ["_drift_request_body"] = request_body
+    environ["_drift_request_body_truncated"] = body_truncated
+
+    # Check if request should be dropped
     method = environ.get("REQUEST_METHOD", "GET")
     path = environ.get("PATH_INFO", "")
     query_string = environ.get("QUERY_STRING", "")
     target = f"{path}?{query_string}" if query_string else path
+    request_headers = extract_headers(environ)
 
-    request_body = None
-    if environ.get("REQUEST_METHOD") in ("POST", "PUT", "PATCH"):
-        try:
-            content_length = int(environ.get("CONTENT_LENGTH", 0))
-            if content_length > 0 and content_length <= MAX_BODY_SIZE:
-                wsgi_input = environ.get("wsgi.input")
-                if wsgi_input:
-                    request_body = wsgi_input.read(content_length)
-                    # Create a new BytesIO so Flask can read it
-                    from io import BytesIO
-
-                    environ["wsgi.input"] = BytesIO(request_body)
-        except Exception:
-            pass
-
-    environ["_drift_request_body"] = request_body
-
-    request_headers_for_drop = _extract_headers(environ)
     if transform_engine and transform_engine.should_drop_inbound_request(
-        method, target, request_headers_for_drop
+        method, target, request_headers
     ):
         # Reset trace context before early return (prevents context leak)
         current_trace_id_context.reset(trace_token)
@@ -224,30 +173,49 @@ def _handle_request(
         response_headers: list[tuple[str, str]],
         exc_info: OptExcInfo | None = None,
     ):
-        # Parse status like "200 OK" -> (200, "OK")
-        status_parts = status.split(None, 1)
-        status_code = int(status_parts[0])
-        status_message = status_parts[1] if len(status_parts) > 1 else ""
+        # Parse status using WSGI utilities
+        status_code, status_message = parse_status_line(status)
         response_data["status_code"] = status_code
         response_data["status_message"] = status_message
         response_data["headers"] = dict(response_headers)
         return start_response(status, response_headers, exc_info)
 
+    # Store metadata in environ for span creation
     environ["_drift_start_time_ns"] = start_time_ns
     environ["_drift_trace_id"] = trace_id
     environ["_drift_span_id"] = span_id
     environ["_drift_trace_token"] = trace_token
     environ["_drift_span_token"] = span_token
 
+    # Store replay token in environ for cleanup
+    environ["_drift_replay_token"] = replay_token
+
+    # Create callback for response completion
+    def on_response_complete(env: WSGIEnvironment, resp_data: dict[str, Any]) -> None:
+        """Callback when response is complete - creates span"""
+        _capture_span(env, resp_data, transform_engine)
+        # Reset trace context after span is captured
+        r_token = env.get("_drift_replay_token")
+        t_token = env.get("_drift_trace_token")
+        s_token = env.get("_drift_span_token")
+        if r_token:
+            replay_trace_id_context.reset(r_token)
+        if t_token:
+            current_trace_id_context.reset(t_token)
+        if s_token:
+            current_span_id_context.reset(s_token)
+
     try:
         response = original_wsgi_app(app, environ, wrapped_start_response)
         # Wrap response to capture body and defer span creation
-        return _ResponseBodyCapture(response, environ, response_data, transform_engine)
+        return ResponseBodyCapture(response, environ, response_data, on_response_complete)
     except Exception as e:
         response_data["status_code"] = 500
         response_data["error"] = str(e)
         _capture_span(environ, response_data, transform_engine)
         # Reset trace context on error
+        if replay_token:
+            replay_trace_id_context.reset(replay_token)
         current_trace_id_context.reset(trace_token)
         current_span_id_context.reset(span_token)
         raise
@@ -269,59 +237,29 @@ def _capture_span(
     end_time_ns = time.time_ns()
     duration_ns = end_time_ns - start_time_ns
 
-    # Build target (path + query string) to match Node SDK
-    path = environ.get("PATH_INFO", "")
-    query_string = environ.get("QUERY_STRING", "")
-    target = f"{path}?{query_string}" if query_string else path
+    # Build input_value using WSGI utilities
+    request_body = environ.get("_drift_request_body")
+    request_body_truncated = environ.get("_drift_request_body_truncated", False)
+    input_value = build_input_value(environ, request_body, request_body_truncated)
 
-    # Get HTTP version from SERVER_PROTOCOL (e.g., "HTTP/1.1" -> "1.1")
-    server_protocol = environ.get("SERVER_PROTOCOL", "HTTP/1.1")
-    http_version = (
-        server_protocol.replace("HTTP/", "")
-        if server_protocol.startswith("HTTP/")
-        else "1.1"
+    # Build output_value using WSGI utilities
+    status_code = response_data.get("status_code", 200)
+    status_message = response_data.get("status_message", "")
+    response_headers = response_data.get("headers", {})
+    response_body = response_data.get("body")
+    response_body_truncated = response_data.get("body_truncated", False)
+    error = response_data.get("error")
+
+    output_value = build_output_value(
+        status_code,
+        status_message,
+        response_headers,
+        response_body,
+        response_body_truncated,
+        error,
     )
 
-    input_value = {
-        "method": environ.get("REQUEST_METHOD", ""),
-        "url": _build_url(environ),
-        "target": target,  # Path + query string combined, matches Node SDK
-        "headers": _extract_headers(environ),
-        "httpVersion": http_version,
-        "remoteAddress": environ.get("REMOTE_ADDR"),
-        "remotePort": int(environ.get("REMOTE_PORT"))
-        if environ.get("REMOTE_PORT")
-        else None,
-    }
-    input_value = {k: v for k, v in input_value.items() if v is not None}
-
-    request_body = environ.get("_drift_request_body")
-    if request_body:
-        # Store body as Base64 encoded string to match Node SDK behavior
-        input_value["body"] = base64.b64encode(request_body).decode("ascii")
-        input_value["bodySize"] = len(request_body)
-
-    output_value: dict[str, Any] = {
-        "statusCode": response_data.get(
-            "status_code", 200
-        ),  # camelCase to match Node SDK
-        "statusMessage": response_data.get("status_message", ""),
-        "headers": response_data.get("headers", {}),
-    }
-
-    # Add response body if captured
-    response_body = response_data.get("body")
-    if response_body:
-        output_value["body"] = base64.b64encode(response_body).decode("ascii")
-        output_value["bodySize"] = response_data.get("body_size", len(response_body))
-        if response_data.get("body_truncated"):
-            output_value["bodyProcessingError"] = "truncated"
-
-    if "error" in response_data:
-        output_value["errorMessage"] = response_data[
-            "error"
-        ]  # Match Node SDK field name
-
+    # Apply transforms if present
     transform_metadata = None
     if transform_engine:
         span_data = HttpSpanData(
@@ -334,6 +272,10 @@ def _capture_span(
         input_value = span_data.input_value or input_value
         output_value = span_data.output_value or output_value
 
+    # Generate schemas using WSGI utilities
+    input_schema_info = generate_input_schema_info(input_value, request_body_truncated)
+    output_schema_info = generate_output_schema_info(output_value, response_body_truncated)
+
     sdk = TuskDrift.get_instance()
     # Derive timestamp from start_time_ns (not datetime.now() which would be end time)
     timestamp_seconds = start_time_ns // 1_000_000_000
@@ -341,34 +283,14 @@ def _capture_span(
     duration_seconds = duration_ns // 1_000_000_000
     duration_nanos = duration_ns % 1_000_000_000
 
-    status_code = response_data.get("status_code", 200)
     if status_code >= 400:
         status = SpanStatus(code=StatusCode.ERROR, message=f"HTTP {status_code}")
     else:
         status = SpanStatus(code=StatusCode.OK, message="")
 
-    # Build schema merge hints including body encoding and truncation flags
-    input_schema_merges = dict(HEADER_SCHEMA_MERGES)
-    if "body" in input_value:
-        from ...core.json_schema_helper import EncodingType
-        input_schema_merges["body"] = SchemaMerge(encoding=EncodingType.BASE64)
-
-    output_schema_merges = dict(HEADER_SCHEMA_MERGES)
-    if "body" in output_value:
-        from ...core.json_schema_helper import EncodingType
-        output_schema_merges["body"] = SchemaMerge(encoding=EncodingType.BASE64)
-    # Add bodyProcessingError to schema merges if truncated (matches Node SDK)
-    if response_data.get("body_truncated"):
-        output_schema_merges["bodyProcessingError"] = SchemaMerge(match_importance=1.0)
-
-    input_schema_info = JsonSchemaHelper.generate_schema_and_hash(
-        input_value, input_schema_merges
-    )
-    output_schema_info = JsonSchemaHelper.generate_schema_and_hash(
-        output_value, output_schema_merges
-    )
-
+    # Flask-specific: use literal path for span name
     method = environ.get("REQUEST_METHOD", "")
+    path = environ.get("PATH_INFO", "")
     span_name = f"{method} {path}"
 
     span = CleanSpanData(
@@ -398,26 +320,3 @@ def _capture_span(
     )
 
     sdk.collect_span(span)
-
-
-def _build_url(environ: WSGIEnvironment) -> str:
-    """Build full URL from WSGI environ"""
-    scheme = environ.get("wsgi.url_scheme", "http")
-    host = environ.get("HTTP_HOST") or environ.get("SERVER_NAME", "localhost")
-    path = environ.get("PATH_INFO", "")
-    query = environ.get("QUERY_STRING", "")
-
-    url = f"{scheme}://{host}{path}"
-    if query:
-        url += f"?{query}"
-    return url
-
-
-def _extract_headers(environ: WSGIEnvironment) -> dict[str, str]:
-    """Extract HTTP headers from WSGI environ"""
-    headers = {}
-    for key, value in environ.items():
-        if key.startswith("HTTP_"):
-            header_name = key[5:].replace("_", "-").title()
-            headers[header_name] = str(value)
-    return headers

@@ -1,0 +1,253 @@
+"""WSGI utility functions for HTTP request/response capture."""
+
+from __future__ import annotations
+
+import base64
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from _typeshed.wsgi import WSGIEnvironment
+
+from ...core.json_schema_helper import EncodingType, JsonSchemaHelper, SchemaMerge
+
+HEADER_SCHEMA_MERGES = {
+    "headers": SchemaMerge(match_importance=0.0),
+}
+
+MAX_BODY_SIZE = 10000  # 10KB limit
+
+
+def build_url(environ: WSGIEnvironment) -> str:
+    """Build full URL from WSGI environ.
+
+    Args:
+        environ: WSGI environ dictionary
+
+    Returns:
+        Full URL string (scheme + host + path + query)
+    """
+    scheme = environ.get("wsgi.url_scheme", "http")
+    host = environ.get("HTTP_HOST") or environ.get("SERVER_NAME", "localhost")
+    path = environ.get("PATH_INFO", "")
+    query = environ.get("QUERY_STRING", "")
+
+    url = f"{scheme}://{host}{path}"
+    if query:
+        url += f"?{query}"
+    return url
+
+
+def extract_headers(environ: WSGIEnvironment) -> dict[str, str]:
+    """Extract HTTP headers from WSGI environ.
+
+    WSGI stores HTTP headers as HTTP_* keys in environ (e.g., HTTP_CONTENT_TYPE).
+    This function extracts them and converts to standard header format.
+
+    Args:
+        environ: WSGI environ dictionary
+
+    Returns:
+        Dictionary of HTTP headers
+    """
+    headers = {}
+    for key, value in environ.items():
+        if key.startswith("HTTP_"):
+            # Convert HTTP_CONTENT_TYPE -> Content-Type
+            header_name = key[5:].replace("_", "-").title()
+            headers[header_name] = str(value)
+    return headers
+
+
+def capture_request_body(
+    environ: WSGIEnvironment, max_size: int = MAX_BODY_SIZE
+) -> tuple[bytes | None, bool]:
+    """Capture request body from WSGI environ.
+
+    Captures body for POST/PUT/PATCH requests up to max_size bytes.
+    Resets wsgi.input so the application can still read it.
+
+    Args:
+        environ: WSGI environ dictionary
+        max_size: Maximum body size to capture (default: 10KB)
+
+    Returns:
+        Tuple of (body_bytes, truncated_flag)
+    """
+    if environ.get("REQUEST_METHOD") not in ("POST", "PUT", "PATCH"):
+        return None, False
+
+    try:
+        content_length = int(environ.get("CONTENT_LENGTH", 0))
+        if content_length > 0:
+            wsgi_input = environ.get("wsgi.input")
+            if wsgi_input:
+                # Determine if we need to truncate
+                truncated = content_length > max_size
+                read_size = min(content_length, max_size)
+
+                # Read body
+                body = wsgi_input.read(read_size)
+
+                # Reset input for app to read
+                from io import BytesIO
+                environ["wsgi.input"] = BytesIO(body)
+
+                return body, truncated
+    except Exception:
+        pass
+
+    return None, False
+
+
+def parse_status_line(status: str) -> tuple[int, str]:
+    """Parse WSGI status line.
+
+    Args:
+        status: WSGI status string like "200 OK" or "404 Not Found"
+
+    Returns:
+        Tuple of (status_code, status_message)
+    """
+    status_parts = status.split(None, 1)
+    status_code = int(status_parts[0])
+    status_message = status_parts[1] if len(status_parts) > 1 else ""
+    return status_code, status_message
+
+
+def build_input_value(
+    environ: WSGIEnvironment,
+    body: bytes | None = None,
+    body_truncated: bool = False,
+) -> dict[str, Any]:
+    """Build standardized input_value dict from WSGI environ.
+
+    Args:
+        environ: WSGI environ dictionary
+        body: Optional request body bytes
+        body_truncated: Whether body was truncated
+
+    Returns:
+        Dictionary with HTTP request data (method, url, headers, body, etc.)
+    """
+    # Build target (path + query string) to match Node SDK
+    path = environ.get("PATH_INFO", "")
+    query_string = environ.get("QUERY_STRING", "")
+    target = f"{path}?{query_string}" if query_string else path
+
+    # Get HTTP version from SERVER_PROTOCOL (e.g., "HTTP/1.1" -> "1.1")
+    server_protocol = environ.get("SERVER_PROTOCOL", "HTTP/1.1")
+    http_version = (
+        server_protocol.replace("HTTP/", "")
+        if server_protocol.startswith("HTTP/")
+        else "1.1"
+    )
+
+    input_value: dict[str, Any] = {
+        "method": environ.get("REQUEST_METHOD", ""),
+        "url": build_url(environ),
+        "target": target,
+        "headers": extract_headers(environ),
+        "httpVersion": http_version,
+        "remoteAddress": environ.get("REMOTE_ADDR"),
+        "remotePort": int(environ.get("REMOTE_PORT"))
+        if environ.get("REMOTE_PORT")
+        else None,
+    }
+
+    # Remove None values
+    input_value = {k: v for k, v in input_value.items() if v is not None}
+
+    # Add body if present
+    if body:
+        # Store body as Base64 encoded string to match Node SDK behavior
+        input_value["body"] = base64.b64encode(body).decode("ascii")
+        input_value["bodySize"] = len(body)
+        if body_truncated:
+            input_value["bodyProcessingError"] = "truncated"
+
+    return input_value
+
+
+def build_output_value(
+    status_code: int,
+    status_message: str,
+    headers: dict[str, str],
+    body: bytes | None = None,
+    body_truncated: bool = False,
+    error: str | None = None,
+) -> dict[str, Any]:
+    """Build standardized output_value dict from response data.
+
+    Args:
+        status_code: HTTP status code (e.g., 200, 404)
+        status_message: HTTP status message (e.g., "OK", "Not Found")
+        headers: Response headers dictionary
+        body: Optional response body bytes
+        body_truncated: Whether body was truncated
+        error: Optional error message
+
+    Returns:
+        Dictionary with HTTP response data (statusCode, headers, body, etc.)
+    """
+    output_value: dict[str, Any] = {
+        "statusCode": status_code,  # camelCase to match Node SDK
+        "statusMessage": status_message,
+        "headers": headers,
+    }
+
+    # Add response body if captured
+    if body:
+        output_value["body"] = base64.b64encode(body).decode("ascii")
+        output_value["bodySize"] = len(body)
+        if body_truncated:
+            output_value["bodyProcessingError"] = "truncated"
+
+    if error:
+        output_value["errorMessage"] = error  # Match Node SDK field name
+
+    return output_value
+
+
+def generate_input_schema_info(
+    input_value: dict[str, Any], body_truncated: bool = False
+):
+    """Generate schema and hash for input_value.
+
+    Args:
+        input_value: Input value dictionary
+        body_truncated: Whether body was truncated
+
+    Returns:
+        Schema info object with schema and hashes
+    """
+    # Build schema merge hints including body encoding
+    input_schema_merges = dict(HEADER_SCHEMA_MERGES)
+    if "body" in input_value:
+        input_schema_merges["body"] = SchemaMerge(encoding=EncodingType.BASE64)
+    if body_truncated and "bodyProcessingError" in input_value:
+        input_schema_merges["bodyProcessingError"] = SchemaMerge(match_importance=1.0)
+
+    return JsonSchemaHelper.generate_schema_and_hash(input_value, input_schema_merges)
+
+
+def generate_output_schema_info(
+    output_value: dict[str, Any], body_truncated: bool = False
+):
+    """Generate schema and hash for output_value.
+
+    Args:
+        output_value: Output value dictionary
+        body_truncated: Whether body was truncated
+
+    Returns:
+        Schema info object with schema and hashes
+    """
+    # Build schema merge hints including body encoding and truncation flags
+    output_schema_merges = dict(HEADER_SCHEMA_MERGES)
+    if "body" in output_value:
+        output_schema_merges["body"] = SchemaMerge(encoding=EncodingType.BASE64)
+    # Add bodyProcessingError to schema merges if truncated (matches Node SDK)
+    if body_truncated and "bodyProcessingError" in output_value:
+        output_schema_merges["bodyProcessingError"] = SchemaMerge(match_importance=1.0)
+
+    return JsonSchemaHelper.generate_schema_and_hash(output_value, output_schema_merges)
