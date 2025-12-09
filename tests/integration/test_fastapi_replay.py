@@ -29,7 +29,7 @@ import requests
 
 from drift import TuskDrift
 from drift.core.types import SpanKind
-from drift.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
+from drift.core.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
 
 
 class TestFastAPIReplayMode(unittest.TestCase):

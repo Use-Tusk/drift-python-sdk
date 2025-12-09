@@ -27,7 +27,7 @@ class TestFastAPIBasicSpanCapture(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Set up the SDK and FastAPI app once for all tests."""
-        from drift.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
+        from drift.core.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
 
         cls.sdk = TuskDrift.get_instance()
         if not TuskDrift._initialized:
@@ -219,7 +219,7 @@ class TestFastAPIMultipleRequests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Set up the SDK and FastAPI app once for all tests."""
-        from drift.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
+        from drift.core.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
 
         cls.sdk = TuskDrift.get_instance()
         cls.adapter = InMemorySpanAdapter()

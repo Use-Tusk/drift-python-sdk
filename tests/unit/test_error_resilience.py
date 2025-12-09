@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 os.environ["TUSK_DRIFT_MODE"] = "RECORD"
 
 from drift.core.types import CleanSpanData, PackageType, SpanKind, SpanStatus, StatusCode, Timestamp, Duration
-from drift.tracing.adapters import InMemorySpanAdapter, ExportResult, ExportResultCode
+from drift.core.tracing.adapters import InMemorySpanAdapter, ExportResult, ExportResultCode
 from tests.utils import create_test_span
 
 
@@ -157,7 +157,7 @@ class TestSDKErrorResilience(unittest.TestCase):
     def test_sdk_continues_after_collect_span_error(self):
         """SDK should continue operation after collect_span errors."""
         from drift import TuskDrift
-        from drift.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
+        from drift.core.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
 
         sdk = TuskDrift.get_instance()
         adapter = InMemorySpanAdapter()

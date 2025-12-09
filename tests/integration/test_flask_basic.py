@@ -27,7 +27,7 @@ class TestFlaskBasicSpanCapture(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Set up the SDK and Flask app once for all tests."""
-        from drift.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
+        from drift.core.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
 
         cls.sdk = TuskDrift.initialize()
         cls.adapter = InMemorySpanAdapter()
@@ -240,7 +240,7 @@ class TestFlaskMultipleRequests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Set up the SDK and Flask app once for all tests."""
-        from drift.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
+        from drift.core.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
 
         cls.sdk = TuskDrift.get_instance()
         cls.adapter = InMemorySpanAdapter()
