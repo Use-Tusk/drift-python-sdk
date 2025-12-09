@@ -39,7 +39,7 @@ from django.urls import path
 from drift import TuskDrift
 from drift.core.types import SpanKind
 from drift.instrumentation import DjangoInstrumentation
-from drift.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
+from drift.core.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
 
 
 # Define test views

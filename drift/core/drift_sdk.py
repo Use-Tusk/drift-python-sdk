@@ -142,11 +142,21 @@ class TuskDrift:
             if effective_export_directory
             else Path.cwd() / ".tusk" / "traces"
         )
+
+        # Determine if remote export should be used (matches Node SDK behavior)
+        # Requires: api_key + observable_service_id + recording.export_spans enabled
+        export_spans_enabled = (
+            file_config.recording.export_spans if file_config and file_config.recording else False
+        )
+        use_remote_export = (
+            export_spans_enabled and api_key is not None and observable_service_id is not None
+        )
+
         exporter_config = TdSpanExporterConfig(
             base_directory=base_dir,
             mode=instance.mode,
             observable_service_id=observable_service_id,
-            use_remote_export=api_key is not None and observable_service_id is not None,
+            use_remote_export=use_remote_export,
             api_key=api_key,
             tusk_backend_base_url=effective_backend_url,
             environment=env or "development",

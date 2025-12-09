@@ -48,7 +48,7 @@ class TdSpanExporter:
 
     def _setup_default_adapters(self, config: TdSpanExporterConfig) -> None:
         """Setup default adapters based on configuration."""
-        from ...tracing.adapters import ApiSpanAdapter, FilesystemSpanAdapter, ApiSpanAdapterConfig
+        from .adapters import ApiSpanAdapter, FilesystemSpanAdapter, ApiSpanAdapterConfig
 
         if config.use_remote_export and config.api_key and config.observable_service_id:
             logger.debug("TdSpanExporter using API adapter")

@@ -14,7 +14,6 @@ This implementation mirrors the Node.js SDK's ProtobufCommunicator.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import secrets
@@ -25,12 +24,11 @@ import traceback
 from dataclasses import dataclass
 from typing import Any
 
-from ..types import CleanSpanData
 from ...version import MIN_CLI_VERSION, SDK_VERSION
+from ..types import CleanSpanData
 from .types import (
     CliMessage,
     ConnectRequest,
-    ConnectResponse,
     EnvVarRequest,
     EnvVarResponse,
     GetMockRequest,
@@ -165,7 +163,8 @@ class ProtobufCommunicator:
         lines = traceback.format_stack()
         # Filter out internal frames
         filtered = [
-            line for line in lines
+            line
+            for line in lines
             if "ProtobufCommunicator" not in line and "communicator.py" not in line
         ]
         return "".join(filtered[-20:])  # Limit to last 20 frames
@@ -240,18 +239,15 @@ class ProtobufCommunicator:
         )
 
         await self._send_protobuf_message(sdk_message)
-        # SDK awaits CLI's decision
-        # If CLI accepts -> connection proceeds
-        # If CLI rejects -> CLI closes the connection
 
     async def disconnect(self) -> None:
         """Disconnect from CLI."""
         self._cleanup()
         logger.info("Disconnected from CLI")
 
-    # ========== Mock Request Methods ==========
-
-    async def request_mock_async(self, mock_request: MockRequestInput) -> MockResponseOutput:
+    async def request_mock_async(
+        self, mock_request: MockRequestInput
+    ) -> MockResponseOutput:
         """Request mocked response data from CLI (async).
 
         Args:
@@ -373,8 +369,6 @@ class ProtobufCommunicator:
 
         return self._execute_sync_request(sdk_message, self._handle_env_var_response)
 
-    # ========== Inbound Span Methods ==========
-
     async def send_inbound_span_for_replay(self, span: CleanSpanData) -> None:
         """Send an inbound span to CLI for replay validation.
 
@@ -395,8 +389,6 @@ class ProtobufCommunicator:
         )
 
         await self._send_protobuf_message(sdk_message)
-
-    # ========== Alert Methods ==========
 
     async def send_instrumentation_version_mismatch_alert(
         self,
@@ -459,8 +451,6 @@ class ProtobufCommunicator:
         except Exception:
             pass  # Alerts are non-critical
 
-    # ========== Low-Level Communication ==========
-
     async def _send_protobuf_message(self, message: SdkMessage) -> None:
         """Send a protobuf message to CLI."""
         if not self._socket:
@@ -515,10 +505,14 @@ class ProtobufCommunicator:
                 if cli_message.connect_response:
                     response = cli_message.connect_response
                     if response.success:
-                        logger.debug("[ProtobufCommunicator] CLI acknowledged connection")
+                        logger.debug(
+                            "[ProtobufCommunicator] CLI acknowledged connection"
+                        )
                         self._session_id = response.session_id
                     else:
-                        logger.error(f"[ProtobufCommunicator] CLI rejected connection: {response.error}")
+                        logger.error(
+                            f"[ProtobufCommunicator] CLI rejected connection: {response.error}"
+                        )
                     continue
 
         except socket.timeout as e:

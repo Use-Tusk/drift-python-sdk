@@ -21,7 +21,7 @@ from .core import (
 from .instrumentation.flask import FlaskInstrumentation
 from .instrumentation.fastapi import FastAPIInstrumentation
 from .instrumentation.requests import RequestsInstrumentation
-from .tracing.adapters import (
+from .core.tracing.adapters import (
     SpanExportAdapter,
     ExportResult,
     ExportResultCode,

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .types import CleanSpanData
-    from ..tracing.adapters.base import SpanExportAdapter
+    from .tracing.adapters.base import SpanExportAdapter
 
 logger = logging.getLogger(__name__)
 

@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING, override
 from .base import ExportResult, SpanExportAdapter
 
 if TYPE_CHECKING:
-    from ...core.types import CleanSpanData, SpanKind
-    from ...core.tracing.span_exporter import TdSpanExporter
+    from ...types import CleanSpanData, SpanKind
+    from ..span_exporter import TdSpanExporter
 
 # Track registered adapters
 _registered_adapters: list[InMemorySpanAdapter] = []
@@ -82,7 +82,7 @@ from .base import ExportResultCode
 
 def _get_span_exporter() -> TdSpanExporter | None:
     """Get the span exporter from the SDK instance."""
-    from ...core.drift_sdk import TuskDrift
+    from ...drift_sdk import TuskDrift
 
     sdk = TuskDrift.get_instance()
     return getattr(sdk, "span_exporter", None)
@@ -101,7 +101,7 @@ def register_in_memory_adapter(adapter: InMemorySpanAdapter) -> None:
     Example:
         ```python
         from drift import TuskDrift
-        from drift.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
+        from drift.core.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
 
         TuskDrift.initialize()  # Initialize SDK first
         adapter = InMemorySpanAdapter()
@@ -111,7 +111,7 @@ def register_in_memory_adapter(adapter: InMemorySpanAdapter) -> None:
         spans = adapter.get_all_spans()
         ```
     """
-    from ...core.drift_sdk import TuskDrift
+    from ...drift_sdk import TuskDrift
 
     sdk = TuskDrift.get_instance()
 

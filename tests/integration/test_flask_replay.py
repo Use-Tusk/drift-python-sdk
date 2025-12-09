@@ -24,7 +24,7 @@ test_socket.listen(1)
 
 from drift import TuskDrift
 from drift.core.types import SpanKind
-from drift.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
+from drift.core.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
 from flask import Flask, jsonify
 
 

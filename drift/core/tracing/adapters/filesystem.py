@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, override
 from .base import ExportResult, SpanExportAdapter
 
 if TYPE_CHECKING:
-    from ...core.types import CleanSpanData
+    from ...types import CleanSpanData
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +129,7 @@ class FilesystemSpanAdapter(SpanExportAdapter):
 
     def _span_to_dict(self, span: "CleanSpanData") -> dict[str, Any]:
         """Convert CleanSpanData to a JSON-serializable dictionary."""
-        from ...core.types import PackageType, SpanKind, StatusCode
+        from ...types import PackageType, SpanKind, StatusCode
 
         result: dict[str, Any] = {
             "traceId": span.trace_id,
@@ -188,7 +188,7 @@ class FilesystemSpanAdapter(SpanExportAdapter):
 
     def _schema_to_dict(self, schema: Any) -> dict[str, Any]:
         """Convert JsonSchema to a dictionary."""
-        from ...core.json_schema_helper import JsonSchema
+        from ...json_schema_helper import JsonSchema
 
         if schema is None:
             return {"type": 0, "properties": {}}
