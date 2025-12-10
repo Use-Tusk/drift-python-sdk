@@ -8,7 +8,6 @@ import logging
 import os
 import random
 import stat
-import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -26,18 +25,6 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
-
-# List of instrumentation module names that should not be imported before SDK initialization
-# Mirrors TuskDriftInstrumentationModuleNames in Node SDK
-INSTRUMENTATION_MODULE_NAMES = [
-    "flask",
-    "fastapi",
-    "starlette",
-    "requests",
-    "django",
-    "httpx",
-    # Add more as instrumentations are developed
-]
 
 
 class TuskDrift:
@@ -88,19 +75,6 @@ class TuskDrift:
         timestamp_ms = int(time.time() * 1000)
         random_suffix = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=9))
         return f"sdk-{timestamp_ms}-{random_suffix}"
-
-    def _already_imported_modules(self) -> set[str]:
-        """
-        Check which instrumentation modules are already imported.
-        Mirrors alreadyRequiredModules() in Node SDK.
-        """
-        already_imported = set()
-
-        for module_name in INSTRUMENTATION_MODULE_NAMES:
-            if module_name in sys.modules:
-                already_imported.add(module_name)
-
-        return already_imported
 
     @classmethod
     def initialize(
@@ -193,25 +167,6 @@ class TuskDrift:
             return instance
 
         logger.debug(f"Initializing in {instance.mode} mode")
-
-        # Check if any instrumentation modules are already imported (matches Node SDK)
-        already_imported = instance._already_imported_modules()
-        if already_imported:
-            module_list = ", ".join(sorted(already_imported))
-            message = (
-                f"TuskDrift must be initialized before any other modules are imported. "
-                f"This ensures TuskDrift is able to instrument the imported modules. "
-                f"{module_list} {'are' if len(already_imported) > 1 else 'is'} already imported."
-            )
-
-            if instance.mode == "RECORD":
-                logger.warning(f"{message} TuskDrift is now disabled and will continue in disabled mode.")
-                instance.mode = "DISABLED"
-                return instance
-            elif instance.mode == "REPLAY":
-                logger.error(f"{message} TuskDrift will not run in replay mode. Stopping the app.")
-                import sys
-                sys.exit(1)
 
         # Transform config precedence: config file > init param (matches Node SDK)
         effective_transforms = file_config.transforms if file_config and file_config.transforms else transforms
