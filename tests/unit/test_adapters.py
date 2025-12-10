@@ -320,7 +320,8 @@ class TestApiSpanAdapter(unittest.TestCase):
         self.assertEqual(result.span_id, span.span_id)
         self.assertEqual(result.name, span.name)
         self.assertEqual(result.package_name, span.package_name)
-        self.assertEqual(result.kind, span.kind)
+        # Kind is converted to int value for protobuf
+        self.assertEqual(result.kind, span.kind.value)
         # Check that input/output were converted to Struct
         self.assertIsNotNone(result.input_value)
         self.assertIsNotNone(result.output_value)
@@ -333,7 +334,7 @@ class TestApiSpanAdapter(unittest.TestCase):
         """Test that the API URL is constructed correctly."""
         self.assertEqual(
             self.adapter._base_url,
-            "https://api.test.com/api/drift"
+            "https://api.test.com/api/drift/SpanExportService/ExportSpans"
         )
 
     def test_aiohttp_not_installed(self):

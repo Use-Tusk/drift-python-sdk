@@ -1,4 +1,8 @@
-"""API span adapter for exporting spans to Tusk backend via Twirp/protobuf."""
+"""API span adapter for exporting spans to Tusk backend via native binary protobuf.
+
+This adapter uses betterproto to serialize protobuf messages to binary format
+and sends them directly to the Tusk backend over HTTP.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +18,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DRIFT_API_PATH = "/api/drift"
+DRIFT_API_PATH = "/api/drift/SpanExportService/ExportSpans"
 
 
 @dataclass
@@ -31,10 +35,10 @@ class ApiSpanAdapterConfig:
 
 class ApiSpanAdapter(SpanExportAdapter):
     """
-    Exports spans to Tusk backend API via Twirp/protobuf.
+    Exports spans to Tusk backend API via native binary protobuf.
 
-    Uses the generated SpanExportServiceStub from betterproto to send spans
-    in the correct protobuf format expected by the backend.
+    Uses betterproto to serialize protobuf messages to binary format and
+    sends them directly to the backend over HTTP.
     """
 
     def __init__(self, config: ApiSpanAdapterConfig) -> None:
@@ -47,20 +51,7 @@ class ApiSpanAdapter(SpanExportAdapter):
         self._config = config
         self._base_url = f"{config.tusk_backend_base_url}{DRIFT_API_PATH}"
 
-        # Import the generated protobuf client
-        from tusk.drift.backend.v1 import SpanExportServiceStub
-
-        # Create the gRPC channel for betterproto
-        # betterproto ServiceStub expects a channel-like object
-        # We'll use a custom HTTP channel since Twirp is over HTTP
-        self._client = SpanExportServiceStub(
-            channel=_TwirpHttpChannel(
-                base_url=self._base_url,
-                api_key=config.api_key,
-            )
-        )
-
-        logger.debug("ApiSpanAdapter initialized with Twirp/protobuf client")
+        logger.debug("ApiSpanAdapter initialized with native protobuf serialization")
 
     def __repr__(self) -> str:
         return f"ApiSpanAdapter(url={self._base_url}, env={self._config.environment})"
@@ -72,9 +63,10 @@ class ApiSpanAdapter(SpanExportAdapter):
 
     @override
     async def export_spans(self, spans: list["CleanSpanData"]) -> ExportResult:
-        """Export spans to the Tusk backend API using protobuf."""
+        """Export spans to the Tusk backend API using native binary protobuf."""
         try:
-            from tusk.drift.backend.v1 import ExportSpansRequest
+            import aiohttp
+            from tusk.drift.backend.v1 import ExportSpansRequest, ExportSpansResponse
 
             # Transform spans to protobuf format
             proto_spans = [self._transform_span_to_protobuf(span) for span in spans]
@@ -88,15 +80,39 @@ class ApiSpanAdapter(SpanExportAdapter):
                 spans=proto_spans,
             )
 
-            # Call the generated client method
-            response = await self._client.export_spans(request)
+            # Serialize to binary protobuf using betterproto
+            request_bytes = bytes(request)
 
-            if not response.success:
-                raise Exception(f"Remote export failed: {response.message}")
+            # Send HTTP POST with binary protobuf
+            headers = {
+                "Content-Type": "application/protobuf",
+                "x-api-key": self._config.api_key,
+                "x-td-skip-instrumentation": "true",
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    self._base_url, data=request_bytes, headers=headers
+                ) as http_response:
+                    if http_response.status != 200:
+                        error_text = await http_response.text()
+                        raise Exception(
+                            f"API request failed (status {http_response.status}): {error_text}"
+                        )
+
+                    # Read binary response and parse with betterproto
+                    response_bytes = await http_response.read()
+                    response = ExportSpansResponse().parse(response_bytes)
+
+                    if not response.success:
+                        raise Exception(f"Remote export failed: {response.message}")
 
             logger.debug(f"Successfully exported {len(spans)} spans to remote endpoint")
             return ExportResult.success()
 
+        except ImportError as error:
+            logger.error("aiohttp is required for API adapter. Install it with: pip install aiohttp")
+            return ExportResult.failed(error)
         except Exception as error:
             logger.error(f"Failed to export spans to remote:", exc_info=error)
             return ExportResult.failed(
@@ -141,6 +157,30 @@ class ApiSpanAdapter(SpanExportAdapter):
                 metadata_dict = clean_span.metadata if isinstance(clean_span.metadata, dict) else {}
             metadata_struct = _dict_to_struct(metadata_dict)
 
+        # Convert package_type enum to int value for protobuf
+        package_type_value = (
+            clean_span.package_type.value
+            if hasattr(clean_span.package_type, "value")
+            else (clean_span.package_type or 0)
+        )
+
+        # Convert kind enum to protobuf enum value
+        from tusk.drift.core.v1 import SpanKind as ProtoSpanKind, SpanStatus as ProtoSpanStatus
+
+        kind_value = (
+            clean_span.kind.value if hasattr(clean_span.kind, "value") else clean_span.kind
+        )
+
+        # Convert status to protobuf SpanStatus
+        status_code_value = (
+            clean_span.status.code.value
+            if hasattr(clean_span.status.code, "value")
+            else clean_span.status.code
+        )
+        proto_status = ProtoSpanStatus(
+            code=status_code_value, message=clean_span.status.message or ""
+        )
+
         # Build the protobuf Span
         return Span(
             trace_id=clean_span.trace_id,
@@ -150,7 +190,7 @@ class ApiSpanAdapter(SpanExportAdapter):
             package_name=clean_span.package_name,
             instrumentation_name=clean_span.instrumentation_name,
             submodule_name=clean_span.submodule_name,
-            package_type=clean_span.package_type or 0,
+            package_type=package_type_value,
             input_value=input_struct,
             output_value=output_struct,
             input_schema=clean_span.input_schema,
@@ -159,8 +199,8 @@ class ApiSpanAdapter(SpanExportAdapter):
             output_schema_hash=clean_span.output_schema_hash or "",
             input_value_hash=clean_span.input_value_hash or "",
             output_value_hash=clean_span.output_value_hash or "",
-            kind=clean_span.kind,
-            status=clean_span.status,
+            kind=kind_value,
+            status=proto_status,
             is_pre_app_start=clean_span.is_pre_app_start,
             timestamp=timestamp,
             duration=duration,
@@ -172,13 +212,13 @@ class ApiSpanAdapter(SpanExportAdapter):
 
 def _dict_to_struct(data: dict[str, Any]) -> "Struct":
     """Convert a Python dict to protobuf Struct."""
-    from betterproto.lib.google.protobuf import Struct, Value, ListValue, NullValue
-    import json
+    from betterproto.lib.google.protobuf import Struct, Value, ListValue
 
     def value_to_proto(val: Any) -> Value:
         """Convert a Python value to protobuf Value."""
         if val is None:
-            return Value(null_value=NullValue.NULL_VALUE)
+            # In betterproto, NullValue is just the int 0
+            return Value(null_value=0)
         elif isinstance(val, bool):
             return Value(bool_value=val)
         elif isinstance(val, (int, float)):
@@ -196,67 +236,6 @@ def _dict_to_struct(data: dict[str, Any]) -> "Struct":
 
     fields = {key: value_to_proto(value) for key, value in data.items()}
     return Struct(fields=fields)
-
-
-class _TwirpHttpChannel:
-    """
-    Custom channel adapter for betterproto to work with Twirp over HTTP.
-
-    betterproto's ServiceStub expects a channel with a __call__ method
-    that handles request/response serialization and HTTP communication.
-    """
-
-    def __init__(self, base_url: str, api_key: str):
-        self.base_url = base_url
-        self.api_key = api_key
-
-    async def __call__(self, method_name: str, request: Any, response_type: type) -> Any:
-        """
-        Execute a Twirp RPC call over HTTP.
-
-        Args:
-            method_name: The RPC method name (e.g., "export_spans")
-            request: The protobuf request message
-            response_type: The protobuf response type class
-
-        Returns:
-            The deserialized protobuf response
-        """
-        try:
-            import aiohttp
-        except ImportError:
-            raise ImportError("aiohttp is required for API adapter. Install it with: pip install aiohttp")
-
-        # Convert method_name from snake_case to PascalCase for Twirp
-        # e.g., "export_spans" -> "ExportSpans"
-        twirp_method = "".join(word.capitalize() for word in method_name.split("_"))
-
-        # Twirp URL format: {base_url}/ServiceName/MethodName
-        url = f"{self.base_url}/SpanExportService/{twirp_method}"
-
-        headers = {
-            "Content-Type": "application/json",
-            "x-api-key": self.api_key,
-            "x-td-skip-instrumentation": "true",
-        }
-
-        # Serialize request to JSON using betterproto
-        request_json = request.to_dict(casing=betterproto.Casing.CAMEL)
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=request_json, headers=headers) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    raise Exception(f"Twirp request failed (status {response.status}): {error_text}")
-
-                response_json = await response.json()
-
-                # Deserialize response using betterproto
-                return response_type().from_dict(response_json)
-
-
-# Import betterproto for casing conversion
-import betterproto
 
 
 def create_api_adapter(
