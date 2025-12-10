@@ -6,8 +6,10 @@ import asyncio
 import atexit
 import logging
 import os
+import random
 import stat
-import uuid
+import sys
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -24,6 +26,18 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+
+# List of instrumentation module names that should not be imported before SDK initialization
+# Mirrors TuskDriftInstrumentationModuleNames in Node SDK
+INSTRUMENTATION_MODULE_NAMES = [
+    "flask",
+    "fastapi",
+    "starlette",
+    "requests",
+    "django",
+    "httpx",
+    # Add more as instrumentations are developed
+]
 
 
 class TuskDrift:
@@ -48,9 +62,10 @@ class TuskDrift:
         self.config = TuskConfig()
         self.file_config: TuskFileConfig | None = None
         self.app_ready = False
-        self._sdk_instance_id = str(uuid.uuid4())
+        self._sdk_instance_id = self._generate_sdk_instance_id()
         self._sampling_rate: float = 1.0
         self._transform_configs: dict[str, Any] | None = None
+        self._init_params: dict[str, Any] = {}
 
         self.span_exporter: TdSpanExporter | None = None
 
@@ -67,6 +82,25 @@ class TuskDrift:
         if cls._instance is None:
             cls._instance = TuskDrift()
         return cls._instance
+
+    def _generate_sdk_instance_id(self) -> str:
+        """Generate a unique SDK instance ID matching Node SDK pattern."""
+        timestamp_ms = int(time.time() * 1000)
+        random_suffix = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=9))
+        return f"sdk-{timestamp_ms}-{random_suffix}"
+
+    def _already_imported_modules(self) -> set[str]:
+        """
+        Check which instrumentation modules are already imported.
+        Mirrors alreadyRequiredModules() in Node SDK.
+        """
+        already_imported = set()
+
+        for module_name in INSTRUMENTATION_MODULE_NAMES:
+            if module_name in sys.modules:
+                already_imported.add(module_name)
+
+        return already_imported
 
     @classmethod
     def initialize(
@@ -87,7 +121,7 @@ class TuskDrift:
             api_key: Tusk API key for remote export
             env: Environment name (e.g., "development", "production")
             sampling_rate: Fraction of traces to capture (0.0 to 1.0)
-            observable_service_id: ID of the observable service in Tusk (required for API export)
+            observable_service_id: ID of the observable service in Tusk (optional, will read from config if not provided)
             export_directory: Directory for filesystem export (optional)
             tusk_backend_base_url: Base URL for the Tusk backend
             sdk_version: Version of the SDK
@@ -98,15 +132,90 @@ class TuskDrift:
         """
         instance = cls.get_instance()
 
+        # Store init params
+        instance._init_params = {
+            "api_key": api_key,
+            "env": env,
+            "sampling_rate": sampling_rate,
+            "transforms": transforms,
+        }
+
+        # Determine sampling rate early (needed for logging)
+        instance._sampling_rate = instance._determine_sampling_rate(sampling_rate)
+
+        # Handle env fallback to environment variable
+        if not env:
+            env_from_var = os.environ.get("PYTHON_ENV") or os.environ.get("ENV") or "development"
+            logger.warning(
+                f"Environment not provided in initialization parameters. Using '{env_from_var}' as the environment."
+            )
+            env = env_from_var
+
         if cls._initialized:
-            logger.warning("TuskDrift already initialized")
+            logger.debug("Already initialized, skipping...")
             return instance
 
         file_config = instance.file_config
 
-        effective_transforms = transforms
-        if effective_transforms is None and file_config and file_config.transforms:
-            effective_transforms = file_config.transforms
+        # Validate mode and configuration early
+        if (
+            instance.mode == "RECORD"
+            and file_config
+            and file_config.recording
+            and file_config.recording.export_spans
+            and not api_key
+        ):
+            logger.error(
+                "In record mode and export_spans is true, but API key not provided. "
+                "API key is required to export spans to Tusk backend. "
+                "Please provide an API key in the initialization parameters."
+            )
+            return instance
+
+        # Read observable_service_id from config if not provided (matches Node SDK)
+        effective_observable_service_id = observable_service_id
+        if not effective_observable_service_id and file_config and file_config.service:
+            effective_observable_service_id = file_config.service.id
+
+        # Validate observable_service_id if export_spans is enabled
+        export_spans_enabled = (
+            file_config.recording.export_spans if file_config and file_config.recording else False
+        )
+        if export_spans_enabled and not effective_observable_service_id:
+            logger.error(
+                "Observable service ID not provided. "
+                "Please provide an observable service ID in the configuration file."
+            )
+            return instance
+
+        if instance.mode == "DISABLED":
+            logger.debug("SDK disabled via environment variable")
+            return instance
+
+        logger.debug(f"Initializing in {instance.mode} mode")
+
+        # Check if any instrumentation modules are already imported (matches Node SDK)
+        already_imported = instance._already_imported_modules()
+        if already_imported:
+            module_list = ", ".join(sorted(already_imported))
+            message = (
+                f"TuskDrift must be initialized before any other modules are imported. "
+                f"This ensures TuskDrift is able to instrument the imported modules. "
+                f"{module_list} {'are' if len(already_imported) > 1 else 'is'} already imported."
+            )
+
+            if instance.mode == "RECORD":
+                logger.warning(f"{message} TuskDrift is now disabled and will continue in disabled mode.")
+                instance.mode = "DISABLED"
+                return instance
+            elif instance.mode == "REPLAY":
+                logger.error(f"{message} TuskDrift will not run in replay mode. Stopping the app.")
+                import sys
+                sys.exit(1)
+
+        # Transform config precedence: config file > init param (matches Node SDK)
+        effective_transforms = file_config.transforms if file_config and file_config.transforms else transforms
+        instance._transform_configs = effective_transforms
 
         instance.config = TuskConfig(
             api_key=api_key,
@@ -114,9 +223,6 @@ class TuskDrift:
             sampling_rate=sampling_rate or 1.0,
             transforms=effective_transforms,
         )
-        instance._transform_configs = effective_transforms
-
-        instance._sampling_rate = instance._determine_sampling_rate(sampling_rate)
 
         effective_export_directory = export_directory
         if (
@@ -137,29 +243,29 @@ class TuskDrift:
         ):
             effective_backend_url = file_config.tusk_api.url
 
+        # Base directory for local trace storage
         base_dir = (
             Path(effective_export_directory)
             if effective_export_directory
             else Path.cwd() / ".tusk" / "traces"
         )
 
-        # Determine if remote export should be used (matches Node SDK behavior)
-        # Requires: api_key + observable_service_id + recording.export_spans enabled
-        export_spans_enabled = (
-            file_config.recording.export_spans if file_config and file_config.recording else False
-        )
+        logger.debug(f"Config: {file_config}")
+        logger.debug(f"Base directory: {base_dir}")
+
+        # Determine if remote export should be used
         use_remote_export = (
-            export_spans_enabled and api_key is not None and observable_service_id is not None
+            export_spans_enabled and api_key is not None and effective_observable_service_id is not None
         )
 
         exporter_config = TdSpanExporterConfig(
             base_directory=base_dir,
             mode=instance.mode,
-            observable_service_id=observable_service_id,
+            observable_service_id=effective_observable_service_id,
             use_remote_export=use_remote_export,
             api_key=api_key,
             tusk_backend_base_url=effective_backend_url,
-            environment=env or "development",
+            environment=env,
             sdk_version=sdk_version,
             sdk_instance_id=instance._sdk_instance_id,
         )
@@ -176,9 +282,7 @@ class TuskDrift:
         atexit.register(instance.shutdown)
 
         cls._initialized = True
-        print(
-            f"Drift SDK initialized in {instance.mode} mode (sampling: {instance._sampling_rate * 100:.0f}%)"
-        )
+        logger.info("SDK initialized successfully")
 
         return instance
 
@@ -230,7 +334,8 @@ class TuskDrift:
         elif mode_env in ("DISABLED", "DISABLE"):
             return "DISABLED"
         else:
-            return "RECORD"
+            # Default to DISABLED if no mode specified (matches Node SDK)
+            return "DISABLED"
 
     def _init_communicator_for_replay(self) -> None:
         """Initialize CLI communicator for REPLAY mode."""
@@ -333,8 +438,18 @@ class TuskDrift:
 
     def mark_app_as_ready(self) -> None:
         """Mark the application as ready (started listening)."""
+        if not self._initialized:
+            if self.mode != "DISABLED":
+                logger.error("mark_app_as_ready() called before initialize(). Call initialize() first.")
+            return
+
         self.app_ready = True
-        print("Application marked as ready")
+        logger.debug("Application marked as ready")
+
+        if self.mode == "REPLAY":
+            logger.debug("Replay mode active - ready to serve mocked responses")
+        elif self.mode == "RECORD":
+            logger.debug("Record mode active - capturing inbound requests and responses")
 
     def collect_span(self, span: CleanSpanData) -> None:
         """
