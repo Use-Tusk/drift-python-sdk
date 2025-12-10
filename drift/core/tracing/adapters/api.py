@@ -125,7 +125,6 @@ class ApiSpanAdapter(SpanExportAdapter):
     @override
     async def shutdown(self) -> None:
         """Shutdown and cleanup."""
-        # betterproto client handles cleanup automatically
         pass
 
     def _transform_span_to_protobuf(self, clean_span: "CleanSpanData") -> Any:
@@ -147,7 +146,6 @@ class ApiSpanAdapter(SpanExportAdapter):
 
         metadata_struct = None
         if clean_span.metadata is not None:
-            # Convert dataclass to dict
             if hasattr(clean_span.metadata, "__dataclass_fields__"):
                 from dataclasses import asdict
 
@@ -207,7 +205,6 @@ class ApiSpanAdapter(SpanExportAdapter):
                 convert_json_schema(sdk_schema.items) if sdk_schema.items else None
             )
 
-            # Convert enums to their integer values
             type_value = (
                 sdk_schema.type.value
                 if hasattr(sdk_schema.type, "value")
@@ -236,7 +233,6 @@ class ApiSpanAdapter(SpanExportAdapter):
         proto_input_schema = convert_json_schema(clean_span.input_schema)
         proto_output_schema = convert_json_schema(clean_span.output_schema)
 
-        # Build the protobuf Span
         return Span(
             trace_id=clean_span.trace_id,
             span_id=clean_span.span_id,
@@ -261,7 +257,6 @@ class ApiSpanAdapter(SpanExportAdapter):
             duration=duration,
             is_root_span=clean_span.is_root_span,
             metadata=metadata_struct,
-            environment=self._config.environment,
         )
 
 
@@ -272,7 +267,6 @@ def _dict_to_struct(data: dict[str, Any]) -> "Struct":
     def value_to_proto(val: Any) -> Value:
         """Convert a Python value to protobuf Value."""
         if val is None:
-            # In betterproto, NullValue is just the int 0
             return Value(null_value=0)
         elif isinstance(val, bool):
             return Value(bool_value=val)
@@ -286,7 +280,6 @@ def _dict_to_struct(data: dict[str, Any]) -> "Struct":
             list_vals = [value_to_proto(item) for item in val]
             return Value(list_value=ListValue(values=list_vals))
         else:
-            # Fallback: convert to string
             return Value(string_value=str(val))
 
     fields = {key: value_to_proto(value) for key, value in data.items()}

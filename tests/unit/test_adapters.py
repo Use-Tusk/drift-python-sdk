@@ -334,7 +334,7 @@ class TestApiSpanAdapter(unittest.TestCase):
         """Test that the API URL is constructed correctly."""
         self.assertEqual(
             self.adapter._base_url,
-            "https://api.test.com/api/drift/SpanExportService/ExportSpans"
+            "https://api.test.com/api/drift/tusk.drift.backend.v1.SpanExportService/ExportSpans"
         )
 
     def test_aiohttp_not_installed(self):
