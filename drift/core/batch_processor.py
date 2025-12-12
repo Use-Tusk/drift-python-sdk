@@ -152,14 +152,14 @@ class BatchSpanProcessor:
         # Export to all adapters
         for adapter in self._adapters:
             try:
-                # Handle async adapters
+                # Handle async adapters (create new event loop for this thread)
                 if asyncio.iscoroutinefunction(adapter.export_spans):
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
                     try:
-                        loop = asyncio.get_running_loop()
-                        asyncio.create_task(adapter.export_spans(batch))
-                    except RuntimeError:
-                        # No running loop, create one
-                        asyncio.run(adapter.export_spans(batch))
+                        loop.run_until_complete(adapter.export_spans(batch))
+                    finally:
+                        loop.close()
                 else:
                     adapter.export_spans(batch)  # type: ignore
 

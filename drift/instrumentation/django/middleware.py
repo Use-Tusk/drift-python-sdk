@@ -80,6 +80,12 @@ class DriftMiddleware:
             if should_fetch_env_vars:
                 try:
                     env_vars = sdk.request_env_vars_sync(replay_trace_id)
+
+                    # Store in tracker for env instrumentation to use
+                    from ..env import EnvVarTracker
+                    tracker = EnvVarTracker.get_instance()
+                    tracker.set_env_vars(replay_trace_id, env_vars)
+
                     logger.debug(
                         f"[DjangoMiddleware] Fetched {len(env_vars)} env vars from CLI for trace {replay_trace_id}"
                     )
@@ -243,6 +249,25 @@ class DriftMiddleware:
             None,
         )
 
+        # Check if content type should block the trace
+        from ...core.content_type_utils import get_decoded_type, should_block_content_type
+        from ...core.trace_blocking_manager import TraceBlockingManager
+
+        content_type = response_headers.get("content-type") or response_headers.get("Content-Type")
+        decoded_type = get_decoded_type(content_type)
+
+        if should_block_content_type(decoded_type):
+            blocking_mgr = TraceBlockingManager.get_instance()
+            blocking_mgr.block_trace(
+                trace_id,
+                reason=f"binary_content:{decoded_type.name if decoded_type else 'unknown'}"
+            )
+            logger.warning(
+                f"Blocking trace {trace_id} - binary response: {content_type} "
+                f"(decoded as {decoded_type.name if decoded_type else 'unknown'})"
+            )
+            return  # Skip span creation
+
         # Apply transforms if present
         transform_metadata = None
         if self.transform_engine:
@@ -283,6 +308,15 @@ class DriftMiddleware:
             # Fallback to literal path (e.g., for 404s)
             span_name = f"{method} {request.path}"
 
+        # Attach env vars to metadata if present
+        from ..env import EnvVarTracker
+        from ...core.types import MetadataObject
+        tracker = EnvVarTracker.get_instance()
+        env_vars = tracker.get_env_vars(trace_id)
+        metadata = None
+        if env_vars:
+            metadata = MetadataObject(ENV_VARS=env_vars)
+
         span = CleanSpanData(
             trace_id=trace_id,
             span_id=span_id,
@@ -307,9 +341,13 @@ class DriftMiddleware:
             timestamp=Timestamp(seconds=timestamp_seconds, nanos=timestamp_nanos),
             duration=Duration(seconds=duration_seconds, nanos=duration_nanos),
             transform_metadata=transform_metadata,
+            metadata=metadata,
         )
 
         sdk.collect_span(span)
+
+        # Clear tracker after span collection
+        tracker.clear_env_vars(trace_id)
 
     def _capture_error_span(self, request: HttpRequest, exception: Exception) -> None:
         """Create and collect an error span.
@@ -358,6 +396,15 @@ class DriftMiddleware:
         route_template = getattr(request, "_drift_route_template", None)
         span_name = f"{method} {route_template}" if route_template else f"{method} {request.path}"
 
+        # Attach env vars to metadata if present
+        from ..env import EnvVarTracker
+        from ...core.types import MetadataObject
+        tracker = EnvVarTracker.get_instance()
+        env_vars = tracker.get_env_vars(trace_id)
+        metadata = None
+        if env_vars:
+            metadata = MetadataObject(ENV_VARS=env_vars)
+
         span = CleanSpanData(
             trace_id=trace_id,
             span_id=span_id,
@@ -382,6 +429,10 @@ class DriftMiddleware:
             timestamp=Timestamp(seconds=timestamp_seconds, nanos=timestamp_nanos),
             duration=Duration(seconds=duration_seconds, nanos=duration_nanos),
             transform_metadata=None,
+            metadata=metadata,
         )
 
         sdk.collect_span(span)
+
+        # Clear tracker after span collection
+        tracker.clear_env_vars(trace_id)

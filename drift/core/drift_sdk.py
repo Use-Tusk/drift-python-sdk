@@ -16,13 +16,14 @@ from ..instrumentation.registry import install_hooks
 from .communication.communicator import CommunicatorConfig, ProtobufCommunicator
 from .communication.types import MockRequestInput, MockResponseOutput
 from .config import TuskConfig, TuskFileConfig, load_tusk_config
+from .logger import LogLevel, configure_logger
 from .sampling import should_sample, validate_sampling_rate
 from .trace_blocking_manager import TraceBlockingManager, should_block_span
 from .tracing import TdSpanExporter, TdSpanExporterConfig
 from .types import CleanSpanData, DriftMode, SpanKind
 
 if TYPE_CHECKING:
-    pass
+    from .batch_processor import BatchSpanProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,8 @@ class TuskDrift:
         self._init_params: dict[str, Any] = {}
 
         self.span_exporter: TdSpanExporter | None = None
+        self.batch_processor: "BatchSpanProcessor | None" = None
+        self._batch_processor_enabled: bool = True
 
         self.communicator: ProtobufCommunicator | None = None
         self._cli_connection_task: asyncio.Task | None = None
@@ -87,6 +90,8 @@ class TuskDrift:
         tusk_backend_base_url: str = "https://api.usetusk.ai",
         sdk_version: str = "0.1.0",
         transforms: dict[str, Any] | None = None,
+        log_level: LogLevel = "info",
+        enable_batching: bool = True,
     ) -> TuskDrift:
         """
         Initialize the TuskDrift SDK.
@@ -100,11 +105,16 @@ class TuskDrift:
             tusk_backend_base_url: Base URL for the Tusk backend
             sdk_version: Version of the SDK
             transforms: Optional transform configuration matching the Node SDK schema
+            log_level: Logging level (silent, error, warn, info, debug). Default: info
+            enable_batching: Enable batch span processor for efficient export. Default: True
 
         Returns:
             The initialized TuskDrift instance
         """
         instance = cls.get_instance()
+
+        # Configure logger FIRST (before any logging calls)
+        configure_logger(log_level=log_level, prefix="TuskDrift")
 
         # Store init params
         instance._init_params = {
@@ -112,7 +122,10 @@ class TuskDrift:
             "env": env,
             "sampling_rate": sampling_rate,
             "transforms": transforms,
+            "log_level": log_level,
+            "enable_batching": enable_batching,
         }
+        instance._batch_processor_enabled = enable_batching
 
         # Determine sampling rate early (needed for logging)
         instance._sampling_rate = instance._determine_sampling_rate(sampling_rate)
@@ -225,6 +238,17 @@ class TuskDrift:
             sdk_instance_id=instance._sdk_instance_id,
         )
         instance.span_exporter = TdSpanExporter(exporter_config)
+
+        # Initialize batch processor if enabled
+        if enable_batching:
+            from .batch_processor import BatchSpanProcessor, BatchSpanProcessorConfig
+
+            instance.batch_processor = BatchSpanProcessor(
+                adapters=instance.span_exporter.get_adapters(),
+                config=BatchSpanProcessorConfig()  # Uses defaults
+            )
+            instance.batch_processor.start()
+            logger.info("Batch span processor started")
 
         if instance.mode == "REPLAY":
             instance._init_communicator_for_replay()
@@ -391,6 +415,20 @@ class TuskDrift:
         except ImportError:
             logger.warning("failed to initialize requests instrumentation")
 
+        # Initialize env instrumentation if enabled
+        if (
+            self.file_config
+            and self.file_config.recording
+            and self.file_config.recording.enable_env_var_recording
+        ):
+            try:
+                from ..instrumentation.env import EnvInstrumentation
+
+                _ = EnvInstrumentation(enabled=True)
+                logger.info("initialized env instrumentation")
+            except Exception as e:
+                logger.warning(f"failed to initialize env instrumentation: {e}")
+
     def mark_app_as_ready(self) -> None:
         """Mark the application as ready (started listening)."""
         if not self._initialized:
@@ -451,18 +489,19 @@ class TuskDrift:
                 # No event loop running, skip CLI communication
                 pass
 
-        # Export to all adapters via span exporter
-        if self.span_exporter:
+        # Export via batch processor or immediate export
+        if self.batch_processor and self._batch_processor_enabled:
+            # Batched export (default, recommended)
+            self.batch_processor.add_span(span)
+        elif self.span_exporter:
+            # Fallback to immediate export (when batching disabled)
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    # Event loop is running, create task
                     asyncio.create_task(self.span_exporter.export_spans([span]))
                 else:
-                    # Event loop exists but not running, run synchronously
                     loop.run_until_complete(self.span_exporter.export_spans([span]))
             except RuntimeError:
-                # No event loop, create one and run synchronously
                 asyncio.run(self.span_exporter.export_spans([span]))
 
     async def request_mock_async(
@@ -647,6 +686,11 @@ class TuskDrift:
     def shutdown(self) -> None:
         """Shutdown the SDK and all adapters."""
         import asyncio
+
+        # Stop batch processor first (flushes remaining spans)
+        if self.batch_processor is not None:
+            self.batch_processor.stop(timeout=30.0)
+            logger.debug("Batch processor stopped and flushed")
 
         if self.span_exporter is not None:
             asyncio.run(self.span_exporter.shutdown())

@@ -556,6 +556,26 @@ class RequestsInstrumentation(InstrumentationBase):
                         code=StatusCode.ERROR,
                         message=f"HTTP {response.status_code}",
                     )
+
+                # Check if response content type should block the trace
+                from ...core.content_type_utils import get_decoded_type, should_block_content_type
+                from ...core.trace_blocking_manager import TraceBlockingManager
+
+                response_content_type = response_headers.get("content-type") or response_headers.get("Content-Type")
+                decoded_type = get_decoded_type(response_content_type)
+
+                if should_block_content_type(decoded_type):
+                    # Block PARENT trace for outbound requests with binary responses
+                    blocking_mgr = TraceBlockingManager.get_instance()
+                    blocking_mgr.block_trace(
+                        trace_id,
+                        reason=f"outbound_binary:{decoded_type.name if decoded_type else 'unknown'}"
+                    )
+                    logger.warning(
+                        f"Blocking trace {trace_id} - outbound request returned binary response: {response_content_type} "
+                        f"(decoded as {decoded_type.name if decoded_type else 'unknown'})"
+                    )
+                    return  # Skip span creation
             else:
                 # No response and no error - this happens when request is dropped by transforms
                 output_value = {}
