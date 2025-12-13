@@ -47,6 +47,13 @@ class TuskDrift:
 
     def __init__(self) -> None:
         self.mode: DriftMode = self._detect_mode()
+
+        # Clear SENTRY_DSN in REPLAY mode to prevent replay traffic from hitting production Sentry
+        # (matches Node SDK behavior: src/core/TuskDrift.ts:388-394)
+        if self.mode == "REPLAY" and "SENTRY_DSN" in os.environ:
+            logger.debug("REPLAY mode detected - clearing SENTRY_DSN to prevent replay traffic from hitting Sentry")
+            del os.environ["SENTRY_DSN"]
+
         self.config = TuskConfig()
         self.file_config: TuskFileConfig | None = None
         self.app_ready = False
@@ -244,7 +251,7 @@ class TuskDrift:
             from .batch_processor import BatchSpanProcessor, BatchSpanProcessorConfig
 
             instance.batch_processor = BatchSpanProcessor(
-                adapters=instance.span_exporter.get_adapters(),
+                exporter=instance.span_exporter,
                 config=BatchSpanProcessorConfig()  # Uses defaults
             )
             instance.batch_processor.start()
