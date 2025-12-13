@@ -3,6 +3,7 @@
 from .base import InstrumentationBase
 from .django import DjangoInstrumentation
 from .env import EnvInstrumentation, EnvVarTracker
+from .psycopg import PostgresInstrumentation
 from .registry import register_patch, install_hooks, patch_instances_via_gc
 
 __all__ = [
@@ -10,6 +11,7 @@ __all__ = [
     "DjangoInstrumentation",
     "EnvInstrumentation",
     "EnvVarTracker",
+    "PostgresInstrumentation",
     "register_patch",
     "install_hooks",
     "patch_instances_via_gc",
