@@ -147,58 +147,24 @@ class DjangoInstrumentation(InstrumentationBase):
                     conn.close()
             logger.info("[DjangoInstrumentation] Closed all database connections to force reconnect with instrumentation")
             
-            # Also patch Django's cursor creation directly
-            self._patch_django_cursor_creation()
+            # NOTE: We do NOT need to patch Django's cursor creation because psycopg2 instrumentation
+            # already handles cursor wrapping via cursor_factory. Double patching causes duplicate spans.
+            # Closing the connections above forces Django to reconnect, which will use the instrumented
+            # cursor_factory from psycopg2 instrumentation.
+            
         except Exception as e:
             logger.warning(f"[DjangoInstrumentation] Failed to close database connections: {e}")
     
-    def _patch_django_cursor_creation(self) -> None:
-        """Patch Django's database cursor creation to use instrumented cursors."""
-        try:
-            from django.db.backends.postgresql.base import DatabaseWrapper
-            from ...core.drift_sdk import TuskDrift
-            # Import the psycopg2 instrumentation instance
-            from ..psycopg2 import instrumentation as psycopg2_instr_module
-            
-            original_cursor = DatabaseWrapper.cursor
-            sdk = TuskDrift.get_instance()
-            
-            # Get the psycopg2 instrumentation instance
-            psycopg2_instr = psycopg2_instr_module._instance
-            if not psycopg2_instr:
-                logger.warning("[DjangoInstrumentation] Psycopg2Instrumentation instance not found")
-                return
-            
-            def patched_cursor(self):
-                """Patched Django cursor() method."""
-                logger.debug("[DJANGO_CURSOR] Creating cursor via Django")
-                cursor = original_cursor(self)
-                logger.debug(f"[DJANGO_CURSOR] Got cursor: {type(cursor)}")
-                
-                # Wrap the cursor with our instrumentation
-                # We need to replace execute/executemany methods
-                original_execute = cursor.execute
-                original_executemany = cursor.executemany
-                
-                def wrapped_execute(query, vars=None):
-                    logger.debug(f"[DJANGO_CURSOR] wrapped_execute called")
-                    return psycopg2_instr._traced_execute(cursor, original_execute, sdk, query, vars)
-                
-                def wrapped_executemany(query, vars_list):
-                    logger.debug(f"[DJANGO_CURSOR] wrapped_executemany called")
-                    return psycopg2_instr._traced_executemany(cursor, original_executemany, sdk, query, vars_list)
-                
-                cursor.execute = wrapped_execute
-                cursor.executemany = wrapped_executemany
-                logger.debug("[DJANGO_CURSOR] Wrapped cursor execute/executemany methods")
-                
-                return cursor
-            
-            DatabaseWrapper.cursor = patched_cursor
-            logger.info("[DjangoInstrumentation] Patched Django PostgreSQL cursor creation")
-            
-        except Exception as e:
-            logger.warning(f"[DjangoInstrumentation] Failed to patch Django cursor creation: {e}", exc_info=True)
+    # REMOVED: _patch_django_cursor_creation() 
+    # This method was causing duplicate spans because psycopg2 instrumentation already
+    # handles cursor wrapping via cursor_factory. Double patching resulted in:
+    # - First span: Django wrapper calling psycopg2_instr._traced_execute()
+    # - Second span: InstrumentedCursor.execute() calling instrumentation._traced_execute()
+    # 
+    # The correct approach is to let psycopg2 instrumentation handle ALL cursor wrapping,
+    # and Django instrumentation only needs to:
+    # 1. Inject middleware for HTTP request tracing
+    # 2. Close existing connections so Django reconnects with the instrumented cursor_factory
 
     def _get_middleware_setting(self, settings: Any) -> str | None:
         """Detect which middleware setting name to use.
