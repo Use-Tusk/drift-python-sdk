@@ -51,7 +51,9 @@ class TuskDrift:
         # Clear SENTRY_DSN in REPLAY mode to prevent replay traffic from hitting production Sentry
         # (matches Node SDK behavior: src/core/TuskDrift.ts:388-394)
         if self.mode == "REPLAY" and "SENTRY_DSN" in os.environ:
-            logger.debug("REPLAY mode detected - clearing SENTRY_DSN to prevent replay traffic from hitting Sentry")
+            logger.debug(
+                "REPLAY mode detected - clearing SENTRY_DSN to prevent replay traffic from hitting Sentry"
+            )
             del os.environ["SENTRY_DSN"]
 
         self.config = TuskConfig()
@@ -83,7 +85,9 @@ class TuskDrift:
     def _generate_sdk_instance_id(self) -> str:
         """Generate a unique SDK instance ID matching Node SDK pattern."""
         timestamp_ms = int(time.time() * 1000)
-        random_suffix = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=9))
+        random_suffix = "".join(
+            random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=9)
+        )
         return f"sdk-{timestamp_ms}-{random_suffix}"
 
     @classmethod
@@ -139,7 +143,9 @@ class TuskDrift:
 
         # Handle env fallback to environment variable
         if not env:
-            env_from_var = os.environ.get("PYTHON_ENV") or os.environ.get("ENV") or "development"
+            env_from_var = (
+                os.environ.get("PYTHON_ENV") or os.environ.get("ENV") or "development"
+            )
             logger.warning(
                 f"Environment not provided in initialization parameters. Using '{env_from_var}' as the environment."
             )
@@ -173,8 +179,11 @@ class TuskDrift:
 
         # Validate observable_service_id if export_spans is enabled
         export_spans_enabled = (
-            file_config.recording.export_spans if file_config and file_config.recording else False
+            file_config.recording.export_spans
+            if file_config and file_config.recording
+            else False
         )
+
         if export_spans_enabled and not effective_observable_service_id:
             logger.error(
                 "Observable service ID not provided. "
@@ -189,7 +198,11 @@ class TuskDrift:
         logger.debug(f"Initializing in {instance.mode} mode")
 
         # Transform config precedence: config file > init param (matches Node SDK)
-        effective_transforms = file_config.transforms if file_config and file_config.transforms else transforms
+        effective_transforms = (
+            file_config.transforms
+            if file_config and file_config.transforms
+            else transforms
+        )
         instance._transform_configs = effective_transforms
 
         instance.config = TuskConfig(
@@ -230,7 +243,9 @@ class TuskDrift:
 
         # Determine if remote export should be used
         use_remote_export = (
-            export_spans_enabled and api_key is not None and effective_observable_service_id is not None
+            export_spans_enabled
+            and api_key is not None
+            and effective_observable_service_id is not None
         )
 
         exporter_config = TdSpanExporterConfig(
@@ -252,7 +267,7 @@ class TuskDrift:
 
             instance.batch_processor = BatchSpanProcessor(
                 exporter=instance.span_exporter,
-                config=BatchSpanProcessorConfig()  # Uses defaults
+                config=BatchSpanProcessorConfig(),  # Uses defaults
             )
             instance.batch_processor.start()
             logger.info("Batch span processor started")
@@ -325,10 +340,17 @@ class TuskDrift:
 
     def _init_communicator_for_replay(self) -> None:
         """Initialize CLI communicator for REPLAY mode."""
+        print("[SDK_STARTUP] Entering _init_communicator_for_replay()", flush=True)
+
         # Check for TCP or Unix socket mode
         mock_host = os.environ.get("TUSK_MOCK_HOST")
         mock_port = os.environ.get("TUSK_MOCK_PORT")
         mock_socket = os.environ.get("TUSK_MOCK_SOCKET")
+
+        print(
+            f"[SDK_STARTUP] Environment: TUSK_MOCK_HOST={mock_host}, TUSK_MOCK_PORT={mock_port}, TUSK_MOCK_SOCKET={mock_socket}",
+            flush=True,
+        )
 
         connection_info: dict[str, Any]
 
@@ -338,7 +360,10 @@ class TuskDrift:
                 "host": mock_host,
                 "port": int(mock_port),
             }
-            logger.debug(f"Using TCP connection to CLI: {mock_host}:{mock_port}")
+            print(
+                f"[SDK_STARTUP] Using TCP connection to CLI: {mock_host}:{mock_port}",
+                flush=True,
+            )
         else:
             # Unix socket mode (default)
             socket_path = mock_socket or "/tmp/tusk-connect.sock"
@@ -346,6 +371,10 @@ class TuskDrift:
             # Check if socket exists and is ready
             socket_file = Path(socket_path)
             if not socket_file.exists():
+                print(
+                    f"[SDK_STARTUP] ERROR: Socket not found at {socket_path}",
+                    flush=True,
+                )
                 raise FileNotFoundError(
                     f"Socket not found at {socket_path}. Make sure Tusk CLI is running."
                 )
@@ -353,42 +382,66 @@ class TuskDrift:
             # Check if it's actually a socket
             file_stat = socket_file.stat()
             if not stat.S_ISSOCK(file_stat.st_mode):
+                print(
+                    f"[SDK_STARTUP] ERROR: Path exists but is not a socket: {socket_path}",
+                    flush=True,
+                )
                 raise ValueError(f"Path exists but is not a socket: {socket_path}")
 
-            logger.debug(f"Socket found and verified at {socket_path}")
+            print(
+                f"[SDK_STARTUP] Socket found and verified at {socket_path}", flush=True
+            )
             connection_info = {"socketPath": socket_path}
 
         # Initialize communicator
+        print("[SDK_STARTUP] Creating ProtobufCommunicator...", flush=True)
         self.communicator = ProtobufCommunicator(CommunicatorConfig.from_env())
+        print("[SDK_STARTUP] ProtobufCommunicator created successfully", flush=True)
 
-        # Start connection early (will be awaited on first mock request)
-        async def connect_to_cli():
+        # Connect synchronously - REPLAY mode doesn't need async performance
+        # This avoids asyncio event loop conflicts with Django/Flask/FastAPI
+        print("[SDK_STARTUP] Starting synchronous connection to CLI...", flush=True)
+
+        def connect_to_cli_sync():
             try:
-                service_id = (
+                print(
+                    f"[SDK_STARTUP] In connect_to_cli_sync, connection_info={connection_info}",
+                    flush=True,
+                )
+                service_id: str = (
                     self.file_config.service.id
-                    if self.file_config and self.file_config.service
+                    if self.file_config
+                    and self.file_config.service
+                    and self.file_config.service.id
                     else "unknown"
                 )
-                await self.communicator.connect(connection_info, service_id)
-                self._is_connected_with_cli = True
-                logger.debug("SDK successfully connected to CLI")
-            except Exception as e:
-                logger.error(f"Failed to connect to CLI: {e}")
-                self._is_connected_with_cli = False
+                print(f"[SDK_STARTUP] Service ID: {service_id}", flush=True)
 
-        # Start connection task
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                self._cli_connection_task = loop.create_task(connect_to_cli())
-            else:
-                # Event loop exists but not running - run connection synchronously
-                loop.run_until_complete(connect_to_cli())
-        except RuntimeError:
-            # No event loop running yet - create one and connect synchronously
-            # This is critical for tusk CLI which expects immediate acknowledgement
-            logger.debug("No event loop found, creating one to connect to CLI")
-            asyncio.run(connect_to_cli())
+                # Use asyncio.run for clean synchronous execution
+                async def async_connect():
+                    print("[SDK_STARTUP] Calling communicator.connect()...", flush=True)
+                    if self.communicator:
+                        await self.communicator.connect(connection_info, service_id)
+                        print(
+                            "[SDK_STARTUP] communicator.connect() completed", flush=True
+                        )
+
+                asyncio.run(async_connect())
+                self._is_connected_with_cli = True
+                print("[SDK_STARTUP] SDK successfully connected to CLI!", flush=True)
+            except Exception as e:
+                print(f"[SDK_STARTUP] ERROR: Failed to connect to CLI: {e}", flush=True)
+                import traceback
+
+                traceback.print_exc()
+                self._is_connected_with_cli = False
+                # Don't raise - allow SDK to continue without connection
+
+        connect_to_cli_sync()
+        print(
+            f"[SDK_STARTUP] Exiting _init_communicator_for_replay(), connected={self._is_connected_with_cli}",
+            flush=True,
+        )
 
     def _init_auto_instrumentations(self) -> None:
         """Auto-detect and initialize all available instrumentations."""
@@ -422,6 +475,27 @@ class TuskDrift:
         except ImportError:
             logger.warning("failed to initialize requests instrumentation")
 
+        # Initialize psycopg2 BEFORE Django so Django can use the instrumented cursors
+        try:
+            import psycopg2  # pyright: ignore[reportUnusedImport]
+
+            from ..instrumentation.psycopg2 import Psycopg2Instrumentation
+
+            _ = Psycopg2Instrumentation()
+            logger.info("initialized psycopg2 instrumentation")
+        except ImportError:
+            logger.warning("failed to initialize psycopg2 instrumentation")
+
+        try:
+            import django  # pyright: ignore[reportUnusedImport]
+
+            from ..instrumentation.django import DjangoInstrumentation
+
+            _ = DjangoInstrumentation()
+            logger.info("initialized django instrumentation")
+        except ImportError:
+            logger.warning("failed to initialize django instrumentation")
+
         # Initialize env instrumentation if enabled
         if (
             self.file_config
@@ -440,7 +514,9 @@ class TuskDrift:
         """Mark the application as ready (started listening)."""
         if not self._initialized:
             if self.mode != "DISABLED":
-                logger.error("mark_app_as_ready() called before initialize(). Call initialize() first.")
+                logger.error(
+                    "mark_app_as_ready() called before initialize(). Call initialize() first."
+                )
             return
 
         self.app_ready = True
@@ -449,7 +525,9 @@ class TuskDrift:
         if self.mode == "REPLAY":
             logger.debug("Replay mode active - ready to serve mocked responses")
         elif self.mode == "RECORD":
-            logger.debug("Record mode active - capturing inbound requests and responses")
+            logger.debug(
+                "Record mode active - capturing inbound requests and responses"
+            )
 
     def collect_span(self, span: CleanSpanData) -> None:
         """
@@ -486,6 +564,17 @@ class TuskDrift:
             span.to_proto()
         except Exception as e:
             logger.error(f"Failed to serialize span to protobuf: {e}")
+            logger.error(
+                f"  Span name: {span.name}, package: {span.package_name}, trace_id: {span.trace_id}"
+            )
+            logger.error(
+                f"  input_value type: {type(span.input_value)}, output_value type: {type(span.output_value)}"
+            )
+            logger.error(f"  input_value: {span.input_value}")
+            logger.error(f"  output_value: {span.output_value}")
+            import traceback
+
+            logger.error(f"  Traceback: {traceback.format_exc()}")
             return
 
         # REPLAY mode: Send inbound SERVER spans to CLI
@@ -496,20 +585,21 @@ class TuskDrift:
                 # No event loop running, skip CLI communication
                 pass
 
-        # Export via batch processor or immediate export
-        if self.batch_processor and self._batch_processor_enabled:
-            # Batched export (default, recommended)
-            self.batch_processor.add_span(span)
-        elif self.span_exporter:
-            # Fallback to immediate export (when batching disabled)
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.create_task(self.span_exporter.export_spans([span]))
-                else:
-                    loop.run_until_complete(self.span_exporter.export_spans([span]))
-            except RuntimeError:
-                asyncio.run(self.span_exporter.export_spans([span]))
+        # Export via batch processor or immediate export (only in RECORD mode)
+        if self.mode == "RECORD":
+            if self.batch_processor and self._batch_processor_enabled:
+                # Batched export (default, recommended)
+                self.batch_processor.add_span(span)
+            elif self.span_exporter:
+                # Fallback to immediate export (when batching disabled)
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.create_task(self.span_exporter.export_spans([span]))
+                    else:
+                        loop.run_until_complete(self.span_exporter.export_spans([span]))
+                except RuntimeError:
+                    asyncio.run(self.span_exporter.export_spans([span]))
 
     async def request_mock_async(
         self, mock_request: MockRequestInput
@@ -585,7 +675,11 @@ class TuskDrift:
             logger.debug(f"Received mock response from CLI: found={response.found}")
             return response
         except Exception as e:
-            logger.error(f"Error sending mock request to CLI: {e}")
+            import traceback
+
+            logger.error(
+                f"Error sending mock request to CLI: {e}\n{traceback.format_exc()}"
+            )
             return MockResponseOutput(found=False, error=f"Request failed: {e}")
 
     def request_env_vars_sync(self, trace_test_server_span_id: str) -> dict[str, str]:

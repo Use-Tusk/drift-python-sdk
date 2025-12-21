@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from betterproto.lib.google.protobuf import Struct as ProtoStruct, Value as ProtoValue
 from tusk.drift.core.v1 import (
     DecodedType as ProtoDecodedType,
     EncodingType as ProtoEncodingType,
@@ -21,6 +22,59 @@ from .json_schema_helper import DecodedType, EncodingType, JsonSchema, JsonSchem
 from .types import CleanSpanData
 
 
+def _value_to_proto(value: Any) -> ProtoValue:
+    """Convert a single Python value to protobuf Value."""
+    from betterproto.lib.google.protobuf import ListValue as ProtoListValue
+    
+    proto_value = ProtoValue()
+    
+    if value is None:
+        proto_value.null_value = 0
+    elif isinstance(value, bool):
+        proto_value.bool_value = value
+    elif isinstance(value, (int, float)):
+        proto_value.number_value = float(value)
+    elif isinstance(value, str):
+        proto_value.string_value = value
+    elif isinstance(value, dict):
+        proto_value.struct_value = _dict_to_struct(value)
+    elif isinstance(value, list):
+        # Create a new ListValue and populate it recursively
+        list_val = ProtoListValue()
+        for item in value:
+            list_val.values.append(_value_to_proto(item))
+        proto_value.list_value = list_val
+    else:
+        # Fallback: convert to string
+        proto_value.string_value = str(value)
+    
+    return proto_value
+
+
+def _dict_to_struct(data: Any) -> ProtoStruct:
+    """Convert a Python dict/value to protobuf Struct.
+    
+    This recursively converts Python values to protobuf Value types.
+    """
+    if data is None or data == {}:
+        return ProtoStruct()
+    
+    if not isinstance(data, dict):
+        # If it's already a Struct, return it
+        if isinstance(data, ProtoStruct):
+            return data
+        # Otherwise convert single value to struct with empty fields
+        return ProtoStruct()
+    
+    struct = ProtoStruct()
+    struct.fields = {}
+    
+    for key, value in data.items():
+        struct.fields[key] = _value_to_proto(value)
+    
+    return struct
+
+
 def clean_span_to_proto(span: CleanSpanData) -> ProtoSpan:
     """Convert a CleanSpanData instance to a tusk.drift.core.v1.Span message."""
 
@@ -34,8 +88,8 @@ def clean_span_to_proto(span: CleanSpanData) -> ProtoSpan:
         submodule_name=span.submodule_name,
         package_type=ProtoPackageType(span.package_type.value) if span.package_type else ProtoPackageType.UNSPECIFIED,
         kind=ProtoSpanKind(span.kind.value),
-        input_value=span.input_value or {},
-        output_value=span.output_value or {},
+        input_value=_dict_to_struct(span.input_value),
+        output_value=_dict_to_struct(span.output_value),
         input_schema=_json_schema_to_proto(span.input_schema),
         output_schema=_json_schema_to_proto(span.output_schema),
         input_schema_hash=span.input_schema_hash,

@@ -116,6 +116,11 @@ class DjangoInstrumentation(InstrumentationBase):
             logger.info(
                 f"[DjangoInstrumentation] Injected DriftMiddleware at position 0 in {middleware_setting}"
             )
+            
+            # Close all existing database connections to force Django to recreate them
+            # with our patched psycopg2.connect (which includes cursor_factory)
+            self._force_database_reconnect()
+            
             print("Django instrumentation applied")
 
         except ImportError as e:
@@ -127,6 +132,73 @@ class DjangoInstrumentation(InstrumentationBase):
                 f"[DjangoInstrumentation] Failed to inject middleware: {e}",
                 exc_info=True,
             )
+
+    def _force_database_reconnect(self) -> None:
+        """Force Django to close and recreate database connections.
+        
+        This ensures that connections use our instrumented psycopg2.connect
+        with cursor_factory applied.
+        """
+        try:
+            from django.db import connections
+            for conn in connections.all():
+                if conn.connection is not None:
+                    logger.debug(f"[DjangoInstrumentation] Closing connection: {conn.alias}")
+                    conn.close()
+            logger.info("[DjangoInstrumentation] Closed all database connections to force reconnect with instrumentation")
+            
+            # Also patch Django's cursor creation directly
+            self._patch_django_cursor_creation()
+        except Exception as e:
+            logger.warning(f"[DjangoInstrumentation] Failed to close database connections: {e}")
+    
+    def _patch_django_cursor_creation(self) -> None:
+        """Patch Django's database cursor creation to use instrumented cursors."""
+        try:
+            from django.db.backends.postgresql.base import DatabaseWrapper
+            from ...core.drift_sdk import TuskDrift
+            # Import the psycopg2 instrumentation instance
+            from ..psycopg2 import instrumentation as psycopg2_instr_module
+            
+            original_cursor = DatabaseWrapper.cursor
+            sdk = TuskDrift.get_instance()
+            
+            # Get the psycopg2 instrumentation instance
+            psycopg2_instr = psycopg2_instr_module._instance
+            if not psycopg2_instr:
+                logger.warning("[DjangoInstrumentation] Psycopg2Instrumentation instance not found")
+                return
+            
+            def patched_cursor(self):
+                """Patched Django cursor() method."""
+                logger.debug("[DJANGO_CURSOR] Creating cursor via Django")
+                cursor = original_cursor(self)
+                logger.debug(f"[DJANGO_CURSOR] Got cursor: {type(cursor)}")
+                
+                # Wrap the cursor with our instrumentation
+                # We need to replace execute/executemany methods
+                original_execute = cursor.execute
+                original_executemany = cursor.executemany
+                
+                def wrapped_execute(query, vars=None):
+                    logger.debug(f"[DJANGO_CURSOR] wrapped_execute called")
+                    return psycopg2_instr._traced_execute(cursor, original_execute, sdk, query, vars)
+                
+                def wrapped_executemany(query, vars_list):
+                    logger.debug(f"[DJANGO_CURSOR] wrapped_executemany called")
+                    return psycopg2_instr._traced_executemany(cursor, original_executemany, sdk, query, vars_list)
+                
+                cursor.execute = wrapped_execute
+                cursor.executemany = wrapped_executemany
+                logger.debug("[DJANGO_CURSOR] Wrapped cursor execute/executemany methods")
+                
+                return cursor
+            
+            DatabaseWrapper.cursor = patched_cursor
+            logger.info("[DjangoInstrumentation] Patched Django PostgreSQL cursor creation")
+            
+        except Exception as e:
+            logger.warning(f"[DjangoInstrumentation] Failed to patch Django cursor creation: {e}", exc_info=True)
 
     def _get_middleware_setting(self, settings: Any) -> str | None:
         """Detect which middleware setting name to use.

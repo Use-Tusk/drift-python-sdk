@@ -129,11 +129,17 @@ class RequestsInstrumentation(InstrumentationBase):
 
                 # REPLAY mode: Try to get mock
                 if sdk.mode == "REPLAY":
+                    print(f"[REQUESTS_REPLAY] HTTP request: {method} {url}", flush=True)
+                    print(f"[REQUESTS_REPLAY] parent_span_id: {parent_span_id}, trace_id: {trace_id}", flush=True)
                     mock_response = self._try_get_mock(
                         sdk, method, url, trace_id, span_id, stack_trace, **kwargs
                     )
+                    print(f"[REQUESTS_REPLAY] Mock response received: {mock_response is not None}", flush=True)
                     if mock_response is not None:
+                        print(f"[REQUESTS_REPLAY] Returning mock response", flush=True)
                         return mock_response
+                    else:
+                        print(f"[REQUESTS_REPLAY] No mock found, will make real request", flush=True)
 
                 # ===== CHECK DROP TRANSFORMS (matches Node SDK) =====
                 # Check BEFORE making the HTTP request to prevent network traffic
@@ -179,8 +185,9 @@ class RequestsInstrumentation(InstrumentationBase):
                     error = e
                     raise
                 finally:
-                    # Create span in RECORD mode or if mock was not found
-                    if sdk.mode == "RECORD" or (sdk.mode == "REPLAY" and response is not None):
+                    # Only create span in RECORD mode
+                    # In REPLAY mode, we don't record spans at all - we only mock responses
+                    if sdk.mode == "RECORD":
                         duration_ms = (time.time() - start_time) * 1000
                         self._create_span(
                             sdk,
@@ -370,6 +377,8 @@ class RequestsInstrumentation(InstrumentationBase):
             # Request mock from CLI (synchronous for requests library)
             # Get replay trace ID from context (matches Node.js behavior)
             replay_trace_id = replay_trace_id_context.get()
+            
+            print(f"[REQUESTS_MOCK] Requesting mock from CLI, replay_trace_id={replay_trace_id}", flush=True)
 
             mock_request = MockRequestInput(
                 test_id=replay_trace_id or "",  # ✅ Uses replay trace ID from context
@@ -377,14 +386,18 @@ class RequestsInstrumentation(InstrumentationBase):
             )
 
             mock_response_output = sdk.request_mock_sync(mock_request)
+            
+            print(f"[REQUESTS_MOCK] Mock response found: {mock_response_output.found}", flush=True)
 
             if not mock_response_output.found:
+                print(f"[REQUESTS_MOCK] No mock found for {method} {url}", flush=True)
                 logger.debug(
                     f"No mock found for {method} {url} "
                     f"(replay_trace_id={replay_trace_id}, span_trace_id={trace_id})"
                 )
                 return None
 
+            print(f"[REQUESTS_MOCK] Mock data keys: {mock_response_output.response.keys() if mock_response_output.response else 'None'}", flush=True)
             # Create mocked response object
             return self._create_mock_response(mock_response_output.response, url)
 

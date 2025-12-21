@@ -24,6 +24,8 @@ import traceback
 from dataclasses import dataclass
 from typing import Any
 
+from tusk.drift.core.v1 import GetMockRequest as ProtoGetMockRequest
+
 from ...version import MIN_CLI_VERSION, SDK_VERSION
 from ..types import CleanSpanData
 from .types import (
@@ -207,10 +209,12 @@ class ProtobufCommunicator:
                 logger.debug(f"Connecting to TCP: {address}")
 
             self._socket.settimeout(self.config.connect_timeout)
+            logger.info(f"[COMMUNICATOR] Calling socket.connect({address})")
             self._socket.connect(address)
+            logger.info(f"[COMMUNICATOR] socket.connect() succeeded!")
 
             conn_type = "Unix socket" if isinstance(address, str) else "TCP"
-            logger.debug(f"Connected to CLI via protobuf ({conn_type})")
+            logger.info(f"[COMMUNICATOR] Connected to CLI via protobuf ({conn_type})")
 
             # Send connect message
             await self._send_connect_message(service_id)
@@ -238,7 +242,9 @@ class ProtobufCommunicator:
             connect_request=connect_request.to_proto(),
         )
 
+        logger.info(f"[COMMUNICATOR] Sending SDK_CONNECT message: service_id={service_id}, sdk_version={SDK_VERSION}")
         await self._send_protobuf_message(sdk_message)
+        logger.info(f"[COMMUNICATOR] SDK_CONNECT message sent successfully")
 
     async def disconnect(self) -> None:
         """Disconnect from CLI."""
@@ -313,21 +319,17 @@ class ProtobufCommunicator:
         """
         request_id = self._generate_request_id()
 
-        # Clean and convert span to protobuf
-        clean_span = self._clean_span(mock_request.outbound_span)
-        proto_span = span_to_proto(clean_span) if clean_span else None
+        # Convert span to protobuf
+        proto_span = mock_request.outbound_span.to_proto()
 
-        # Create SDK message
-        proto_mock_request = GetMockRequest(
+        # Create protobuf SDK message directly
+        proto_mock_request = ProtoGetMockRequest(
             request_id=request_id,
             test_id=mock_request.test_id,
-            outbound_span={"name": "placeholder"},
+            outbound_span=proto_span,
             tags={},
-            stack_trace=getattr(clean_span, "stack_trace", "") if clean_span else "",
-        ).to_proto()
-
-        if proto_span:
-            proto_mock_request.outbound_span = proto_span
+            stack_trace=mock_request.outbound_span.stack_trace or "",
+        )
 
         sdk_message = SdkMessage(
             type=MessageType.MOCK_REQUEST,
@@ -533,24 +535,22 @@ class ProtobufCommunicator:
         sdk_message: SdkMessage,
         response_handler: Any,
     ) -> Any:
-        """Execute a synchronous request using the existing connection.
+        """Execute a synchronous request using a dedicated connection.
 
-        Unlike Node.js which spawns a child process, Python can use
-        blocking socket operations directly.
+        Creates a new socket for each sync request to avoid message buffering issues
+        with the async connection. This matches Node.js behavior of spawning child processes.
         """
-        if not self._socket:
-            # Create a new connection for sync request
-            address = self._get_socket_address()
+        # Always create a new connection for sync requests
+        # This avoids reading buffered messages from the async connection
+        address = self._get_socket_address()
 
-            if isinstance(address, str):
-                sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            else:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-            sock.settimeout(SYNC_REQUEST_TIMEOUT)
-            sock.connect(address)
+        if isinstance(address, str):
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         else:
-            sock = self._socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+        sock.settimeout(SYNC_REQUEST_TIMEOUT)
+        sock.connect(address)
 
         try:
             # Serialize and send
@@ -584,9 +584,8 @@ class ProtobufCommunicator:
             return response_handler(cli_message)
 
         finally:
-            # Only close if we created a new socket
-            if sock != self._socket:
-                sock.close()
+            # Always close the sync socket
+            sock.close()
 
     def _handle_cli_message(self, message: CliMessage) -> MockResponseOutput:
         """Handle a CLI message and extract mock response."""
@@ -607,14 +606,21 @@ class ProtobufCommunicator:
         if not mock_response:
             raise ValueError("No mock response in CLI message")
 
+        print(f"[COMMUNICATOR] Mock response found={mock_response.found}, has_response_data={bool(mock_response.response_data)}", flush=True)
+        print(f"[COMMUNICATOR] response_data type: {type(mock_response.response_data)}", flush=True)
+        print(f"[COMMUNICATOR] response_data raw: {mock_response.response_data}", flush=True)
+        
         if mock_response.found:
             # Extract response data from protobuf Struct
             response_data = self._extract_response_data(mock_response.response_data)
+            print(f"[COMMUNICATOR] Extracted response data: {type(response_data)}, keys: {response_data.keys() if isinstance(response_data, dict) else 'not dict'}", flush=True)
+            print(f"[COMMUNICATOR] Extracted response data content: {response_data}", flush=True)
             return MockResponseOutput(
                 found=True,
                 response=response_data,
             )
         else:
+            logger.debug(f"[ProtobufCommunicator] Mock not found, error: {mock_response.error}")
             return MockResponseOutput(
                 found=False,
                 error=mock_response.error or "Mock not found",
@@ -631,27 +637,89 @@ class ProtobufCommunicator:
     def _extract_response_data(self, struct: Any) -> dict[str, Any]:
         """Extract response data from protobuf Struct.
 
-        The CLI returns response data wrapped in a Struct with a "response" field.
+        The CLI returns mock data in this structure:
+        {
+            "response": {          // MockInteraction wrapper
+                "Request": {...},
+                "Response": {
+                    "Body": {...}  // Actual mock data here
+                }
+            }
+        }
+        
+        We need to extract the Response.Body part.
         """
         if not struct:
             return {}
 
         try:
-            # betterproto converts Struct to dict-like
-            if hasattr(struct, "items"):
-                data = dict(struct)
-                if "response" in data:
-                    return data["response"]
-                return data
+            print(f"[EXTRACT_START] struct type: {type(struct)}", flush=True)
+            
+            # betterproto Struct has .fields attribute which is a dict of field names to Value objects
+            # We need to convert recursively
+            def value_to_python(value):
+                """Convert protobuf Value to Python type."""
+                if hasattr(value, 'null_value'):
+                    return None
+                elif hasattr(value, 'number_value'):
+                    return value.number_value
+                elif hasattr(value, 'string_value'):
+                    return value.string_value
+                elif hasattr(value, 'bool_value'):
+                    return value.bool_value
+                elif hasattr(value, 'struct_value') and value.struct_value:
+                    return struct_to_dict(value.struct_value)
+                elif hasattr(value, 'list_value') and value.list_value:
+                    return [value_to_python(v) for v in value.list_value.values]
+                return None
+            
+            def struct_to_dict(s):
+                """Convert protobuf Struct to Python dict."""
+                if not hasattr(s, 'fields'):
+                    return {}
+                result = {}
+                for key, value in s.fields.items():
+                    result[key] = value_to_python(value)
+                return result
+            
+            # Convert the struct to a dict
+            data = struct_to_dict(struct)
+            print(f"[EXTRACT_START] Converted struct, keys: {data.keys() if isinstance(data, dict) else 'not dict'}", flush=True)
+            
+            # Extract from wrapper structure: response -> response -> body (lowercase!)
+            if "response" in data:
+                mock_interaction = data["response"]
+                print(f"[EXTRACT] mock_interaction type: {type(mock_interaction)}, keys: {mock_interaction.keys() if isinstance(mock_interaction, dict) else 'not dict'}", flush=True)
+                
+                # Try lowercase first (actual CLI format)
+                if isinstance(mock_interaction, dict) and "response" in mock_interaction:
+                    response_obj = mock_interaction["response"]
+                    print(f"[EXTRACT] response_obj type: {type(response_obj)}, keys: {response_obj.keys() if isinstance(response_obj, dict) else 'not dict'}", flush=True)
+                    if isinstance(response_obj, dict) and "body" in response_obj:
+                        print(f"[EXTRACT] Found body in response, returning it", flush=True)
+                        return response_obj["body"] or {}
+                    elif isinstance(response_obj, dict):
+                        # For database mocks, the response object IS the data
+                        print(f"[EXTRACT] No 'body' field, returning entire response_obj", flush=True)
+                        return response_obj
+                
+                # Try capitalized (fallback for compatibility)
+                if isinstance(mock_interaction, dict) and "Response" in mock_interaction:
+                    response_obj = mock_interaction["Response"]
+                    if isinstance(response_obj, dict) and "Body" in response_obj:
+                        return response_obj["Body"] or {}
+                
+                # Fallback: return the response object itself if structure is different
+                print(f"[EXTRACT] Fallback: returning mock_interaction", flush=True)
+                return mock_interaction
+            
+            # No wrapper, return as-is
+            return data
 
-            if isinstance(struct, dict):
-                if "response" in struct:
-                    return struct["response"]
-                return struct
-
-            return {}
         except Exception as e:
             logger.error(f"[ProtobufCommunicator] Failed to extract response data: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return {}
 
     def _clean_span(self, data: Any) -> Any:

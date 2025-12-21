@@ -68,11 +68,14 @@ class DriftMiddleware:
             # Extract trace ID from headers (case-insensitive lookup)
             # Django stores headers in request.META
             headers_lower = {k.lower(): v for k, v in request.META.items() if k.startswith("HTTP_")}
+            logger.info(f"[DJANGO_MIDDLEWARE] REPLAY mode, headers: {list(headers_lower.keys())}")
             # Convert HTTP_X_TD_TRACE_ID -> x-td-trace-id
             replay_trace_id = headers_lower.get("http_x_td_trace_id")
+            logger.info(f"[DJANGO_MIDDLEWARE] replay_trace_id from header: {replay_trace_id}")
 
             if not replay_trace_id:
                 # No trace context in REPLAY mode; proceed without span
+                logger.warning(f"[DJANGO_MIDDLEWARE] No replay_trace_id found in headers, proceeding without span")
                 return self.get_response(request)
 
             # Fetch env vars from CLI if requested
@@ -317,34 +320,37 @@ class DriftMiddleware:
         if env_vars:
             metadata = MetadataObject(ENV_VARS=env_vars)
 
-        span = CleanSpanData(
-            trace_id=trace_id,
-            span_id=span_id,
-            parent_span_id="",
-            name=span_name,
-            package_name="django",
-            instrumentation_name="DjangoInstrumentation",
-            submodule_name=method,
-            package_type=PackageType.HTTP,
-            kind=SpanKind.SERVER,
-            input_value=input_value,
-            output_value=output_value,
-            input_schema=input_schema_info.schema,
-            output_schema=output_schema_info.schema,
-            input_value_hash=input_schema_info.decoded_value_hash,
-            output_value_hash=output_schema_info.decoded_value_hash,
-            input_schema_hash=input_schema_info.decoded_schema_hash,
-            output_schema_hash=output_schema_info.decoded_schema_hash,
-            status=status,
-            is_pre_app_start=not sdk.app_ready,
-            is_root_span=True,
-            timestamp=Timestamp(seconds=timestamp_seconds, nanos=timestamp_nanos),
-            duration=Duration(seconds=duration_seconds, nanos=duration_nanos),
-            transform_metadata=transform_metadata,
-            metadata=metadata,
-        )
+        # Only create and collect span in RECORD mode
+        # In REPLAY mode, we only set up context for child spans but don't record the root span
+        if sdk.mode == "RECORD":
+            span = CleanSpanData(
+                trace_id=trace_id,
+                span_id=span_id,
+                parent_span_id="",
+                name=span_name,
+                package_name="django",
+                instrumentation_name="DjangoInstrumentation",
+                submodule_name=method,
+                package_type=PackageType.HTTP,
+                kind=SpanKind.SERVER,
+                input_value=input_value,
+                output_value=output_value,
+                input_schema=input_schema_info.schema,
+                output_schema=output_schema_info.schema,
+                input_value_hash=input_schema_info.decoded_value_hash,
+                output_value_hash=output_schema_info.decoded_value_hash,
+                input_schema_hash=input_schema_info.decoded_schema_hash,
+                output_schema_hash=output_schema_info.decoded_schema_hash,
+                status=status,
+                is_pre_app_start=not sdk.app_ready,
+                is_root_span=True,
+                timestamp=Timestamp(seconds=timestamp_seconds, nanos=timestamp_nanos),
+                duration=Duration(seconds=duration_seconds, nanos=duration_nanos),
+                transform_metadata=transform_metadata,
+                metadata=metadata,
+            )
 
-        sdk.collect_span(span)
+            sdk.collect_span(span)
 
         # Clear tracker after span collection
         tracker.clear_env_vars(trace_id)
