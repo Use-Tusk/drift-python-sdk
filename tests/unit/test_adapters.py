@@ -271,6 +271,8 @@ class TestApiSpanAdapter(unittest.TestCase):
     """Tests for ApiSpanAdapter."""
 
     def setUp(self):
+        # ApiSpanAdapterConfig is used internally by the SDK
+        # These parameters are read from config file, not init params
         self.config = ApiSpanAdapterConfig(
             api_key="test-api-key",
             tusk_backend_base_url="https://api.test.com",

@@ -17,7 +17,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirna
 # Initialize SDK before importing FastAPI
 from drift import TuskDrift
 
-sdk = TuskDrift.initialize(use_batching=False)
+sdk = TuskDrift.initialize()
+# Note: Batching is always enabled in the SDK for efficient export
 # FastAPI and httpx are auto-instrumented by SDK initialization
 
 from fastapi import FastAPI, Request

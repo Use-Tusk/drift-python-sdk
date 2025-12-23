@@ -66,7 +66,6 @@ class TuskDrift:
 
         self.span_exporter: TdSpanExporter | None = None
         self.batch_processor: "BatchSpanProcessor | None" = None
-        self._batch_processor_enabled: bool = True
 
         self.communicator: ProtobufCommunicator | None = None
         self._cli_connection_task: asyncio.Task | None = None
@@ -96,28 +95,24 @@ class TuskDrift:
         api_key: str | None = None,
         env: str | None = None,
         sampling_rate: float | None = None,
-        observable_service_id: str | None = None,
-        export_directory: str | Path | None = None,
-        tusk_backend_base_url: str = "https://api.usetusk.ai",
-        sdk_version: str = "0.1.0",
         transforms: dict[str, Any] | None = None,
         log_level: LogLevel = "info",
-        enable_batching: bool = True,
     ) -> TuskDrift:
         """
         Initialize the TuskDrift SDK.
 
+        Configuration precedence (highest to lowest):
+        1. Initialization parameters (this function's arguments)
+        2. Environment variables
+        3. YAML configuration (.tusk/config.yaml)
+        4. Built-in defaults
+
         Args:
-            api_key: Tusk API key for remote export
-            env: Environment name (e.g., "development", "production")
-            sampling_rate: Fraction of traces to capture (0.0 to 1.0)
-            observable_service_id: ID of the observable service in Tusk (optional, will read from config if not provided)
-            export_directory: Directory for filesystem export (optional)
-            tusk_backend_base_url: Base URL for the Tusk backend
-            sdk_version: Version of the SDK
-            transforms: Optional transform configuration matching the Node SDK schema
+            api_key: Tusk API key for remote export. Can also be set via TUSK_API_KEY env var.
+            env: Environment name (e.g., "development", "production"). Defaults to NODE_ENV env var or "development".
+            sampling_rate: Fraction of traces to capture (0.0 to 1.0). Can also be set via TUSK_SAMPLING_RATE env var.
+            transforms: Optional transform configuration for PII redaction/masking. Overrides config file transforms.
             log_level: Logging level (silent, error, warn, info, debug). Default: info
-            enable_batching: Enable batch span processor for efficient export. Default: True
 
         Returns:
             The initialized TuskDrift instance
@@ -134,20 +129,20 @@ class TuskDrift:
             "sampling_rate": sampling_rate,
             "transforms": transforms,
             "log_level": log_level,
-            "enable_batching": enable_batching,
         }
-        instance._batch_processor_enabled = enable_batching
 
         # Determine sampling rate early (needed for logging)
         instance._sampling_rate = instance._determine_sampling_rate(sampling_rate)
 
+        # Determine API key with precedence: init param > env var
+        effective_api_key = api_key or os.environ.get("TUSK_API_KEY")
+
         # Handle env fallback to environment variable
+        # Precedence: init param > NODE_ENV env var > default
         if not env:
-            env_from_var = (
-                os.environ.get("PYTHON_ENV") or os.environ.get("ENV") or "development"
-            )
-            logger.warning(
-                f"Environment not provided in initialization parameters. Using '{env_from_var}' as the environment."
+            env_from_var = os.environ.get("NODE_ENV") or "development"
+            logger.debug(
+                f"Environment not provided in initialization parameters. Using '{env_from_var}' from NODE_ENV or default."
             )
             env = env_from_var
 
@@ -158,23 +153,24 @@ class TuskDrift:
         file_config = instance.file_config
 
         # Validate mode and configuration early
+        # Validate API key when export_spans is enabled
         if (
             instance.mode == "RECORD"
             and file_config
             and file_config.recording
             and file_config.recording.export_spans
-            and not api_key
+            and not effective_api_key
         ):
             logger.error(
                 "In record mode and export_spans is true, but API key not provided. "
                 "API key is required to export spans to Tusk backend. "
-                "Please provide an API key in the initialization parameters."
+                "Please provide an API key via the 'api_key' parameter or TUSK_API_KEY environment variable."
             )
             return instance
 
-        # Read observable_service_id from config if not provided (matches Node SDK)
-        effective_observable_service_id = observable_service_id
-        if not effective_observable_service_id and file_config and file_config.service:
+        # Read service ID from config file only (not an init param per spec)
+        effective_observable_service_id = None
+        if file_config and file_config.service:
             effective_observable_service_id = file_config.service.id
 
         # Validate observable_service_id if export_spans is enabled
@@ -197,38 +193,27 @@ class TuskDrift:
 
         logger.debug(f"Initializing in {instance.mode} mode")
 
-        # Transform config precedence: config file > init param (matches Node SDK)
-        effective_transforms = (
-            file_config.transforms
-            if file_config and file_config.transforms
-            else transforms
-        )
+        # Transform config precedence: init param > config file (per spec)
+        effective_transforms = transforms
+        if effective_transforms is None and file_config and file_config.transforms:
+            effective_transforms = file_config.transforms
         instance._transform_configs = effective_transforms
 
         instance.config = TuskConfig(
-            api_key=api_key,
+            api_key=effective_api_key,
             env=env,
-            sampling_rate=sampling_rate or 1.0,
+            sampling_rate=instance._sampling_rate,
             transforms=effective_transforms,
         )
 
-        effective_export_directory = export_directory
-        if (
-            effective_export_directory is None
-            and file_config
-            and file_config.traces
-            and file_config.traces.dir
-        ):
+        # Read export directory from config file only (not an init param per spec)
+        effective_export_directory = None
+        if file_config and file_config.traces and file_config.traces.dir:
             effective_export_directory = file_config.traces.dir
 
-        # Determine tusk backend URL: init param > config file > default
-        effective_backend_url = tusk_backend_base_url
-        if (
-            tusk_backend_base_url == "https://api.usetusk.ai"
-            and file_config
-            and file_config.tusk_api
-            and file_config.tusk_api.url
-        ):
+        # Read tusk backend URL from config file (not an init param per spec)
+        effective_backend_url = "https://api.usetusk.ai"
+        if file_config and file_config.tusk_api and file_config.tusk_api.url:
             effective_backend_url = file_config.tusk_api.url
 
         # Base directory for local trace storage
@@ -242,18 +227,21 @@ class TuskDrift:
         logger.debug(f"Base directory: {base_dir}")
 
         # Determine if remote export should be used
-        use_remote_export = (
+        use_remote_export = bool(
             export_spans_enabled
-            and api_key is not None
+            and effective_api_key is not None
             and effective_observable_service_id is not None
         )
+
+        # Get SDK version from package metadata
+        from ..version import SDK_VERSION as sdk_version
 
         exporter_config = TdSpanExporterConfig(
             base_directory=base_dir,
             mode=instance.mode,
             observable_service_id=effective_observable_service_id,
             use_remote_export=use_remote_export,
-            api_key=api_key,
+            api_key=effective_api_key,
             tusk_backend_base_url=effective_backend_url,
             environment=env,
             sdk_version=sdk_version,
@@ -261,16 +249,15 @@ class TuskDrift:
         )
         instance.span_exporter = TdSpanExporter(exporter_config)
 
-        # Initialize batch processor if enabled
-        if enable_batching:
-            from .batch_processor import BatchSpanProcessor, BatchSpanProcessorConfig
+        # Always enable batch processor for efficient export
+        from .batch_processor import BatchSpanProcessor, BatchSpanProcessorConfig
 
-            instance.batch_processor = BatchSpanProcessor(
-                exporter=instance.span_exporter,
-                config=BatchSpanProcessorConfig(),  # Uses defaults
-            )
-            instance.batch_processor.start()
-            logger.info("Batch span processor started")
+        instance.batch_processor = BatchSpanProcessor(
+            exporter=instance.span_exporter,
+            config=BatchSpanProcessorConfig(),  # Uses defaults
+        )
+        instance.batch_processor.start()
+        logger.info("Batch span processor started")
 
         if instance.mode == "REPLAY":
             instance._init_communicator_for_replay()
@@ -603,13 +590,13 @@ class TuskDrift:
                 # No event loop running, skip CLI communication
                 pass
 
-        # Export via batch processor or immediate export (only in RECORD mode)
+        # Export via batch processor (only in RECORD mode)
         if self.mode == "RECORD":
-            if self.batch_processor and self._batch_processor_enabled:
+            if self.batch_processor:
                 # Batched export (default, recommended)
                 self.batch_processor.add_span(span)
             elif self.span_exporter:
-                # Fallback to immediate export (when batching disabled)
+                # Fallback to immediate export (when batch processor not initialized)
                 try:
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
