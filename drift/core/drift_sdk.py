@@ -475,16 +475,34 @@ class TuskDrift:
         except ImportError:
             logger.warning("failed to initialize requests instrumentation")
 
-        # Initialize psycopg2 BEFORE Django so Django can use the instrumented cursors
+        # Initialize PostgreSQL instrumentation BEFORE Django so Django can use the instrumented cursors
+        # Try psycopg (v3) first (newer, pure Python), then fallback to psycopg2
+        psycopg_initialized = False
         try:
-            import psycopg2  # pyright: ignore[reportUnusedImport]
+            import psycopg  # pyright: ignore[reportUnusedImport]
 
-            from ..instrumentation.psycopg2 import Psycopg2Instrumentation
+            from ..instrumentation.psycopg import PsycopgInstrumentation
 
-            _ = Psycopg2Instrumentation()
-            logger.info("initialized psycopg2 instrumentation")
+            _ = PsycopgInstrumentation()
+            logger.info("initialized psycopg (v3) instrumentation")
+            psycopg_initialized = True
         except ImportError:
-            logger.warning("failed to initialize psycopg2 instrumentation")
+            pass  # Try psycopg2 next
+        
+        if not psycopg_initialized:
+            try:
+                import psycopg2  # pyright: ignore[reportUnusedImport]
+
+                from ..instrumentation.psycopg2 import Psycopg2Instrumentation
+
+                _ = Psycopg2Instrumentation()
+                logger.info("initialized psycopg2 instrumentation")
+                psycopg_initialized = True
+            except ImportError:
+                pass
+        
+        if not psycopg_initialized:
+            logger.warning("failed to initialize PostgreSQL instrumentation (neither psycopg nor psycopg2 found)")
 
         try:
             import django  # pyright: ignore[reportUnusedImport]

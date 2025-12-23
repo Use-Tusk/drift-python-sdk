@@ -61,6 +61,12 @@ class DriftMiddleware:
         from ...core.drift_sdk import TuskDrift
         sdk = TuskDrift.get_instance()
 
+        # Mark app as ready on first HTTP request (including healthcheck)
+        # This ensures all startup queries before the first request have isPreAppStart=True
+        if not sdk.app_ready:
+            sdk.mark_app_as_ready()
+            logger.info("[DJANGO_MIDDLEWARE] App marked as ready on first HTTP request")
+
         # Check if we're in REPLAY mode and handle trace ID extraction
         replay_trace_id = None
         replay_token = None
