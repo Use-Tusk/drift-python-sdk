@@ -1,5 +1,3 @@
-"""Django instrumentation for Drift SDK."""
-
 from __future__ import annotations
 
 import logging
@@ -14,20 +12,11 @@ if TYPE_CHECKING:
 from ..base import InstrumentationBase
 from ..http import HttpTransformEngine
 
-# Global flag to prevent duplicate middleware injection
 _middleware_injected = False
 
 
 class DjangoInstrumentation(InstrumentationBase):
-    """Django instrumentation via middleware injection.
-
-    Injects DriftMiddleware into Django's middleware stack at position 0
-    (beginning of the stack) to capture all HTTP requests/responses.
-
-    Args:
-        enabled: Whether instrumentation is enabled
-        transforms: HTTP transform configuration
-    """
+    """Django instrumentation via middleware injection."""
 
     def __init__(self, enabled: bool = True, transforms: dict[str, Any] | None = None):
         self._transform_engine = HttpTransformEngine(
@@ -58,96 +47,60 @@ class DjangoInstrumentation(InstrumentationBase):
 
     @override
     def patch(self, module: ModuleType) -> None:
-        """Patch Django by injecting middleware into settings.
-
-        Args:
-            module: The Django module
-        """
+        """Patch Django by injecting middleware."""
         global _middleware_injected
 
         if _middleware_injected:
-            logger.debug("[DjangoInstrumentation] Middleware already injected, skipping")
+            logger.debug("Middleware already injected, skipping")
             return
 
         try:
-            # Import Django settings
             from django.conf import settings
 
-            # Check if settings are configured
             if not settings.configured:
-                logger.warning(
-                    "[DjangoInstrumentation] Django settings not configured, cannot inject middleware"
-                )
+                logger.warning("Django settings not configured, cannot inject middleware")
                 return
 
-            # Detect middleware setting name (MIDDLEWARE vs MIDDLEWARE_CLASSES)
             middleware_setting = self._get_middleware_setting(settings)
             if not middleware_setting:
-                logger.warning(
-                    "[DjangoInstrumentation] Could not find middleware setting, cannot inject"
-                )
+                logger.warning("Could not find middleware setting, cannot inject")
                 return
 
-            # Get current middleware list
             current_middleware = list(getattr(settings, middleware_setting, []))
 
-            # Check if our middleware is already present
             middleware_path = "drift.instrumentation.django.middleware.DriftMiddleware"
             if middleware_path in current_middleware:
-                logger.debug(
-                    "[DjangoInstrumentation] DriftMiddleware already in settings, skipping injection"
-                )
+                logger.debug("DriftMiddleware already in settings, skipping injection")
                 _middleware_injected = True
                 return
 
-            # Insert DriftMiddleware at position 0 (beginning of stack)
-            # This ensures we capture all requests, including those rejected by later middleware
+            # Insert at position 0 to capture all requests
             current_middleware.insert(0, middleware_path)
-
-            # Update Django settings
             setattr(settings, middleware_setting, current_middleware)
 
-            # Set transform engine on middleware class
             from .middleware import DriftMiddleware
-
             DriftMiddleware.transform_engine = self._transform_engine  # type: ignore
 
             _middleware_injected = True
-            logger.info(
-                f"[DjangoInstrumentation] Injected DriftMiddleware at position 0 in {middleware_setting}"
-            )
+            logger.debug(f"Injected DriftMiddleware at position 0 in {middleware_setting}")
             
-            # Close all existing database connections to force Django to recreate them
-            # with our patched psycopg2.connect (which includes cursor_factory)
             self._force_database_reconnect()
             
             print("Django instrumentation applied")
 
         except ImportError as e:
-            logger.warning(
-                f"[DjangoInstrumentation] Could not import Django settings: {e}"
-            )
+            logger.warning(f"Could not import Django settings: {e}")
         except Exception as e:
-            logger.error(
-                f"[DjangoInstrumentation] Failed to inject middleware: {e}",
-                exc_info=True,
-            )
+            logger.error(f"Failed to inject middleware: {e}", exc_info=True)
 
     def _force_database_reconnect(self) -> None:
-        """Force Django to close and recreate database connections.
-        
-        This ensures that connections use our instrumented psycopg2.connect
-        with cursor_factory applied.
-        """
+        """Force Django to close and recreate database connections."""
         try:
             from django.db import connections
             for conn in connections.all():
                 if conn.connection is not None:
-                    logger.debug(f"[DjangoInstrumentation] Closing connection: {conn.alias}")
                     conn.close()
-            logger.info("[DjangoInstrumentation] Closed all database connections to force reconnect with instrumentation")
-            
-            # NOTE: We do NOT need to patch Django's cursor creation because psycopg2 instrumentation
+            logger.debug("Closed all database connections to force reconnect with instrumentation")
             # already handles cursor wrapping via cursor_factory. Double patching causes duplicate spans.
             # Closing the connections above forces Django to reconnect, which will use the instrumented
             # cursor_factory from psycopg2 instrumentation.

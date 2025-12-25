@@ -1,5 +1,3 @@
-"""Instrumentation for psycopg (psycopg3) PostgreSQL client library."""
-
 from __future__ import annotations
 
 import logging
@@ -11,7 +9,7 @@ from types import ModuleType
 from ..base import InstrumentationBase
 from ...core.communication.types import MockRequestInput
 from ...core.drift_sdk import TuskDrift
-from ...core.json_schema_helper import JsonSchema, JsonSchemaHelper, SchemaMerge
+from ...core.json_schema_helper import JsonSchemaHelper
 from ...core.types import (
     CleanSpanData,
     PackageType,
@@ -27,22 +25,11 @@ from ...core.types import (
 
 logger = logging.getLogger(__name__)
 
-# Module-level variable to store the instrumentation instance
-# This allows Django instrumentation to access it
 _instance: Optional["PsycopgInstrumentation"] = None
 
 
 class PsycopgInstrumentation(InstrumentationBase):
-    """Instrumentation for the psycopg (psycopg3) PostgreSQL client library.
-
-    Patches psycopg cursor methods to:
-    - Intercept SQL queries in REPLAY mode and return mocked responses
-    - Capture query/response data as CLIENT spans in RECORD mode
-    
-    This implementation uses psycopg's cursor_factory feature to wrap cursors.
-    psycopg (v3) is a pure Python implementation, making it easier to instrument
-    than psycopg2's C extension.
-    """
+    """Instrumentation for psycopg (psycopg3) PostgreSQL client library."""
 
     def __init__(self, enabled: bool = True) -> None:
         global _instance
@@ -53,7 +40,7 @@ class PsycopgInstrumentation(InstrumentationBase):
             enabled=enabled,
         )
         self._original_connect = None
-        _instance = self  # Store instance for Django instrumentation to access
+        _instance = self
 
     def patch(self, module: ModuleType) -> None:
         """Patch the psycopg module."""
@@ -61,49 +48,29 @@ class PsycopgInstrumentation(InstrumentationBase):
             logger.warning("psycopg.connect not found, skipping instrumentation")
             return
 
-        # Store original connect function
         self._original_connect = module.connect
-        
-        # Capture self and original_connect in the closure
         instrumentation = self
         original_connect = self._original_connect
 
         def patched_connect(*args, **kwargs):
             """Patched psycopg.connect method."""
-            logger.debug(f"[PATCHED_CONNECT] called with args={args[:2] if args else 'none'}, mode={TuskDrift.get_instance().mode}")
             sdk = TuskDrift.get_instance()
 
-            # Pass through if SDK is disabled or original connect is missing
             if sdk.mode == "DISABLED" or original_connect is None:
                 if original_connect is None:
                     raise RuntimeError("Original psycopg.connect not found")
                 return original_connect(*args, **kwargs)
 
-            # Use cursor_factory to wrap cursors
-            # Save any user-provided cursor_factory
             user_cursor_factory = kwargs.pop("cursor_factory", None)
-            
-            # Create our instrumented cursor factory
             kwargs["cursor_factory"] = instrumentation._create_cursor_factory(sdk, user_cursor_factory)
 
-            # Create real connection with our cursor factory
-            # NOTE: Even in REPLAY mode, we create a real database connection
-            # The database queries are still mocked at the cursor.execute() level
+            # Even in REPLAY mode, create a real database connection
+            # Queries are mocked at cursor.execute() level
             connection = original_connect(*args, **kwargs)
-            logger.debug(f"[PATCHED_CONNECT] returning connection with instrumented cursor factory")
-
             return connection
 
-        # Apply patch
         setattr(module, "connect", patched_connect)  # pyright: ignore[reportAttributeAccessIssue]
-        logger.info(f"psycopg.connect instrumented. module.connect is now: {module.connect}")
-        
-        # Also verify it's actually patched
-        import psycopg
-        if psycopg.connect == patched_connect:
-            logger.info("[VERIFY] psycopg.connect successfully patched!")
-        else:
-            logger.error(f"[VERIFY] psycopg.connect NOT patched! psycopg.connect={psycopg.connect}, patched_connect={patched_connect}")
+        logger.debug(f"psycopg.connect instrumented")
 
     def _create_cursor_factory(self, sdk: TuskDrift, base_factory=None):
         """Create a cursor factory that wraps cursors with instrumentation."""
@@ -111,15 +78,12 @@ class PsycopgInstrumentation(InstrumentationBase):
         
         base = base_factory or BaseCursor
         instrumentation = self
-        logger.debug(f"[CURSOR_FACTORY] Creating InstrumentedCursor class, base={base}, sdk.mode={sdk.mode}")
         
         class InstrumentedCursor(base):  # type: ignore
             def execute(self, query, params=None, **kwargs):
-                logger.debug(f"[INSTRUMENTED_CURSOR] execute() called on instrumented cursor")
                 return instrumentation._traced_execute(self, super().execute, sdk, query, params, **kwargs)
             
             def executemany(self, query, params_seq, **kwargs):
-                logger.debug(f"[INSTRUMENTED_CURSOR] executemany() called on instrumented cursor")
                 return instrumentation._traced_executemany(self, super().executemany, sdk, query, params_seq, **kwargs)
         
         return InstrumentedCursor
@@ -128,94 +92,54 @@ class PsycopgInstrumentation(InstrumentationBase):
         self, cursor: Any, original_execute: Any, sdk: TuskDrift, query: str, params=None, **kwargs
     ) -> Any:
         """Traced cursor.execute method."""
-        logger.debug(f"[PSYCOPG] _traced_execute called. SDK mode: {sdk.mode}, query: {query[:100] if isinstance(query, str) else str(query)[:100]}")
-        # Pass through if SDK is disabled
         if sdk.mode == "DISABLED":
             return original_execute(query, params, **kwargs)
 
-        # Convert query to string if it's a Composed SQL object
         query_str = self._query_to_string(query, cursor)
-
-        # Get trace context from parent span
         parent_trace_id = current_trace_id_context.get()
         parent_span_id = current_span_id_context.get()
 
-        # Use parent's trace_id, or generate new one if no parent (shouldn't happen for DB queries)
-        if parent_trace_id:
-            trace_id = parent_trace_id
-        else:
-            trace_id = self._generate_trace_id()
-
-        # Generate new span_id for this query span
+        trace_id = parent_trace_id if parent_trace_id else self._generate_trace_id()
         span_id = self._generate_span_id()
-
-        # Set ONLY the span_id as current (for any nested children)
-        # Do NOT set trace_id again - it's already set by the parent
         span_token = current_span_id_context.set(span_id)
 
         try:
             stack_trace = self._get_stack_trace()
 
-            # REPLAY mode: Mock ALL queries (including pre-app-start)
             if sdk.mode == "REPLAY":
-                print(f"[PSYCOPG_REPLAY] execute() called, query: {query_str[:100]}", flush=True)
-                print(f"[PSYCOPG_REPLAY] parent_span_id: {parent_span_id}, app_ready: {sdk.app_ready}", flush=True)
-                
-                # Handle background requests: App is ready + no parent span
-                # These are background jobs/health checks that run AFTER app startup
-                # They were never recorded, so return empty result
+                # Handle background requests (app ready + no parent span)
                 if sdk.app_ready and not parent_span_id:
-                    print(f"[PSYCOPG_REPLAY] Background request (app ready, no parent) - returning empty result", flush=True)
-                    # Return the cursor (psycopg3 execute returns cursor, not None)
                     cursor._mock_rows = []  # pyright: ignore
                     cursor._mock_index = 0  # pyright: ignore
                     return cursor
                 
-                # For all other queries (pre-app-start OR within a request trace), get mock
-                replay_trace_id = replay_trace_id_context.get()
-                print(f"[PSYCOPG_REPLAY] replay_trace_id={replay_trace_id}, is_pre_app_start={not sdk.app_ready}", flush=True)
-                
-                # Try to get mock for this query
                 mock_result = self._try_get_mock(
                     sdk, query_str, params, trace_id, span_id, parent_span_id, stack_trace
                 )
-                print(f"[PSYCOPG_REPLAY] Mock result: {mock_result is not None}", flush=True)
                 
                 if mock_result is None:
-                    # In REPLAY mode, we MUST have a mock for ALL queries
                     is_pre_app_start = not sdk.app_ready
-                    print(f"[PSYCOPG_REPLAY] ERROR: No mock found for {'pre-app-start ' if is_pre_app_start else ''}query: {query_str[:100]}", flush=True)
                     raise RuntimeError(
                         f"[Tusk REPLAY] No mock found for psycopg execute query. "
                         f"This {'pre-app-start ' if is_pre_app_start else ''}query was not recorded during the trace capture. "
                         f"Query: {query_str[:100]}..."
                     )
                 
-                print(f"[PSYCOPG_REPLAY] Got mock, applying to cursor", flush=True)
-                # Mock execute by setting cursor internal state
                 self._mock_execute_with_data(cursor, mock_result)
-                print(f"[PSYCOPG_REPLAY] Mock applied successfully", flush=True)
-                return cursor  # psycopg3 execute() returns cursor
+                return cursor
 
-            # RECORD mode: Execute real query and record span
+            # RECORD mode
             start_time = time.time()
             error = None
-            
-            print(f"[PSYCOPG_RECORD] execute() called, query: {query_str[:100]}", flush=True)
-            print(f"[PSYCOPG_RECORD] parent_span_id: {parent_span_id}, app_ready: {sdk.app_ready}", flush=True)
 
             try:
                 result = original_execute(query, params, **kwargs)
-                print(f"[PSYCOPG_RECORD] Query executed successfully", flush=True)
                 return result
             except Exception as e:
                 error = e
-                print(f"[PSYCOPG_RECORD] Query failed with error: {e}", flush=True)
                 raise
             finally:
-                # Always create span in RECORD mode (including pre-app-start queries)
                 if sdk.mode == "RECORD":
-                    print(f"[PSYCOPG_RECORD] Creating span for query (is_pre_app_start={not sdk.app_ready})", flush=True)
                     duration_ms = (time.time() - start_time) * 1000
                     self._create_query_span(
                         sdk,
@@ -229,7 +153,6 @@ class PsycopgInstrumentation(InstrumentationBase):
                         error,
                     )
         finally:
-            # Reset only span context (trace context is owned by parent)
             current_span_id_context.reset(span_token)
 
     def _traced_executemany(
@@ -335,16 +258,14 @@ class PsycopgInstrumentation(InstrumentationBase):
             current_span_id_context.reset(span_token)
 
     def _query_to_string(self, query: Any, cursor: Any) -> str:
-        """Convert query to string, handling psycopg3's Composed SQL objects."""
+        """Convert query to string."""
         try:
             from psycopg.sql import Composed
             if isinstance(query, Composed):
-                # Convert Composed SQL to string using cursor context
                 return query.as_string(cursor)
         except ImportError:
             pass
         
-        # If it's already a string or not a Composed object, just stringify it
         return str(query) if not isinstance(query, str) else query
 
     def _try_get_mock(
@@ -415,34 +336,16 @@ class PsycopgInstrumentation(InstrumentationBase):
                 outbound_span=mock_span,
             )
 
-            logger.info(f"[MOCK_REQUEST] Requesting mock from CLI:")
-            logger.info(f"  replay_trace_id={replay_trace_id}")
-            logger.info(f"  span_id={span_id}")
-            logger.info(f"  package_name={mock_span.package_name}")
-            logger.info(f"  input_value_hash={mock_span.input_value_hash}")
-            logger.info(f"  input_schema_hash={mock_span.input_schema_hash}")
-            logger.info(f"  query={query[:100]}")
+            logger.debug(f"Requesting mock from CLI for query: {query[:50]}...")
             mock_response_output = sdk.request_mock_sync(mock_request)
-            logger.info(f"[MOCK_RESPONSE] CLI returned: found={mock_response_output.found}, response={mock_response_output.response is not None}")
+            logger.debug(f"CLI returned: found={mock_response_output.found}")
 
             if not mock_response_output.found:
-                logger.error(
-                    f"No mock found for psycopg query:\n"
-                    f"  replay_trace_id={replay_trace_id}\n"
-                    f"  span_trace_id={trace_id}\n"
-                    f"  span_id={span_id}\n"
-                    f"  package_name={mock_span.package_name}\n"
-                    f"  package_type={mock_span.package_type}\n"
-                    f"  name={mock_span.name}\n"
-                    f"  input_value_hash={mock_span.input_value_hash}\n"
-                    f"  input_schema_hash={mock_span.input_schema_hash}\n"
-                    f"  query={query[:100]}"
+                logger.debug(
+                    f"No mock found for psycopg query: {query[:100]}"
                 )
                 return None
 
-            logger.info(f"[MOCK_FOUND] Found mock for psycopg query: {query[:100]}")
-            logger.info(f"[MOCK_FOUND] Mock response type: {type(mock_response_output.response)}")
-            logger.info(f"[MOCK_FOUND] Mock response: {mock_response_output.response}")
             return mock_response_output.response
 
         except Exception as e:
@@ -450,25 +353,14 @@ class PsycopgInstrumentation(InstrumentationBase):
             return None
 
     def _mock_execute_with_data(self, cursor: Any, mock_data: Dict[str, Any]) -> None:
-        """Mock the cursor execute by setting internal state directly.
-        
-        In psycopg3, cursor.execute() sets Python-level attributes that we can modify.
-        This is easier than psycopg2 since there are no C-level attributes.
-        """
-        logger.debug(f"Mocking execute with data. Mock data keys: {mock_data.keys() if isinstance(mock_data, dict) else 'not a dict'}")
-        
-        # Set rowcount (psycopg3 uses standard Python attribute)
+        """Mock cursor execute by setting internal state."""
         try:
             cursor._rowcount = mock_data.get("rowcount", -1)
         except AttributeError:
-            # Fallback to object.__setattr__ if attribute is read-only
             object.__setattr__(cursor, 'rowcount', mock_data.get("rowcount", -1))
         
-        # description: psycopg3 description format (similar to psycopg2)
         description_data = mock_data.get("description")
         if description_data:
-            # Convert to psycopg Column-like format
-            # psycopg3 uses Column objects, but we can use tuples for compatibility
             desc = [
                 (col["name"], col.get("type_code"), None, None, None, None, None)
                 for col in description_data
@@ -478,17 +370,14 @@ class PsycopgInstrumentation(InstrumentationBase):
             except AttributeError:
                 object.__setattr__(cursor, 'description', desc)
 
-        # Store mock rows for fetching
         mock_rows = mock_data.get("rows", [])
         cursor._mock_rows = mock_rows  # pyright: ignore[reportAttributeAccessIssue]
         cursor._mock_index = 0  # pyright: ignore[reportAttributeAccessIssue]
 
-        # Patch fetch methods
         def mock_fetchone():
             if cursor._mock_index < len(cursor._mock_rows):  # pyright: ignore[reportAttributeAccessIssue]
                 row = cursor._mock_rows[cursor._mock_index]  # pyright: ignore[reportAttributeAccessIssue]
                 cursor._mock_index += 1  # pyright: ignore[reportAttributeAccessIssue]
-                # Convert list to tuple to match psycopg3 behavior
                 return tuple(row) if isinstance(row, list) else row
             return None
 
@@ -502,19 +391,13 @@ class PsycopgInstrumentation(InstrumentationBase):
             return rows
 
         def mock_fetchall():
-            logger.debug(f"[MOCK] fetchall called, returning {len(cursor._mock_rows[cursor._mock_index:])} rows")  # pyright: ignore[reportAttributeAccessIssue]
             rows = cursor._mock_rows[cursor._mock_index :]  # pyright: ignore[reportAttributeAccessIssue]
             cursor._mock_index = len(cursor._mock_rows)  # pyright: ignore[reportAttributeAccessIssue]
-            # Convert lists to tuples to match psycopg3 behavior
-            result = [tuple(row) if isinstance(row, list) else row for row in rows]
-            logger.debug(f"[MOCK] fetchall returning: {result}")
-            return result
+            return [tuple(row) if isinstance(row, list) else row for row in rows]
 
-        logger.debug(f"[MOCK] Patching cursor fetch methods with mock data ({len(mock_rows)} rows)")
         cursor.fetchone = mock_fetchone  # pyright: ignore[reportAttributeAccessIssue]
         cursor.fetchmany = mock_fetchmany  # pyright: ignore[reportAttributeAccessIssue]
         cursor.fetchall = mock_fetchall  # pyright: ignore[reportAttributeAccessIssue]
-        logger.debug(f"[MOCK] Cursor fetch methods patched successfully")
 
     def _create_query_span(
         self,

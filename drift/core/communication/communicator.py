@@ -1,17 +1,3 @@
-"""Protobuf communicator for CLI communication.
-
-This module implements the communication layer between the SDK and CLI
-using Protocol Buffers over Unix sockets or TCP.
-
-The communicator supports:
-- Async communication for most operations
-- Sync communication for blocking operations (mocks, env vars)
-- Automatic reconnection on connection loss
-- Request tracking with timeout handling
-
-This implementation mirrors the Node.js SDK's ProtobufCommunicator.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -62,32 +48,15 @@ class CommunicatorConfig:
     """Configuration for ProtobufCommunicator."""
 
     socket_path: str | None = None
-    """Unix socket path. If None, uses TUSK_MOCK_SOCKET env var or default."""
-
     host: str | None = None
-    """TCP host. If set with port, uses TCP instead of Unix socket."""
-
     port: int | None = None
-    """TCP port. If set with host, uses TCP instead of Unix socket."""
-
     connect_timeout: float = DEFAULT_CONNECT_TIMEOUT
-    """Timeout for initial connection (seconds)."""
-
     request_timeout: float = DEFAULT_REQUEST_TIMEOUT
-    """Timeout for individual requests (seconds)."""
-
     auto_reconnect: bool = True
-    """Whether to automatically reconnect on connection loss."""
 
     @classmethod
     def from_env(cls) -> CommunicatorConfig:
-        """Create config from environment variables.
-
-        Environment variables:
-        - TUSK_MOCK_SOCKET: Unix socket path
-        - TUSK_MOCK_HOST: TCP host
-        - TUSK_MOCK_PORT: TCP port
-        """
+        """Create config from environment variables."""
         socket_path = os.environ.get("TUSK_MOCK_SOCKET")
         host = os.environ.get("TUSK_MOCK_HOST")
         port_str = os.environ.get("TUSK_MOCK_PORT")
@@ -101,28 +70,7 @@ class CommunicatorConfig:
 
 
 class ProtobufCommunicator:
-    """Handles communication between SDK and CLI using Protocol Buffers.
-
-    This class manages the socket connection and message framing
-    for bidirectional protobuf communication.
-
-    Message format:
-    - 4-byte big-endian length prefix
-    - Serialized protobuf message
-
-    Usage:
-        config = CommunicatorConfig.from_env()
-        communicator = ProtobufCommunicator(config)
-
-        # Connect to CLI
-        await communicator.connect("my-service")
-
-        # Request mock data (async)
-        mock = await communicator.request_mock_async(MockRequestInput(...))
-
-        # Request mock data (sync - blocks)
-        mock = communicator.request_mock_sync(MockRequestInput(...))
-    """
+    """Handles protobuf communication between SDK and CLI."""
 
     def __init__(self, config: CommunicatorConfig | None = None) -> None:
         self.config = config or CommunicatorConfig.from_env()
@@ -209,12 +157,10 @@ class ProtobufCommunicator:
                 logger.debug(f"Connecting to TCP: {address}")
 
             self._socket.settimeout(self.config.connect_timeout)
-            logger.info(f"[COMMUNICATOR] Calling socket.connect({address})")
             self._socket.connect(address)
-            logger.info(f"[COMMUNICATOR] socket.connect() succeeded!")
 
             conn_type = "Unix socket" if isinstance(address, str) else "TCP"
-            logger.info(f"[COMMUNICATOR] Connected to CLI via protobuf ({conn_type})")
+            logger.debug(f"Connected to CLI via protobuf ({conn_type})")
 
             # Send connect message
             await self._send_connect_message(service_id)
@@ -242,14 +188,12 @@ class ProtobufCommunicator:
             connect_request=connect_request.to_proto(),
         )
 
-        logger.info(f"[COMMUNICATOR] Sending SDK_CONNECT message: service_id={service_id}, sdk_version={SDK_VERSION}")
         await self._send_protobuf_message(sdk_message)
-        logger.info(f"[COMMUNICATOR] SDK_CONNECT message sent successfully")
 
     async def disconnect(self) -> None:
         """Disconnect from CLI."""
         self._cleanup()
-        logger.info("Disconnected from CLI")
+        logger.debug("Disconnected from CLI")
 
     async def request_mock_async(
         self, mock_request: MockRequestInput
@@ -491,30 +435,22 @@ class ProtobufCommunicator:
                 if not message_data:
                     raise ConnectionError("Connection closed by CLI")
 
-                # Parse CLI message
                 cli_message = CliMessage().parse(message_data)
 
                 logger.debug(
-                    f"[ProtobufCommunicator] Received CLI message type: {cli_message.type}, "
-                    f"requestId: {cli_message.request_id}"
+                    f"Received CLI message type: {cli_message.type}, requestId: {cli_message.request_id}"
                 )
 
-                # Handle based on message type
                 if cli_message.request_id == request_id:
                     return self._handle_cli_message(cli_message)
 
-                # Handle other message types (connect response, etc.)
                 if cli_message.connect_response:
                     response = cli_message.connect_response
                     if response.success:
-                        logger.debug(
-                            "[ProtobufCommunicator] CLI acknowledged connection"
-                        )
+                        logger.debug("CLI acknowledged connection")
                         self._session_id = response.session_id
                     else:
-                        logger.error(
-                            f"[ProtobufCommunicator] CLI rejected connection: {response.error}"
-                        )
+                        logger.error(f"CLI rejected connection: {response.error}")
                     continue
 
         except socket.timeout as e:
@@ -606,21 +542,13 @@ class ProtobufCommunicator:
         if not mock_response:
             raise ValueError("No mock response in CLI message")
 
-        print(f"[COMMUNICATOR] Mock response found={mock_response.found}, has_response_data={bool(mock_response.response_data)}", flush=True)
-        print(f"[COMMUNICATOR] response_data type: {type(mock_response.response_data)}", flush=True)
-        print(f"[COMMUNICATOR] response_data raw: {mock_response.response_data}", flush=True)
-        
         if mock_response.found:
-            # Extract response data from protobuf Struct
             response_data = self._extract_response_data(mock_response.response_data)
-            print(f"[COMMUNICATOR] Extracted response data: {type(response_data)}, keys: {response_data.keys() if isinstance(response_data, dict) else 'not dict'}", flush=True)
-            print(f"[COMMUNICATOR] Extracted response data content: {response_data}", flush=True)
             return MockResponseOutput(
                 found=True,
                 response=response_data,
             )
         else:
-            logger.debug(f"[ProtobufCommunicator] Mock not found, error: {mock_response.error}")
             return MockResponseOutput(
                 found=False,
                 error=mock_response.error or "Mock not found",
@@ -635,28 +563,11 @@ class ProtobufCommunicator:
         return dict(env_response.env_vars) if env_response.env_vars else {}
 
     def _extract_response_data(self, struct: Any) -> dict[str, Any]:
-        """Extract response data from protobuf Struct.
-
-        The CLI returns mock data in this structure:
-        {
-            "response": {          // MockInteraction wrapper
-                "Request": {...},
-                "Response": {
-                    "Body": {...}  // Actual mock data here
-                }
-            }
-        }
-        
-        We need to extract the Response.Body part.
-        """
+        """Extract response data from protobuf Struct."""
         if not struct:
             return {}
 
         try:
-            print(f"[EXTRACT_START] struct type: {type(struct)}", flush=True)
-            
-            # betterproto Struct has .fields attribute which is a dict of field names to Value objects
-            # We need to convert recursively
             def value_to_python(value):
                 """Convert protobuf Value to Python type."""
                 if hasattr(value, 'null_value'):
@@ -682,44 +593,29 @@ class ProtobufCommunicator:
                     result[key] = value_to_python(value)
                 return result
             
-            # Convert the struct to a dict
             data = struct_to_dict(struct)
-            print(f"[EXTRACT_START] Converted struct, keys: {data.keys() if isinstance(data, dict) else 'not dict'}", flush=True)
             
-            # Extract from wrapper structure: response -> response -> body (lowercase!)
             if "response" in data:
                 mock_interaction = data["response"]
-                print(f"[EXTRACT] mock_interaction type: {type(mock_interaction)}, keys: {mock_interaction.keys() if isinstance(mock_interaction, dict) else 'not dict'}", flush=True)
                 
-                # Try lowercase first (actual CLI format)
                 if isinstance(mock_interaction, dict) and "response" in mock_interaction:
                     response_obj = mock_interaction["response"]
-                    print(f"[EXTRACT] response_obj type: {type(response_obj)}, keys: {response_obj.keys() if isinstance(response_obj, dict) else 'not dict'}", flush=True)
                     if isinstance(response_obj, dict) and "body" in response_obj:
-                        print(f"[EXTRACT] Found body in response, returning it", flush=True)
                         return response_obj["body"] or {}
                     elif isinstance(response_obj, dict):
-                        # For database mocks, the response object IS the data
-                        print(f"[EXTRACT] No 'body' field, returning entire response_obj", flush=True)
                         return response_obj
                 
-                # Try capitalized (fallback for compatibility)
                 if isinstance(mock_interaction, dict) and "Response" in mock_interaction:
                     response_obj = mock_interaction["Response"]
                     if isinstance(response_obj, dict) and "Body" in response_obj:
                         return response_obj["Body"] or {}
                 
-                # Fallback: return the response object itself if structure is different
-                print(f"[EXTRACT] Fallback: returning mock_interaction", flush=True)
                 return mock_interaction
             
-            # No wrapper, return as-is
             return data
 
         except Exception as e:
-            logger.error(f"[ProtobufCommunicator] Failed to extract response data: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
+            logger.error(f"Failed to extract response data: {e}")
             return {}
 
     def _clean_span(self, data: Any) -> Any:
