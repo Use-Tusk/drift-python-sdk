@@ -175,20 +175,172 @@ class ProtobufCommunicator:
             raise ConnectionError(f"Socket error: {e}") from e
 
     async def _send_connect_message(self, service_id: str) -> None:
-        """Send the initial connection message to CLI."""
+        """Send the initial connection message to CLI and wait for acknowledgement."""
         connect_request = ConnectRequest(
             service_id=service_id,
             sdk_version=SDK_VERSION,
             min_cli_version=MIN_CLI_VERSION,
         )
 
+        request_id = self._generate_request_id()
         sdk_message = SdkMessage(
             type=MessageType.SDK_CONNECT,
-            request_id=self._generate_request_id(),
+            request_id=request_id,
             connect_request=connect_request.to_proto(),
         )
 
         await self._send_protobuf_message(sdk_message)
+        
+        # Wait for connect response from CLI
+        await self._receive_connect_response(request_id)
+
+    async def _receive_connect_response(self, request_id: str) -> None:
+        """Wait for and handle the connect response from CLI."""
+        if not self._socket:
+            raise ConnectionError("Socket not initialized")
+
+        self._socket.settimeout(self.config.connect_timeout)
+
+        try:
+            # Read length prefix
+            length_data = self._recv_exact(4)
+            if not length_data:
+                raise ConnectionError("Connection closed by CLI")
+
+            length = struct.unpack(">I", length_data)[0]
+
+            # Read message data
+            message_data = self._recv_exact(length)
+            if not message_data:
+                raise ConnectionError("Connection closed by CLI")
+
+            cli_message = CliMessage().parse(message_data)
+
+            logger.debug(
+                f"Received connect response: type={cli_message.type}, requestId={cli_message.request_id}"
+            )
+
+            if cli_message.connect_response:
+                response = cli_message.connect_response
+                if response.success:
+                    logger.debug("CLI acknowledged connection successfully")
+                else:
+                    error_msg = response.error or "Unknown error"
+                    raise ConnectionError(f"CLI rejected connection: {error_msg}")
+            else:
+                raise ConnectionError(
+                    f"Expected connect response but got message type: {cli_message.type}"
+                )
+
+        except socket.timeout as e:
+            raise TimeoutError(f"Timeout waiting for connect response: {e}") from e
+
+    def connect_sync(
+        self,
+        connection_info: dict[str, Any] | None = None,
+        service_id: str = "",
+    ) -> None:
+        """Connect to the CLI synchronously and perform handshake.
+
+        This is a synchronous version of connect() that doesn't use async/await.
+        The socket will remain open after this method returns.
+
+        Args:
+            connection_info: Dict with 'socketPath' or 'host'/'port'
+            service_id: Service identifier for the connection
+
+        Raises:
+            ConnectionError: If connection fails
+            TimeoutError: If connection times out
+        """
+        logger.info(f"[CONNECT_SYNC] Starting synchronous connection")
+        # Determine address
+        if connection_info:
+            if "socketPath" in connection_info:
+                address: tuple[str, int] | str = connection_info["socketPath"]
+            else:
+                address = (connection_info["host"], connection_info["port"])
+        else:
+            address = self._get_socket_address()
+
+        try:
+            # Create appropriate socket type
+            if isinstance(address, str):
+                # Unix socket
+                self._socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                logger.debug(f"Connecting to Unix socket: {address}")
+            else:
+                # TCP socket
+                self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                logger.debug(f"Connecting to TCP: {address}")
+
+            self._socket.settimeout(self.config.connect_timeout)
+            self._socket.connect(address)
+
+            conn_type = "Unix socket" if isinstance(address, str) else "TCP"
+            logger.debug(f"Connected to CLI via protobuf ({conn_type})")
+
+            # Send connect message synchronously
+            connect_request = ConnectRequest(
+                service_id=service_id,
+                sdk_version=SDK_VERSION,
+                min_cli_version=MIN_CLI_VERSION,
+            )
+
+            request_id = self._generate_request_id()
+            sdk_message = SdkMessage(
+                type=MessageType.SDK_CONNECT,
+                request_id=request_id,
+                connect_request=connect_request.to_proto(),
+            )
+
+            # Send message (synchronous socket operation)
+            message_bytes = bytes(sdk_message)
+            length_prefix = struct.pack(">I", len(message_bytes))
+            self._socket.sendall(length_prefix + message_bytes)
+
+            # Receive connect response synchronously
+            # Read length prefix
+            length_data = self._recv_exact(4)
+            if not length_data:
+                raise ConnectionError("Connection closed by CLI")
+
+            length = struct.unpack(">I", length_data)[0]
+
+            # Read message data
+            message_data = self._recv_exact(length)
+            if not message_data:
+                raise ConnectionError("Connection closed by CLI")
+
+            cli_message = CliMessage().parse(message_data)
+
+            logger.debug(
+                f"Received connect response: type={cli_message.type}, requestId={cli_message.request_id}"
+            )
+
+            if cli_message.connect_response:
+                response = cli_message.connect_response
+                if response.success:
+                    logger.debug("CLI acknowledged connection successfully")
+                    self._connected = True
+                    logger.info(f"[CONNECT_SYNC] Connection successful! Socket is: {self._socket}")
+                    logger.info(f"[CONNECT_SYNC] _connected={self._connected}, is_connected={self.is_connected}")
+                else:
+                    error_msg = response.error or "Unknown error"
+                    raise ConnectionError(f"CLI rejected connection: {error_msg}")
+            else:
+                raise ConnectionError(
+                    f"Expected connect response but got message type: {cli_message.type}"
+                )
+
+        except socket.timeout as e:
+            self._cleanup()
+            raise TimeoutError(f"Connection timed out: {e}") from e
+        except (socket.error, OSError) as e:
+            self._cleanup()
+            raise ConnectionError(f"Socket error: {e}") from e
+
+        logger.info(f"[CONNECT_SYNC] Exiting connect_sync(). Socket still open: {self._socket is not None}")
 
     async def disconnect(self) -> None:
         """Disconnect from CLI."""
@@ -645,12 +797,17 @@ class ProtobufCommunicator:
 
     def _cleanup(self) -> None:
         """Clean up resources."""
+        import traceback
+        logger.warning(f"[CLEANUP] _cleanup() called! Stack trace:")
+        logger.warning("".join(traceback.format_stack()))
+
         self._connected = False
         self._session_id = None
         self._incoming_buffer.clear()
 
         if self._socket:
             try:
+                logger.warning(f"[CLEANUP] Closing socket")
                 self._socket.close()
             except Exception:
                 pass

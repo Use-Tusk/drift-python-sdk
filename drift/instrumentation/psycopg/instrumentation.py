@@ -28,8 +28,184 @@ logger = logging.getLogger(__name__)
 _instance: Optional["PsycopgInstrumentation"] = None
 
 
+class MockLoader:
+    """Mock loader for psycopg3."""
+    def __init__(self):
+        self.timezone = None  # Django expects this attribute
+    
+    def __call__(self, data):
+        """No-op load function."""
+        return data
+
+
+class MockDumper:
+    """Mock dumper for psycopg3."""
+    def __call__(self, obj):
+        """No-op dump function."""
+        return str(obj).encode('utf-8')
+
+
+class MockAdapters:
+    """Mock adapters for psycopg3 connection."""
+    def get_loader(self, oid, format):
+        """Return a mock loader."""
+        return MockLoader()
+    
+    def get_dumper(self, obj, format):
+        """Return a mock dumper."""
+        return MockDumper()
+    
+    def register_loader(self, oid, loader):
+        """No-op register loader for Django compatibility."""
+        pass
+    
+    def register_dumper(self, oid, dumper):
+        """No-op register dumper for Django compatibility."""
+        pass
+
+
+class MockConnection:
+    """Mock database connection for REPLAY mode when postgres is not available.
+    
+    Provides minimal interface for Django/Flask to work without a real database.
+    All queries are mocked at the cursor.execute() level.
+    """
+    
+    def __init__(self, sdk: TuskDrift, instrumentation: "PsycopgInstrumentation", cursor_factory):
+        self.sdk = sdk
+        self.instrumentation = instrumentation
+        self.cursor_factory = cursor_factory
+        self.closed = False
+        self.autocommit = False
+        
+        # Django/psycopg3 requires these for connection initialization
+        self.isolation_level = None
+        self.encoding = 'UTF8'
+        self.adapters = MockAdapters()
+        self.pgconn = None  # Mock pg connection object
+        
+        # Create a comprehensive mock info object for Django
+        class MockInfo:
+            vendor = 'postgresql'
+            server_version = 150000  # PostgreSQL 15.0 as integer
+            encoding = 'UTF8'
+            
+            def parameter_status(self, param):
+                """Return mock parameter status."""
+                if param == "TimeZone":
+                    return "UTC"
+                elif param == "server_version":
+                    return "15.0"
+                return None
+        
+        self.info = MockInfo()
+        
+        logger.debug("[MOCK_CONNECTION] Created mock connection for REPLAY mode (psycopg3)")
+    
+    def cursor(self, name=None, cursor_factory=None):
+        """Create a cursor using the instrumented cursor factory."""
+        # For mock connections, we create a MockCursor directly
+        cursor = MockCursor(self)
+        
+        # Wrap execute/executemany for mock cursor
+        instrumentation = self.instrumentation
+        sdk = self.sdk
+        
+        def mock_execute(query, params=None, **kwargs):
+            # For mock cursor, original_execute is just a no-op
+            def noop_execute(q, p, **kw):
+                return cursor
+            return instrumentation._traced_execute(cursor, noop_execute, sdk, query, params, **kwargs)
+        
+        def mock_executemany(query, params_seq, **kwargs):
+            # For mock cursor, original_executemany is just a no-op
+            def noop_executemany(q, ps, **kw):
+                return cursor
+            return instrumentation._traced_executemany(cursor, noop_executemany, sdk, query, params_seq, **kwargs)
+        
+        cursor.execute = mock_execute
+        cursor.executemany = mock_executemany
+        
+        logger.debug("[MOCK_CONNECTION] Created cursor (psycopg3)")
+        return cursor
+    
+    def commit(self):
+        """Mock commit - no-op in REPLAY mode."""
+        logger.debug("[MOCK_CONNECTION] commit() called (no-op)")
+        pass
+    
+    def rollback(self):
+        """Mock rollback - no-op in REPLAY mode."""
+        logger.debug("[MOCK_CONNECTION] rollback() called (no-op)")
+        pass
+    
+    def close(self):
+        """Mock close - no-op in REPLAY mode."""
+        logger.debug("[MOCK_CONNECTION] close() called (no-op)")
+        self.closed = True
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is not None:
+            self.rollback()
+        else:
+            self.commit()
+        return False
+
+
+class MockCursor:
+    """Mock cursor for when we can't create a real cursor from base class.
+    
+    This is a fallback when the connection is completely mocked.
+    """
+    
+    def __init__(self, connection):
+        self.connection = connection
+        self.rowcount = -1
+        self.description = None
+        self.arraysize = 1
+        self._mock_rows = []
+        self._mock_index = 0
+        self.adapters = MockAdapters()  # Django needs this
+        logger.debug("[MOCK_CURSOR] Created fallback mock cursor (psycopg3)")
+    
+    def execute(self, query, params=None, **kwargs):
+        """Will be replaced by instrumentation."""
+        logger.debug(f"[MOCK_CURSOR] execute() called: {query[:100]}")
+        return self
+    
+    def executemany(self, query, params_seq, **kwargs):
+        """Will be replaced by instrumentation."""
+        logger.debug(f"[MOCK_CURSOR] executemany() called: {query[:100]}")
+        return self
+    
+    def fetchone(self):
+        return None
+    
+    def fetchmany(self, size=None):
+        return []
+    
+    def fetchall(self):
+        return []
+    
+    def close(self):
+        pass
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
+
 class PsycopgInstrumentation(InstrumentationBase):
-    """Instrumentation for psycopg (psycopg3) PostgreSQL client library."""
+    """Instrumentation for psycopg (psycopg3) PostgreSQL client library.
+    
+    In REPLAY mode, if postgres is not available, a mock connection is used.
+    """
 
     def __init__(self, enabled: bool = True) -> None:
         global _instance
@@ -62,22 +238,46 @@ class PsycopgInstrumentation(InstrumentationBase):
                 return original_connect(*args, **kwargs)
 
             user_cursor_factory = kwargs.pop("cursor_factory", None)
-            kwargs["cursor_factory"] = instrumentation._create_cursor_factory(sdk, user_cursor_factory)
-
-            # Even in REPLAY mode, create a real database connection
-            # Queries are mocked at cursor.execute() level
+            cursor_factory = instrumentation._create_cursor_factory(sdk, user_cursor_factory)
+            
+            # In REPLAY mode, try to connect but fall back to mock connection if DB is unavailable
+            if sdk.mode == "REPLAY":
+                try:
+                    kwargs["cursor_factory"] = cursor_factory
+                    connection = original_connect(*args, **kwargs)
+                    logger.info("[PATCHED_CONNECT] REPLAY mode: Successfully connected to database (psycopg3)")
+                    return connection
+                except Exception as e:
+                    logger.info(f"[PATCHED_CONNECT] REPLAY mode: Database connection failed ({e}), using mock connection (psycopg3)")
+                    # Return mock connection that doesn't require a real database
+                    return MockConnection(sdk, instrumentation, cursor_factory)
+            
+            # In RECORD mode, always require real connection
+            kwargs["cursor_factory"] = cursor_factory
             connection = original_connect(*args, **kwargs)
+            logger.debug(f"[PATCHED_CONNECT] RECORD mode: Connected to database (psycopg3)")
             return connection
 
         setattr(module, "connect", patched_connect)  # pyright: ignore[reportAttributeAccessIssue]
         logger.debug(f"psycopg.connect instrumented")
 
     def _create_cursor_factory(self, sdk: TuskDrift, base_factory=None):
-        """Create a cursor factory that wraps cursors with instrumentation."""
-        from psycopg import Cursor as BaseCursor
+        """Create a cursor factory that wraps cursors with instrumentation.
+        
+        Returns a cursor CLASS (psycopg3 expects a class, not a function).
+        """
+        instrumentation = self
+        logger.debug(f"[CURSOR_FACTORY] Creating cursor factory, sdk.mode={sdk.mode}")
+        
+        # For real connections, psycopg3 expects a cursor CLASS
+        try:
+            from psycopg import Cursor as BaseCursor
+        except ImportError:
+            logger.warning("[CURSOR_FACTORY] Could not import psycopg.Cursor")
+            # Return a basic cursor class
+            BaseCursor = object  # type: ignore
         
         base = base_factory or BaseCursor
-        instrumentation = self
         
         class InstrumentedCursor(base):  # type: ignore
             def execute(self, query, params=None, **kwargs):
@@ -236,10 +436,9 @@ class PsycopgInstrumentation(InstrumentationBase):
                 error = e
                 raise
             finally:
-                # Only create span in RECORD mode if we have a parent
-                # Database queries without a parent are pre-app startup queries (migrations, etc.)
-                # and should not be recorded as traces
-                if parent_span_id and sdk.mode == "RECORD":
+                # Always create span in RECORD mode (including pre-app-start queries)
+                # Pre-app-start queries are marked with is_pre_app_start=true flag
+                if sdk.mode == "RECORD":
                     duration_ms = (time.time() - start_time) * 1000
                     params_list = list(params_seq)
                     self._create_query_span(
@@ -523,6 +722,9 @@ class PsycopgInstrumentation(InstrumentationBase):
             duration_nanos = int((duration_ms % 1000) * 1_000_000)
 
             # Create span
+            # IMPORTANT: is_root_span should be False for database queries
+            # They are CLIENT spans and should always have a parent (the HTTP request)
+            # Even if parent_span_id is None (for pre-app-start queries), we should not mark it as root
             span = CleanSpanData(
                 trace_id=trace_id,
                 span_id=span_id,
@@ -544,7 +746,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                 status=status,
                 timestamp=Timestamp(seconds=timestamp_seconds, nanos=timestamp_nanos),
                 duration=Duration(seconds=duration_seconds, nanos=duration_nanos),
-                is_root_span=parent_span_id is None,
+                is_root_span=False,  # Database queries are NEVER root spans
                 is_pre_app_start=not sdk.app_ready,
             )
 

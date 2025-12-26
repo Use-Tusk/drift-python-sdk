@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from functools import wraps
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, override
 
@@ -22,8 +21,8 @@ from ...core.types import (
     SpanStatus,
     StatusCode,
     Timestamp,
-    current_trace_id_context,
     current_span_id_context,
+    current_trace_id_context,
     replay_trace_id_context,
 )
 from ..base import InstrumentationBase
@@ -78,8 +77,6 @@ class FlaskInstrumentation(InstrumentationBase):
         transform_engine = self._transform_engine
 
         # wraps(original) = functools.update_wrapper(instrumented, original)
-        # copies some metadata over to instrumented
-        @wraps(original_wsgi_app)
         def instrumented_wsgi_app(
             self: WSGIApplication,
             environ: WSGIEnvironment,
@@ -128,12 +125,17 @@ def _handle_request(
 
                 # Store in tracker for env instrumentation to use
                 from ..env import EnvVarTracker
+
                 tracker = EnvVarTracker.get_instance()
                 tracker.set_env_vars(replay_trace_id, env_vars)
 
-                logger.debug(f"[FlaskInstrumentation] Fetched {len(env_vars)} env vars from CLI for trace {replay_trace_id}")
+                logger.debug(
+                    f"[FlaskInstrumentation] Fetched {len(env_vars)} env vars from CLI for trace {replay_trace_id}"
+                )
             except Exception as e:
-                logger.error(f"[FlaskInstrumentation] Failed to fetch env vars from CLI: {e}")
+                logger.error(
+                    f"[FlaskInstrumentation] Failed to fetch env vars from CLI: {e}"
+                )
 
         # Set replay trace context
         replay_token = replay_trace_id_context.set(replay_trace_id)
@@ -214,7 +216,9 @@ def _handle_request(
     try:
         response = original_wsgi_app(app, environ, wrapped_start_response)
         # Wrap response to capture body and defer span creation
-        return ResponseBodyCapture(response, environ, response_data, on_response_complete)
+        return ResponseBodyCapture(
+            response, environ, response_data, on_response_complete
+        )
     except Exception as e:
         response_data["status_code"] = 500
         response_data["error"] = str(e)
@@ -269,14 +273,16 @@ def _capture_span(
     from ...core.content_type_utils import get_decoded_type, should_block_content_type
     from ...core.trace_blocking_manager import TraceBlockingManager
 
-    content_type = response_headers.get("content-type") or response_headers.get("Content-Type")
+    content_type = response_headers.get("content-type") or response_headers.get(
+        "Content-Type"
+    )
     decoded_type = get_decoded_type(content_type)
 
     if should_block_content_type(decoded_type):
         blocking_mgr = TraceBlockingManager.get_instance()
         blocking_mgr.block_trace(
             trace_id,
-            reason=f"binary_content:{decoded_type.name if decoded_type else 'unknown'}"
+            reason=f"binary_content:{decoded_type.name if decoded_type else 'unknown'}",
         )
         logger.warning(
             f"Blocking trace {trace_id} - binary response: {content_type} "
@@ -299,7 +305,9 @@ def _capture_span(
 
     # Generate schemas using WSGI utilities
     input_schema_info = generate_input_schema_info(input_value, request_body_truncated)
-    output_schema_info = generate_output_schema_info(output_value, response_body_truncated)
+    output_schema_info = generate_output_schema_info(
+        output_value, response_body_truncated, decoded_type
+    )
 
     sdk = TuskDrift.get_instance()
     # Derive timestamp from start_time_ns (not datetime.now() which would be end time)
@@ -319,8 +327,9 @@ def _capture_span(
     span_name = f"{method} {path}"
 
     # Attach env vars to metadata if present
-    from ..env import EnvVarTracker
     from ...core.types import MetadataObject
+    from ..env import EnvVarTracker
+
     tracker = EnvVarTracker.get_instance()
     env_vars = tracker.get_env_vars(trace_id)
     metadata = None

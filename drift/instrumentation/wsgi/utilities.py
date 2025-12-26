@@ -231,13 +231,14 @@ def generate_input_schema_info(
 
 
 def generate_output_schema_info(
-    output_value: dict[str, Any], body_truncated: bool = False
+    output_value: dict[str, Any], body_truncated: bool = False, decoded_type: DecodedType | None = None
 ):
     """Generate schema and hash for output_value.
 
     Args:
         output_value: Output value dictionary
         body_truncated: Whether body was truncated
+        decoded_type: The decoded type of the response body (for schema generation)
 
     Returns:
         Schema info object with schema and hashes
@@ -245,6 +246,10 @@ def generate_output_schema_info(
     # Build schema merge hints including body encoding and truncation flags
     output_schema_merges = dict(HEADER_SCHEMA_MERGES)
     if "body" in output_value:
+        # Only set encoding, not decoded_type
+        # The decoded_type causes the schema generator to decode and parse the body,
+        # creating a schema for the parsed object instead of the encoded string.
+        # The CLI will decode based on Content-Type headers during comparison.
         output_schema_merges["body"] = SchemaMerge(encoding=EncodingType.BASE64)
     # Add bodyProcessingError to schema merges if truncated (matches Node SDK)
     if body_truncated and "bodyProcessingError" in output_value:

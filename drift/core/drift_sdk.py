@@ -213,7 +213,13 @@ class TuskDrift:
         instance.batch_processor.start()
 
         if instance.mode == "REPLAY":
-            instance._init_communicator_for_replay()
+            # Initialize communicator early for replay mode (matches Node SDK pattern)
+            try:
+                instance._init_communicator_for_replay()
+                logger.debug("Replay communicator initialized during SDK initialization")
+            except Exception as e:
+                logger.warn(f"Failed to initialize replay communicator: {e}")
+                logger.warn("Continuing with SDK initialization. Mock responses will not be available until CLI is running.")
 
         install_hooks()
 
@@ -310,28 +316,32 @@ class TuskDrift:
 
         self.communicator = ProtobufCommunicator(CommunicatorConfig.from_env())
 
-        def connect_to_cli_sync():
-            try:
-                service_id: str = (
-                    self.file_config.service.id
-                    if self.file_config
-                    and self.file_config.service
-                    and self.file_config.service.id
-                    else "unknown"
-                )
+        service_id: str = (
+            self.file_config.service.id
+            if self.file_config
+            and self.file_config.service
+            and self.file_config.service.id
+            else "unknown"
+        )
 
-                async def async_connect():
-                    if self.communicator:
-                        await self.communicator.connect(connection_info, service_id)
-
-                asyncio.run(async_connect())
+        # Connect to CLI during initialization
+        # Use synchronous connection to keep socket alive
+        try:
+            if self.communicator:
+                self.communicator.connect_sync(connection_info, service_id)
                 self._is_connected_with_cli = True
-                logger.debug("SDK successfully connected to CLI")
-            except Exception as e:
-                logger.error(f"Failed to connect to CLI: {e}")
-                self._is_connected_with_cli = False
+                logger.debug("SDK successfully connected to CLI synchronously")
+        except Exception as e:
+            logger.warning(f"Failed to initialize replay communicator: {e}")
+            logger.info("Continuing with SDK initialization. Mock responses will not be available until CLI is running.")
+            self._is_connected_with_cli = False
+            # Don't raise - allow Django to start even if CLI isn't ready yet
 
-        connect_to_cli_sync()
+        logger.info(f"[INIT_COMPLETE] SDK initialization finished. Connected to CLI: {self._is_connected_with_cli}")
+        if self.communicator and self.communicator.is_connected:
+            logger.info(f"[INIT_COMPLETE] Communicator reports connected: True")
+        else:
+            logger.info(f"[INIT_COMPLETE] Communicator reports connected: False")
 
     def _init_auto_instrumentations(self) -> None:
         """Initialize instrumentations."""
@@ -366,28 +376,45 @@ class TuskDrift:
             pass
 
         # Initialize PostgreSQL instrumentation before Django
-        psycopg_initialized = False
+        # Instrument BOTH psycopg2 and psycopg if available
+        # This allows apps to use either or both
+        psycopg2_available = False
+        psycopg_available = False
+        
+        # Try psycopg2 first
         try:
-            import psycopg  # pyright: ignore[reportUnusedImport]
-
-            from ..instrumentation.psycopg import PsycopgInstrumentation
-
-            _ = PsycopgInstrumentation()
-            logger.debug("Psycopg instrumentation initialized")
-            psycopg_initialized = True
+            import psycopg2  # pyright: ignore[reportUnusedImport]
+            from ..instrumentation.psycopg2 import Psycopg2Instrumentation
+            _ = Psycopg2Instrumentation()
+            logger.debug("Psycopg2 instrumentation initialized")
+            psycopg2_available = True
         except ImportError:
             pass
         
-        if not psycopg_initialized:
-            try:
-                import psycopg2  # pyright: ignore[reportUnusedImport]
+        # Try psycopg (v3)
+        try:
+            import psycopg  # pyright: ignore[reportUnusedImport]
+            from ..instrumentation.psycopg import PsycopgInstrumentation
+            _ = PsycopgInstrumentation()
+            logger.debug("Psycopg instrumentation initialized")
+            psycopg_available = True
+        except ImportError:
+            pass
+        
+        if not psycopg2_available and not psycopg_available:
+            logger.debug("No PostgreSQL client library found (psycopg2 or psycopg)")
+        elif psycopg2_available and psycopg_available:
+            logger.debug("Both psycopg2 and psycopg available - instrumented both")
 
-                from ..instrumentation.psycopg2 import Psycopg2Instrumentation
+        try:
+            import redis  # pyright: ignore[reportUnusedImport]
 
-                _ = Psycopg2Instrumentation()
-                logger.debug("Psycopg2 instrumentation initialized")
-            except ImportError:
-                pass
+            from ..instrumentation.redis import RedisInstrumentation
+
+            _ = RedisInstrumentation()
+            logger.debug("Redis instrumentation initialized")
+        except ImportError:
+            pass
 
         try:
             import django  # pyright: ignore[reportUnusedImport]
@@ -517,6 +544,10 @@ class TuskDrift:
         if not self.communicator:
             logger.error("Cannot request mock: communicator not initialized")
             return MockResponseOutput(found=False, error="Communicator not initialized")
+        
+        if not self._is_connected_with_cli:
+            logger.error("Requesting sync mock but CLI is not ready yet")
+            return MockResponseOutput(found=False, error="CLI not connected yet")
 
         if not self._is_connected_with_cli:
             logger.error("Requesting sync mock but CLI is not ready yet")
