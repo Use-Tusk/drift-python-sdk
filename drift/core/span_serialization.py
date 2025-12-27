@@ -86,8 +86,8 @@ def clean_span_to_proto(span: CleanSpanData) -> ProtoSpan:
         package_name=span.package_name,
         instrumentation_name=span.instrumentation_name,
         submodule_name=span.submodule_name,
-        package_type=ProtoPackageType(span.package_type.value) if span.package_type else ProtoPackageType.UNSPECIFIED,
-        kind=ProtoSpanKind(span.kind.value),
+        package_type=span.package_type.value if span.package_type else 0,
+        kind=span.kind.value if hasattr(span.kind, 'value') else span.kind,
         input_value=_dict_to_struct(span.input_value),
         output_value=_dict_to_struct(span.output_value),
         input_schema=_json_schema_to_proto(span.input_schema),
@@ -97,7 +97,7 @@ def clean_span_to_proto(span: CleanSpanData) -> ProtoSpan:
         input_value_hash=span.input_value_hash,
         output_value_hash=span.output_value_hash,
         status=ProtoSpanStatus(
-            code=ProtoStatusCode(span.status.code.value),
+            code=span.status.code.value if hasattr(span.status.code, 'value') else span.status.code,
             message=span.status.message,
         ),
         is_pre_app_start=span.is_pre_app_start,
@@ -129,15 +129,15 @@ def _json_schema_to_proto(schema: JsonSchema | None) -> ProtoJsonSchema:
 
 
 def _map_schema_type(schema_type: JsonSchemaType) -> ProtoJsonSchemaType:
-    return ProtoJsonSchemaType(schema_type.value)
+    return schema_type.value if hasattr(schema_type, 'value') else schema_type
 
 
 def _map_encoding_type(encoding: EncodingType) -> ProtoEncodingType:
-    return ProtoEncodingType(encoding.value)
+    return encoding.value if hasattr(encoding, 'value') else encoding
 
 
 def _map_decoded_type(decoded: DecodedType) -> ProtoDecodedType:
-    return ProtoDecodedType(decoded.value)
+    return decoded.value if hasattr(decoded, 'value') else decoded
 
 
 def _metadata_to_dict(metadata: Any) -> dict[str, Any]:

@@ -10,6 +10,10 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.resources import Resource
+
 from ..instrumentation.registry import install_hooks
 from .communication.communicator import CommunicatorConfig, ProtobufCommunicator
 from .communication.types import MockRequestInput, MockResponseOutput
@@ -18,9 +22,11 @@ from .logger import LogLevel, configure_logger
 from .sampling import should_sample, validate_sampling_rate
 from .trace_blocking_manager import TraceBlockingManager, should_block_span
 from .tracing import TdSpanExporter, TdSpanExporterConfig
+from .tracing.td_span_processor import TdSpanProcessor
 from .types import CleanSpanData, DriftMode, SpanKind
 
 if TYPE_CHECKING:
+    from opentelemetry.trace import Tracer
     from .batch_processor import BatchSpanProcessor
 
 logger = logging.getLogger(__name__)
@@ -44,6 +50,10 @@ class TuskDrift:
 
         self.span_exporter: TdSpanExporter | None = None
         self.batch_processor: "BatchSpanProcessor | None" = None
+
+        # OpenTelemetry components
+        self._tracer_provider: TracerProvider | None = None
+        self._td_span_processor: TdSpanProcessor | None = None
 
         self.communicator: ProtobufCommunicator | None = None
         self._cli_connection_task: asyncio.Task | None = None
@@ -204,6 +214,32 @@ class TuskDrift:
         )
         instance.span_exporter = TdSpanExporter(exporter_config)
 
+        # Initialize OpenTelemetry TracerProvider
+        service_name = effective_observable_service_id or "drift-python-sdk"
+        resource = Resource.create({
+            "service.name": service_name,
+            "service.version": sdk_version,
+            "deployment.environment": env,
+        })
+
+        instance._tracer_provider = TracerProvider(resource=resource)
+
+        # Create and add our custom span processor
+        instance._td_span_processor = TdSpanProcessor(
+            exporter=instance.span_exporter,
+            mode=instance.mode,
+            sampling_rate=instance._sampling_rate,
+            app_ready=instance.app_ready,
+        )
+        instance._td_span_processor.start()
+        instance._tracer_provider.add_span_processor(instance._td_span_processor)
+
+        # Set as global tracer provider
+        trace.set_tracer_provider(instance._tracer_provider)
+
+        logger.debug("OpenTelemetry TracerProvider initialized")
+
+        # Note: We keep the batch_processor for backward compatibility with collect_span()
         from .batch_processor import BatchSpanProcessor, BatchSpanProcessorConfig
 
         instance.batch_processor = BatchSpanProcessor(
@@ -439,6 +475,26 @@ class TuskDrift:
             except Exception:
                 pass
 
+    def get_tracer(self, name: str = "drift", version: str = "") -> "Tracer":
+        """Get OpenTelemetry tracer.
+
+        Args:
+            name: Tracer name (default: "drift")
+            version: Tracer version (default: SDK version)
+
+        Returns:
+            OpenTelemetry Tracer instance
+        """
+        if not version:
+            from ..version import SDK_VERSION
+            version = SDK_VERSION
+
+        if self._tracer_provider:
+            return self._tracer_provider.get_tracer(name, version)
+        else:
+            # Fallback to global tracer if provider not initialized
+            return trace.get_tracer(name, version)
+
     def mark_app_as_ready(self) -> None:
         """Mark the application as ready (started listening)."""
         if not self._initialized:
@@ -449,6 +505,11 @@ class TuskDrift:
             return
 
         self.app_ready = True
+
+        # Update span processor with app_ready flag
+        if self._td_span_processor:
+            self._td_span_processor.update_app_ready(True)
+
         logger.debug("Application marked as ready")
 
         if self.mode == "REPLAY":
@@ -459,7 +520,11 @@ class TuskDrift:
             )
 
     def collect_span(self, span: CleanSpanData) -> None:
-        """Collect and export a span."""
+        """[DEPRECATED] Collect and export a span.
+
+        This method is deprecated and maintained for backward compatibility only.
+        New instrumentations should use OpenTelemetry spans via SpanUtils instead.
+        """
         if self.mode == "DISABLED":
             return
 
@@ -664,6 +729,14 @@ class TuskDrift:
         """Shutdown the SDK."""
         import asyncio
 
+        # Shutdown OpenTelemetry tracer provider
+        if self._td_span_processor is not None:
+            self._td_span_processor.shutdown()
+
+        if self._tracer_provider is not None:
+            self._tracer_provider.shutdown()
+
+        # Shutdown legacy batch processor (for backward compatibility)
         if self.batch_processor is not None:
             self.batch_processor.stop(timeout=30.0)
 

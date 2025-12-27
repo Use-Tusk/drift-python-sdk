@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
-import traceback
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
@@ -14,9 +14,15 @@ if TYPE_CHECKING:
 
     QueryType = str | bytes | Composable
 
+from opentelemetry import context as otel_context
+from opentelemetry import trace
+from opentelemetry.trace import SpanKind as OTelSpanKind
+from opentelemetry.trace import Status, StatusCode as OTelStatusCode, set_span_in_context
+
 from ...core.communication.types import MockRequestInput
 from ...core.drift_sdk import TuskDrift
 from ...core.json_schema_helper import JsonSchemaHelper
+from ...core.tracing import TdSpanAttributes
 from ...core.types import (
     CleanSpanData,
     Duration,
@@ -25,8 +31,6 @@ from ...core.types import (
     SpanStatus,
     StatusCode,
     Timestamp,
-    current_span_id_context,
-    current_trace_id_context,
     replay_trace_id_context,
 )
 from ..base import InstrumentationBase
@@ -402,37 +406,45 @@ class Psycopg2Instrumentation(InstrumentationBase):
             logger.debug("[PSYCOPG2] _traced_execute: SDK disabled, passing through")
             return original_execute(query, params)
 
-        # Get trace context from parent span
-        parent_trace_id = current_trace_id_context.get()
-        parent_span_id = current_span_id_context.get()
+        # Create OpenTelemetry span
+        tracer = sdk.get_tracer()
+        span = tracer.start_span(
+            name="psycopg2.query",
+            kind=OTelSpanKind.CLIENT,
+            attributes={
+                TdSpanAttributes.NAME: "psycopg2.query",
+                TdSpanAttributes.PACKAGE_NAME: "psycopg2",
+                TdSpanAttributes.INSTRUMENTATION_NAME: "Psycopg2Instrumentation",
+                TdSpanAttributes.SUBMODULE_NAME: "query",
+                TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
+                TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
+            },
+        )
+
+        # Make span active
+        ctx = otel_context.get_current()
+        ctx_with_span = set_span_in_context(span, ctx)
+        token = otel_context.attach(ctx_with_span)
 
         logger.info("[PSYCOPG2] _traced_execute START")
         logger.info(f"  SDK mode: {sdk.mode}")
         logger.info(f"  app_ready: {sdk.app_ready}")
-        logger.info(f"  parent_trace_id: {parent_trace_id}")
-        logger.info(f"  parent_span_id: {parent_span_id}")
-        logger.info(f"  query: {query_str[:200] if len(query_str) > 200 else query_str}")
-
-        # Use parent's trace_id, or generate new one if no parent (shouldn't happen for DB queries)
-        if parent_trace_id:
-            trace_id = parent_trace_id
-            logger.debug(f"[PSYCOPG2] Using parent trace_id: {trace_id}")
-        else:
-            trace_id = self._generate_trace_id()
-            logger.warning(
-                f"[PSYCOPG2] No parent trace_id! Generated new trace_id: {trace_id}"
-            )
-
-        # Generate new span_id for this query span
-        span_id = self._generate_span_id()
-        logger.debug(f"[PSYCOPG2] Generated span_id: {span_id}")
-
-        # Set ONLY the span_id as current (for any nested children)
-        # Do NOT set trace_id again - it's already set by the parent
-        span_token = current_span_id_context.set(span_id)
+        logger.info(
+            f"  query: {query_str[:200] if len(query_str) > 200 else query_str}"
+        )
 
         try:
-            stack_trace = self._get_stack_trace()
+            # Get span IDs for mock requests
+            span_context = span.get_span_context()
+            trace_id = format(span_context.trace_id, '032x')
+            span_id = format(span_context.span_id, '016x')
+
+            # Get parent span ID from parent context
+            parent_span = trace.get_current_span(ctx)
+            parent_span_id = None
+            if parent_span and parent_span.is_recording():
+                parent_ctx = parent_span.get_span_context()
+                parent_span_id = format(parent_ctx.span_id, '016x')
 
             # REPLAY mode: Mock ALL queries (including pre-app-start)
             if sdk.mode == "REPLAY":
@@ -463,7 +475,7 @@ class Psycopg2Instrumentation(InstrumentationBase):
 
                 # Try to get mock for this query
                 mock_result = self._try_get_mock(
-                    sdk, query, params, trace_id, span_id, parent_span_id, stack_trace
+                    sdk, query, params, trace_id, span_id, parent_span_id
                 )
                 logger.info(
                     f"[PSYCOPG2_REPLAY] Mock result received: {mock_result is not None}"
@@ -514,12 +526,10 @@ class Psycopg2Instrumentation(InstrumentationBase):
                 return None  # execute() returns None
 
             # RECORD mode: Execute real query and record span
-            start_time = time.time()
             error = None
 
             logger.info("[PSYCOPG2_RECORD] execute() entering RECORD mode")
             logger.info(f"[PSYCOPG2_RECORD]   query: {query_str[:100]}")
-            logger.info(f"[PSYCOPG2_RECORD]   parent_span_id: {parent_span_id}")
             logger.info(f"[PSYCOPG2_RECORD]   app_ready: {sdk.app_ready}")
             logger.info(f"[PSYCOPG2_RECORD]   is_pre_app_start: {not sdk.app_ready}")
 
@@ -533,32 +543,20 @@ class Psycopg2Instrumentation(InstrumentationBase):
                 logger.error(f"[PSYCOPG2_RECORD] Query failed with error: {e}")
                 raise
             finally:
-                # Always create span in RECORD mode (including pre-app-start queries)
+                # Always finalize span in RECORD mode (including pre-app-start queries)
                 if sdk.mode == "RECORD":
-                    duration_ms = (time.time() - start_time) * 1000
-                    logger.info("[PSYCOPG2_RECORD] Creating span for query")
-                    logger.info(f"[PSYCOPG2_RECORD]   trace_id: {trace_id}")
-                    logger.info(f"[PSYCOPG2_RECORD]   span_id: {span_id}")
-                    logger.info(f"[PSYCOPG2_RECORD]   parent_span_id: {parent_span_id}")
-                    logger.info(f"[PSYCOPG2_RECORD]   duration_ms: {duration_ms:.2f}")
-                    logger.info(
-                        f"[PSYCOPG2_RECORD]   is_pre_app_start: {not sdk.app_ready}"
-                    )
-                    self._create_query_span(
-                        sdk,
+                    logger.info("[PSYCOPG2_RECORD] Finalizing span for query")
+                    self._finalize_query_span(
+                        span,
                         cursor,
                         query,
                         params,
-                        trace_id,
-                        span_id,
-                        parent_span_id,
-                        duration_ms,
                         error,
                     )
-                    logger.info("[PSYCOPG2_RECORD] Span created successfully")
+                    logger.info("[PSYCOPG2_RECORD] Span finalized successfully")
         finally:
-            # Reset only span context (trace context is owned by parent)
-            current_span_id_context.reset(span_token)
+            otel_context.detach(token)
+            span.end()
 
     def _traced_executemany(
         self,
@@ -576,25 +574,38 @@ class Psycopg2Instrumentation(InstrumentationBase):
         if sdk.mode == "DISABLED":
             return original_executemany(query, params_list)
 
-        # Get trace context from parent span
-        parent_trace_id = current_trace_id_context.get()
-        parent_span_id = current_span_id_context.get()
+        # Create OpenTelemetry span
+        tracer = sdk.get_tracer()
+        span = tracer.start_span(
+            name="psycopg2.query",
+            kind=OTelSpanKind.CLIENT,
+            attributes={
+                TdSpanAttributes.NAME: "psycopg2.query",
+                TdSpanAttributes.PACKAGE_NAME: "psycopg2",
+                TdSpanAttributes.INSTRUMENTATION_NAME: "Psycopg2Instrumentation",
+                TdSpanAttributes.SUBMODULE_NAME: "query",
+                TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
+                TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
+            },
+        )
 
-        # Use parent's trace_id, or generate new one if no parent (shouldn't happen for DB queries)
-        if parent_trace_id:
-            trace_id = parent_trace_id
-        else:
-            trace_id = self._generate_trace_id()
-
-        # Generate new span_id for this query span
-        span_id = self._generate_span_id()
-
-        # Set ONLY the span_id as current (for any nested children)
-        # Do NOT set trace_id again - it's already set by the parent
-        span_token = current_span_id_context.set(span_id)
+        # Make span active
+        ctx = otel_context.get_current()
+        ctx_with_span = set_span_in_context(span, ctx)
+        token = otel_context.attach(ctx_with_span)
 
         try:
-            stack_trace = self._get_stack_trace()
+            # Get span IDs for mock requests
+            span_context = span.get_span_context()
+            trace_id = format(span_context.trace_id, '032x')
+            span_id = format(span_context.span_id, '016x')
+
+            # Get parent span ID from parent context
+            parent_span = trace.get_current_span(ctx)
+            parent_span_id = None
+            if parent_span and parent_span.is_recording():
+                parent_ctx = parent_span.get_span_context()
+                parent_span_id = format(parent_ctx.span_id, '016x')
 
             # For executemany, we'll treat each parameter set as a batch
             # REPLAY mode: Mock ALL queries (including pre-app-start)
@@ -621,7 +632,6 @@ class Psycopg2Instrumentation(InstrumentationBase):
                     trace_id,
                     span_id,
                     parent_span_id,
-                    stack_trace,
                 )
                 if mock_result is None:
                     # For pre-app-start queries without a mock, return empty result
@@ -651,7 +661,6 @@ class Psycopg2Instrumentation(InstrumentationBase):
                 return None  # executemany() returns None
 
             # RECORD mode: Execute real query and record span
-            start_time = time.time()
             error = None
 
             try:
@@ -661,24 +670,18 @@ class Psycopg2Instrumentation(InstrumentationBase):
                 error = e
                 raise
             finally:
-                # Always create span in RECORD mode (including pre-app-start queries)
-                # Pre-app-start queries are marked with is_pre_app_start=true flag
+                # Always finalize span in RECORD mode (including pre-app-start queries)
                 if sdk.mode == "RECORD":
-                    duration_ms = (time.time() - start_time) * 1000
-                    self._create_query_span(
-                        sdk,
+                    self._finalize_query_span(
+                        span,
                         cursor,
                         query,
                         {"_batch": list(params_list)},
-                        trace_id,
-                        span_id,
-                        parent_span_id,
-                        duration_ms,
                         error,
                     )
         finally:
-            # Reset only span context (trace context is owned by parent)
-            current_span_id_context.reset(span_token)
+            otel_context.detach(token)
+            span.end()
 
     def _try_get_mock(
         self,
@@ -688,7 +691,6 @@ class Psycopg2Instrumentation(InstrumentationBase):
         trace_id: str,
         span_id: str,
         parent_span_id: Optional[str],
-        stack_trace: str,
     ) -> Optional[Dict[str, Any]]:
         """Try to get a mocked response from CLI.
 
@@ -732,7 +734,6 @@ class Psycopg2Instrumentation(InstrumentationBase):
                 output_schema_hash="",
                 input_value_hash=input_result.decoded_value_hash,
                 output_value_hash="",
-                stack_trace=stack_trace,
                 kind=SpanKind.CLIENT,
                 status=SpanStatus(code=StatusCode.OK, message=""),
                 timestamp=Timestamp(seconds=timestamp_seconds, nanos=timestamp_nanos),
@@ -808,7 +809,9 @@ class Psycopg2Instrumentation(InstrumentationBase):
                 )
                 return None
 
-            logger.info(f"[MOCK_FOUND] Found mock for psycopg2 query: {query_str[:100]}")
+            logger.info(
+                f"[MOCK_FOUND] Found mock for psycopg2 query: {query_str[:100]}"
+            )
             logger.info(
                 f"[MOCK_FOUND] Mock response type: {type(mock_response_output.response)}"
             )
@@ -905,38 +908,49 @@ class Psycopg2Instrumentation(InstrumentationBase):
         cursor.fetchall = mock_fetchall  # pyright: ignore[reportAttributeAccessIssue]
         logger.debug("[MOCK] Cursor fetch methods patched successfully")
 
-    def _create_query_span(
+    def _finalize_query_span(
         self,
-        sdk: TuskDrift,
+        span: "trace.Span",
         cursor: Any,
         query: QueryType,
         params: Any,
-        trace_id: str,
-        span_id: str,
-        parent_span_id: Optional[str],
-        duration_ms: float,
         error: Exception | None,
     ) -> None:
-        """Create and collect a CLIENT span for the database query."""
+        """Finalize span with query data."""
         try:
+            # Helper function to serialize non-JSON types
+            import datetime
+
+            def serialize_value(val):
+                """Convert non-JSON-serializable values to JSON-compatible types."""
+                if isinstance(val, (datetime.datetime, datetime.date, datetime.time)):
+                    return val.isoformat()
+                elif isinstance(val, bytes):
+                    return val.decode("utf-8", errors="replace")
+                elif isinstance(val, (list, tuple)):
+                    return [serialize_value(v) for v in val]
+                elif isinstance(val, dict):
+                    return {k: serialize_value(v) for k, v in val.items()}
+                return val
+
             # Build input value
             query_str = _query_to_str(query)
             input_value = {
                 "query": query_str.strip(),
             }
             if params is not None:
-                input_value["parameters"] = params
+                # Serialize parameters to handle datetime and other non-JSON types
+                input_value["parameters"] = serialize_value(params)
 
             # Build output value
             output_value = {}
-            status = SpanStatus(code=StatusCode.OK, message="")
 
             if error:
                 output_value = {
                     "errorName": type(error).__name__,
                     "errorMessage": str(error),
                 }
-                status = SpanStatus(code=StatusCode.ERROR, message=str(error))
+                span.set_status(Status(OTelStatusCode.ERROR, str(error)))
             else:
                 # Get query results and capture for replay
                 try:
@@ -1019,17 +1033,6 @@ class Psycopg2Instrumentation(InstrumentationBase):
 
                     if rows:
                         # Convert rows to JSON-serializable format (handle datetime objects, etc.)
-                        import datetime
-
-                        def serialize_value(val):
-                            if isinstance(
-                                val, (datetime.datetime, datetime.date, datetime.time)
-                            ):
-                                return val.isoformat()
-                            elif isinstance(val, bytes):
-                                return val.decode("utf-8", errors="replace")
-                            return val
-
                         serialized_rows = [
                             [serialize_value(col) for col in row] for row in rows
                         ]
@@ -1042,84 +1045,20 @@ class Psycopg2Instrumentation(InstrumentationBase):
             input_result = JsonSchemaHelper.generate_schema_and_hash(input_value, {})
             output_result = JsonSchemaHelper.generate_schema_and_hash(output_value, {})
 
-            # Create timestamp and duration
-            timestamp_ms = time.time() * 1000
-            timestamp_seconds = int(timestamp_ms // 1000)
-            timestamp_nanos = int((timestamp_ms % 1000) * 1_000_000)
+            # Set span attributes
+            span.set_attribute(TdSpanAttributes.INPUT_VALUE, json.dumps(input_value))
+            span.set_attribute(TdSpanAttributes.OUTPUT_VALUE, json.dumps(output_value))
+            span.set_attribute(TdSpanAttributes.INPUT_SCHEMA, json.dumps(input_result.schema.to_primitive()))
+            span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA, json.dumps(output_result.schema.to_primitive()))
+            span.set_attribute(TdSpanAttributes.INPUT_SCHEMA_HASH, input_result.decoded_schema_hash)
+            span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA_HASH, output_result.decoded_schema_hash)
+            span.set_attribute(TdSpanAttributes.INPUT_VALUE_HASH, input_result.decoded_value_hash)
+            span.set_attribute(TdSpanAttributes.OUTPUT_VALUE_HASH, output_result.decoded_value_hash)
 
-            duration_seconds = int(duration_ms // 1000)
-            duration_nanos = int((duration_ms % 1000) * 1_000_000)
+            if not error:
+                span.set_status(Status(OTelStatusCode.OK))
 
-            # Create span
-            # IMPORTANT: is_root_span should be False for database queries
-            # They are CLIENT spans and should always have a parent (the HTTP request)
-            # Even if parent_span_id is None, we should not mark it as root
-            is_root = False  # Database queries are NEVER root spans
-            if parent_span_id is None:
-                logger.warning(
-                    "[PSYCOPG2] Creating DB query span without parent_span_id! This should not happen."
-                )
-                logger.warning(f"[PSYCOPG2]   trace_id: {trace_id}")
-                logger.warning(f"[PSYCOPG2]   span_id: {span_id}")
-                logger.warning(f"[PSYCOPG2]   query: {query_str[:100]}")
-
-            span = CleanSpanData(
-                trace_id=trace_id,
-                span_id=span_id,
-                parent_span_id=parent_span_id or "",
-                name="psycopg2.query",
-                package_name="psycopg2",
-                package_type=PackageType.PG,
-                instrumentation_name="Psycopg2Instrumentation",
-                submodule_name="query",
-                input_value=input_value,
-                output_value=output_value,
-                input_schema=input_result.schema,
-                output_schema=output_result.schema,
-                input_schema_hash=input_result.decoded_schema_hash,
-                output_schema_hash=output_result.decoded_schema_hash,
-                input_value_hash=input_result.decoded_value_hash,
-                output_value_hash=output_result.decoded_value_hash,
-                kind=SpanKind.CLIENT,
-                status=status,
-                timestamp=Timestamp(seconds=timestamp_seconds, nanos=timestamp_nanos),
-                duration=Duration(seconds=duration_seconds, nanos=duration_nanos),
-                is_root_span=is_root,
-                is_pre_app_start=not sdk.app_ready,
-            )
-
-            logger.debug("[PSYCOPG2] Collecting span:")
-            logger.debug(f"  trace_id: {trace_id}")
-            logger.debug(f"  span_id: {span_id}")
-            logger.debug(f"  parent_span_id: {parent_span_id or 'None'}")
-            logger.debug(f"  is_root_span: {is_root}")
-            logger.debug(f"  is_pre_app_start: {not sdk.app_ready}")
-
-            sdk.collect_span(span)
-            logger.debug("[PSYCOPG2] Span collected successfully")
+            logger.debug("[PSYCOPG2] Span finalized successfully")
 
         except Exception as e:
             logger.error(f"Error creating query span: {e}")
-
-    def _generate_trace_id(self) -> str:
-        """Generate a random trace ID."""
-        import secrets
-
-        return secrets.token_hex(16)
-
-    def _generate_span_id(self) -> str:
-        """Generate a random span ID."""
-        import secrets
-
-        return secrets.token_hex(8)
-
-    def _get_stack_trace(self) -> str:
-        """Get the current stack trace."""
-        stack = traceback.format_stack()
-        # Filter out instrumentation frames
-        filtered = [
-            line
-            for line in stack
-            if "instrumentation" not in line and "drift" not in line
-        ]
-        return "".join(filtered[-10:])  # Last 10 frames

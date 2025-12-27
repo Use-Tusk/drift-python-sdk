@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
-import traceback
 from typing import Any, Dict, Optional
 from types import ModuleType
+
+from opentelemetry import context as otel_context
+from opentelemetry import trace
+from opentelemetry.trace import SpanKind as OTelSpanKind
+from opentelemetry.trace import Status, StatusCode as OTelStatusCode, set_span_in_context
 
 from ..base import InstrumentationBase
 from ...core.communication.types import MockRequestInput
 from ...core.drift_sdk import TuskDrift
 from ...core.json_schema_helper import JsonSchemaHelper
+from ...core.tracing import TdSpanAttributes
 from ...core.types import (
     CleanSpanData,
     PackageType,
@@ -17,8 +23,6 @@ from ...core.types import (
     SpanStatus,
     StatusCode,
     replay_trace_id_context,
-    current_trace_id_context,
-    current_span_id_context,
     Timestamp,
     Duration,
 )
@@ -142,26 +146,52 @@ class RedisInstrumentation(InstrumentationBase):
 
         command_name = args[0] if args else "UNKNOWN"
         command_str = self._format_command(args)
-        
-        parent_trace_id = current_trace_id_context.get()
-        parent_span_id = current_span_id_context.get()
 
-        trace_id = parent_trace_id if parent_trace_id else self._generate_trace_id()
-        span_id = self._generate_span_id()
-        span_token = current_span_id_context.set(span_id)
+        # Get tracer and start span
+        tracer = sdk.get_tracer()
+        span_name = f"redis.{command_name}"
+
+        # Start OpenTelemetry span (automatically inherits parent context)
+        span = tracer.start_span(
+            name=span_name,
+            kind=OTelSpanKind.CLIENT,
+            attributes={
+                TdSpanAttributes.NAME: span_name,
+                TdSpanAttributes.PACKAGE_NAME: "redis",
+                TdSpanAttributes.INSTRUMENTATION_NAME: "RedisInstrumentation",
+                TdSpanAttributes.SUBMODULE_NAME: str(command_name),
+                TdSpanAttributes.PACKAGE_TYPE: PackageType.REDIS.name,
+                TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
+            },
+        )
+
+        # Make span active
+        ctx = otel_context.get_current()
+        ctx_with_span = set_span_in_context(span, ctx)
+        token = otel_context.attach(ctx_with_span)
 
         try:
-            stack_trace = self._get_stack_trace()
+            # Get span IDs for mock requests
+            span_context = span.get_span_context()
+            trace_id = format(span_context.trace_id, '032x')
+            span_id = format(span_context.span_id, '016x')
+
+            # Get parent span ID from parent context
+            parent_span = trace.get_current_span(ctx)
+            parent_span_id = None
+            if parent_span and parent_span.is_recording():
+                parent_ctx = parent_span.get_span_context()
+                parent_span_id = format(parent_ctx.span_id, '016x')
 
             if sdk.mode == "REPLAY":
                 # Handle background requests (app ready + no parent span)
                 if sdk.app_ready and not parent_span_id:
                     return self._get_default_response(command_name)
-                
+
                 mock_result = self._try_get_mock(
-                    sdk, command_str, args, trace_id, span_id, parent_span_id, stack_trace
+                    sdk, command_str, args, trace_id, span_id, parent_span_id
                 )
-                
+
                 if mock_result is None:
                     is_pre_app_start = not sdk.app_ready
                     raise RuntimeError(
@@ -169,14 +199,13 @@ class RedisInstrumentation(InstrumentationBase):
                         f"This {'pre-app-start ' if is_pre_app_start else ''}command was not recorded during the trace capture. "
                         f"Command: {command_str}"
                     )
-                
+
                 return self._deserialize_response(mock_result)
 
             # RECORD mode
-            start_time = time.time()
             error = None
-
             result = None
+
             try:
                 result = original_execute(redis_client, *args, **kwargs)
                 return result
@@ -185,21 +214,16 @@ class RedisInstrumentation(InstrumentationBase):
                 raise
             finally:
                 if sdk.mode == "RECORD":
-                    duration_ms = (time.time() - start_time) * 1000
-                    self._create_command_span(
-                        sdk,
-                        redis_client,
+                    self._finalize_command_span(
+                        span,
                         command_str,
                         args,
                         result if error is None else None,
-                        trace_id,
-                        span_id,
-                        parent_span_id,
-                        duration_ms,
                         error,
                     )
         finally:
-            current_span_id_context.reset(span_token)
+            otel_context.detach(token)
+            span.end()
 
     async def _traced_async_execute_command(
         self, redis_client: Any, original_execute: Any, sdk: TuskDrift, args: tuple, kwargs: dict
@@ -208,26 +232,39 @@ class RedisInstrumentation(InstrumentationBase):
         # For REPLAY mode, use sync mocking
         if sdk.mode == "REPLAY":
             return self._traced_execute_command(redis_client, lambda *a, **kw: None, sdk, args, kwargs)
-        
+
         # For RECORD mode, actually execute async
         if sdk.mode == "DISABLED":
             return await original_execute(redis_client, *args, **kwargs)
 
         command_name = args[0] if args else "UNKNOWN"
         command_str = self._format_command(args)
-        
-        parent_trace_id = current_trace_id_context.get()
-        parent_span_id = current_span_id_context.get()
 
-        trace_id = parent_trace_id if parent_trace_id else self._generate_trace_id()
-        span_id = self._generate_span_id()
-        span_token = current_span_id_context.set(span_id)
+        # Get tracer and start span
+        tracer = sdk.get_tracer()
+        span_name = f"redis.{command_name}"
+
+        # Start OpenTelemetry span (automatically inherits parent context)
+        span = tracer.start_span(
+            name=span_name,
+            kind=OTelSpanKind.CLIENT,
+            attributes={
+                TdSpanAttributes.NAME: span_name,
+                TdSpanAttributes.PACKAGE_NAME: "redis",
+                TdSpanAttributes.INSTRUMENTATION_NAME: "RedisInstrumentation",
+                TdSpanAttributes.SUBMODULE_NAME: str(command_name),
+                TdSpanAttributes.PACKAGE_TYPE: PackageType.REDIS.name,
+                TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
+            },
+        )
+
+        # Make span active
+        ctx = otel_context.get_current()
+        ctx_with_span = set_span_in_context(span, ctx)
+        token = otel_context.attach(ctx_with_span)
 
         try:
-            stack_trace = self._get_stack_trace()
-
             # RECORD mode
-            start_time = time.time()
             error = None
             result = None
 
@@ -239,21 +276,16 @@ class RedisInstrumentation(InstrumentationBase):
                 raise
             finally:
                 if sdk.mode == "RECORD":
-                    duration_ms = (time.time() - start_time) * 1000
-                    self._create_command_span(
-                        sdk,
-                        redis_client,
+                    self._finalize_command_span(
+                        span,
                         command_str,
                         args,
                         result if error is None else None,
-                        trace_id,
-                        span_id,
-                        parent_span_id,
-                        duration_ms,
                         error,
                     )
         finally:
-            current_span_id_context.reset(span_token)
+            otel_context.detach(token)
+            span.end()
 
     def _traced_pipeline_execute(
         self, pipeline: Any, original_execute: Any, sdk: TuskDrift, args: tuple, kwargs: dict
@@ -265,26 +297,52 @@ class RedisInstrumentation(InstrumentationBase):
         # Get commands from pipeline
         command_stack = self._get_pipeline_commands(pipeline)
         command_str = self._format_pipeline_commands(command_stack)
-        
-        parent_trace_id = current_trace_id_context.get()
-        parent_span_id = current_span_id_context.get()
 
-        trace_id = parent_trace_id if parent_trace_id else self._generate_trace_id()
-        span_id = self._generate_span_id()
-        span_token = current_span_id_context.set(span_id)
+        # Get tracer and start span
+        tracer = sdk.get_tracer()
+        span_name = "redis.pipeline"
+
+        # Start OpenTelemetry span (automatically inherits parent context)
+        span = tracer.start_span(
+            name=span_name,
+            kind=OTelSpanKind.CLIENT,
+            attributes={
+                TdSpanAttributes.NAME: span_name,
+                TdSpanAttributes.PACKAGE_NAME: "redis",
+                TdSpanAttributes.INSTRUMENTATION_NAME: "RedisInstrumentation",
+                TdSpanAttributes.SUBMODULE_NAME: "pipeline",
+                TdSpanAttributes.PACKAGE_TYPE: PackageType.REDIS.name,
+                TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
+            },
+        )
+
+        # Make span active
+        ctx = otel_context.get_current()
+        ctx_with_span = set_span_in_context(span, ctx)
+        token = otel_context.attach(ctx_with_span)
 
         try:
-            stack_trace = self._get_stack_trace()
+            # Get span IDs for mock requests
+            span_context = span.get_span_context()
+            trace_id = format(span_context.trace_id, '032x')
+            span_id = format(span_context.span_id, '016x')
+
+            # Get parent span ID from parent context
+            parent_span = trace.get_current_span(ctx)
+            parent_span_id = None
+            if parent_span and parent_span.is_recording():
+                parent_ctx = parent_span.get_span_context()
+                parent_span_id = format(parent_ctx.span_id, '016x')
 
             if sdk.mode == "REPLAY":
                 # Handle background requests
                 if sdk.app_ready and not parent_span_id:
                     return []
-                
+
                 mock_result = self._try_get_mock(
-                    sdk, command_str, command_stack, trace_id, span_id, parent_span_id, stack_trace
+                    sdk, command_str, command_stack, trace_id, span_id, parent_span_id
                 )
-                
+
                 if mock_result is None:
                     is_pre_app_start = not sdk.app_ready
                     raise RuntimeError(
@@ -292,11 +350,10 @@ class RedisInstrumentation(InstrumentationBase):
                         f"This {'pre-app-start ' if is_pre_app_start else ''}pipeline was not recorded during the trace capture. "
                         f"Commands: {command_str}"
                     )
-                
+
                 return self._deserialize_response(mock_result)
 
             # RECORD mode
-            start_time = time.time()
             error = None
             result = None
 
@@ -308,21 +365,16 @@ class RedisInstrumentation(InstrumentationBase):
                 raise
             finally:
                 if sdk.mode == "RECORD":
-                    duration_ms = (time.time() - start_time) * 1000
-                    self._create_pipeline_span(
-                        sdk,
-                        pipeline,
+                    self._finalize_pipeline_span(
+                        span,
                         command_str,
                         command_stack,
                         result if error is None else None,
-                        trace_id,
-                        span_id,
-                        parent_span_id,
-                        duration_ms,
                         error,
                     )
         finally:
-            current_span_id_context.reset(span_token)
+            otel_context.detach(token)
+            span.end()
 
     def _format_command(self, args: tuple) -> str:
         """Format Redis command as string."""
@@ -380,7 +432,6 @@ class RedisInstrumentation(InstrumentationBase):
         trace_id: str,
         span_id: str,
         parent_span_id: Optional[str],
-        stack_trace: str,
     ) -> Optional[Dict[str, Any]]:
         """Try to get a mocked response from CLI."""
         try:
@@ -416,7 +467,6 @@ class RedisInstrumentation(InstrumentationBase):
                 output_schema_hash="",
                 input_value_hash=input_result.decoded_value_hash,
                 output_value_hash="",
-                stack_trace=stack_trace,
                 kind=SpanKind.CLIENT,
                 status=SpanStatus(code=StatusCode.OK, message=""),
                 timestamp=Timestamp(seconds=timestamp_seconds, nanos=timestamp_nanos),
@@ -447,20 +497,15 @@ class RedisInstrumentation(InstrumentationBase):
             logger.error(f"Error getting mock for Redis command: {e}")
             return None
 
-    def _create_command_span(
+    def _finalize_command_span(
         self,
-        sdk: TuskDrift,
-        redis_client: Any,
+        span: "trace.Span",
         command: str,
         args: tuple,
         result: Any,
-        trace_id: str,
-        span_id: str,
-        parent_span_id: Optional[str],
-        duration_ms: float,
         error: Exception | None,
     ) -> None:
-        """Create and collect a CLIENT span for the Redis command."""
+        """Finalize span with command data."""
         try:
             # Build input value
             input_value = {
@@ -471,82 +516,49 @@ class RedisInstrumentation(InstrumentationBase):
 
             # Build output value
             output_value = {}
-            status = SpanStatus(code=StatusCode.OK, message="")
 
             if error:
                 output_value = {
                     "errorName": type(error).__name__,
                     "errorMessage": str(error),
                 }
-                status = SpanStatus(code=StatusCode.ERROR, message=str(error))
+                span.set_status(Status(OTelStatusCode.ERROR, str(error)))
             else:
                 output_value = {
                     "result": self._serialize_response(result),
                 }
+                span.set_status(Status(OTelStatusCode.OK))
 
             # Generate schemas and hashes
             input_result = JsonSchemaHelper.generate_schema_and_hash(input_value, {})
             output_result = JsonSchemaHelper.generate_schema_and_hash(output_value, {})
 
-            # Create timestamp and duration
-            timestamp_ms = time.time() * 1000
-            timestamp_seconds = int(timestamp_ms // 1000)
-            timestamp_nanos = int((timestamp_ms % 1000) * 1_000_000)
-
-            duration_seconds = int(duration_ms // 1000)
-            duration_nanos = int((duration_ms % 1000) * 1_000_000)
-
-            # Extract command name for span name
-            command_name = args[0] if args else "UNKNOWN"
-
-            # Create span
-            span = CleanSpanData(
-                trace_id=trace_id,
-                span_id=span_id,
-                parent_span_id=parent_span_id or "",
-                name=f"redis.{command_name}",
-                package_name="redis",
-                package_type=PackageType.REDIS,
-                instrumentation_name="RedisInstrumentation",
-                submodule_name=str(command_name),
-                input_value=input_value,
-                output_value=output_value,
-                input_schema=input_result.schema,
-                output_schema=output_result.schema,
-                input_schema_hash=input_result.decoded_schema_hash,
-                output_schema_hash=output_result.decoded_schema_hash,
-                input_value_hash=input_result.decoded_value_hash,
-                output_value_hash=output_result.decoded_value_hash,
-                kind=SpanKind.CLIENT,
-                status=status,
-                timestamp=Timestamp(seconds=timestamp_seconds, nanos=timestamp_nanos),
-                duration=Duration(seconds=duration_seconds, nanos=duration_nanos),
-                is_root_span=parent_span_id is None,
-                is_pre_app_start=not sdk.app_ready,
-            )
-
-            sdk.collect_span(span)
+            # Set span attributes
+            span.set_attribute(TdSpanAttributes.INPUT_VALUE, json.dumps(input_value))
+            span.set_attribute(TdSpanAttributes.OUTPUT_VALUE, json.dumps(output_value))
+            span.set_attribute(TdSpanAttributes.INPUT_SCHEMA, json.dumps(input_result.schema.to_primitive()))
+            span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA, json.dumps(output_result.schema.to_primitive()))
+            span.set_attribute(TdSpanAttributes.INPUT_SCHEMA_HASH, input_result.decoded_schema_hash)
+            span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA_HASH, output_result.decoded_schema_hash)
+            span.set_attribute(TdSpanAttributes.INPUT_VALUE_HASH, input_result.decoded_value_hash)
+            span.set_attribute(TdSpanAttributes.OUTPUT_VALUE_HASH, output_result.decoded_value_hash)
 
         except Exception as e:
-            logger.error(f"Error creating Redis command span: {e}")
+            logger.error(f"Error finalizing Redis command span: {e}")
+            span.set_status(Status(OTelStatusCode.ERROR, str(e)))
 
-    def _create_pipeline_span(
+    def _finalize_pipeline_span(
         self,
-        sdk: TuskDrift,
-        pipeline: Any,
+        span: "trace.Span",
         command_str: str,
         command_stack: list,
         result: Any,
-        trace_id: str,
-        span_id: str,
-        parent_span_id: Optional[str],
-        duration_ms: float,
         error: Exception | None,
     ) -> None:
-        """Create and collect a CLIENT span for the Redis pipeline."""
+        """Finalize span with pipeline data."""
         try:
             # Build input value
-            serialized_commands = [self._serialize_args(cmd.args if hasattr(cmd, "args") else cmd[0]) 
+            serialized_commands = [self._serialize_args(cmd.args if hasattr(cmd, "args") else cmd[0])
                                   for cmd in command_stack]
             input_value: Dict[str, Any] = {
                 "command": command_str,
@@ -555,61 +567,36 @@ class RedisInstrumentation(InstrumentationBase):
 
             # Build output value
             output_value = {}
-            status = SpanStatus(code=StatusCode.OK, message="")
 
             if error:
                 output_value = {
                     "errorName": type(error).__name__,
                     "errorMessage": str(error),
                 }
-                status = SpanStatus(code=StatusCode.ERROR, message=str(error))
+                span.set_status(Status(OTelStatusCode.ERROR, str(error)))
             else:
                 output_value = {
                     "results": [self._serialize_response(r) for r in result] if result else [],
                 }
+                span.set_status(Status(OTelStatusCode.OK))
 
             # Generate schemas and hashes
             input_result = JsonSchemaHelper.generate_schema_and_hash(input_value, {})
             output_result = JsonSchemaHelper.generate_schema_and_hash(output_value, {})
 
-            # Create timestamp and duration
-            timestamp_ms = time.time() * 1000
-            timestamp_seconds = int(timestamp_ms // 1000)
-            timestamp_nanos = int((timestamp_ms % 1000) * 1_000_000)
-
-            duration_seconds = int(duration_ms // 1000)
-            duration_nanos = int((duration_ms % 1000) * 1_000_000)
-
-            # Create span
-            span = CleanSpanData(
-                trace_id=trace_id,
-                span_id=span_id,
-                parent_span_id=parent_span_id or "",
-                name="redis.pipeline",
-                package_name="redis",
-                package_type=PackageType.REDIS,
-                instrumentation_name="RedisInstrumentation",
-                submodule_name="pipeline",
-                input_value=input_value,
-                output_value=output_value,
-                input_schema=input_result.schema,
-                output_schema=output_result.schema,
-                input_schema_hash=input_result.decoded_schema_hash,
-                output_schema_hash=output_result.decoded_schema_hash,
-                input_value_hash=input_result.decoded_value_hash,
-                output_value_hash=output_result.decoded_value_hash,
-                kind=SpanKind.CLIENT,
-                status=status,
-                timestamp=Timestamp(seconds=timestamp_seconds, nanos=timestamp_nanos),
-                duration=Duration(seconds=duration_seconds, nanos=duration_nanos),
-                is_root_span=parent_span_id is None,
-                is_pre_app_start=not sdk.app_ready,
-            )
-
-            sdk.collect_span(span)
+            # Set span attributes
+            span.set_attribute(TdSpanAttributes.INPUT_VALUE, json.dumps(input_value))
+            span.set_attribute(TdSpanAttributes.OUTPUT_VALUE, json.dumps(output_value))
+            span.set_attribute(TdSpanAttributes.INPUT_SCHEMA, json.dumps(input_result.schema.to_primitive()))
+            span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA, json.dumps(output_result.schema.to_primitive()))
+            span.set_attribute(TdSpanAttributes.INPUT_SCHEMA_HASH, input_result.decoded_schema_hash)
+            span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA_HASH, output_result.decoded_schema_hash)
+            span.set_attribute(TdSpanAttributes.INPUT_VALUE_HASH, input_result.decoded_value_hash)
+            span.set_attribute(TdSpanAttributes.OUTPUT_VALUE_HASH, output_result.decoded_value_hash)
 
         except Exception as e:
-            logger.error(f"Error creating Redis pipeline span: {e}")
+            logger.error(f"Error finalizing Redis pipeline span: {e}")
+            span.set_status(Status(OTelStatusCode.ERROR, str(e)))
 
     def _serialize_args(self, args: Any) -> list:
         """Serialize command arguments."""
@@ -672,7 +659,7 @@ class RedisInstrumentation(InstrumentationBase):
     def _get_default_response(self, command_name: str) -> Any:
         """Get default response for background requests."""
         command_upper = str(command_name).upper()
-        
+
         # Return appropriate default based on command type
         if command_upper in ("GET", "HGET", "LPOP", "RPOP"):
             return None
@@ -692,20 +679,3 @@ class RedisInstrumentation(InstrumentationBase):
             return "PONG"
         else:
             return None
-
-    def _generate_trace_id(self) -> str:
-        """Generate a random trace ID."""
-        import secrets
-        return secrets.token_hex(16)
-
-    def _generate_span_id(self) -> str:
-        """Generate a random span ID."""
-        import secrets
-        return secrets.token_hex(8)
-
-    def _get_stack_trace(self) -> str:
-        """Get the current stack trace."""
-        stack = traceback.format_stack()
-        # Filter out instrumentation frames
-        filtered = [line for line in stack if "instrumentation" not in line and "drift" not in line]
-        return "".join(filtered[-10:])  # Last 10 frames

@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import logging
 import time
-import uuid
 from typing import TYPE_CHECKING, Callable
+
+from opentelemetry import context as otel_context
+from opentelemetry import trace
+from opentelemetry.trace import SpanKind as OTelSpanKind
+from opentelemetry.trace import Status, StatusCode as OTelStatusCode, set_span_in_context
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from django.http import HttpRequest, HttpResponse
+from ...core.tracing import TdSpanAttributes
 from ...core.types import (
     CleanSpanData,
     Duration,
@@ -19,8 +24,6 @@ from ...core.types import (
     SpanStatus,
     StatusCode,
     Timestamp,
-    current_span_id_context,
-    current_trace_id_context,
     replay_trace_id_context,
 )
 from ..http import HttpSpanData, HttpTransformEngine
@@ -111,17 +114,33 @@ class DriftMiddleware:
 
         start_time_ns = time.time_ns()
 
-        # Use replay trace ID if in REPLAY mode, otherwise generate new IDs
-        if replay_trace_id:
-            trace_id = replay_trace_id
-        else:
-            trace_id = str(uuid.uuid4()).replace("-", "")
+        # Create OpenTelemetry span
+        from ...core.drift_sdk import TuskDrift
+        sdk = TuskDrift.get_instance()
+        tracer = sdk.get_tracer()
 
-        span_id = str(uuid.uuid4()).replace("-", "")[:16]
+        method = request.method
+        path = request.path
+        span_name = f"{method} {path}"
 
-        # Set trace context for child spans (e.g., outbound HTTP calls)
-        trace_token = current_trace_id_context.set(trace_id)
-        span_token = current_span_id_context.set(span_id)
+        span = tracer.start_span(
+            name=span_name,
+            kind=OTelSpanKind.SERVER,
+            attributes={
+                TdSpanAttributes.NAME: span_name,
+                TdSpanAttributes.PACKAGE_NAME: "django",
+                TdSpanAttributes.INSTRUMENTATION_NAME: "DjangoInstrumentation",
+                TdSpanAttributes.SUBMODULE_NAME: method,
+                TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
+                TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
+                TdSpanAttributes.IS_ROOT_SPAN: True,
+            },
+        )
+
+        # Make span active
+        ctx = otel_context.get_current()
+        ctx_with_span = set_span_in_context(span, ctx)
+        token = otel_context.attach(ctx_with_span)
 
         # Capture request body
         # Django provides request.body which handles reading and caching
@@ -141,8 +160,6 @@ class DriftMiddleware:
                 pass
 
         # Check if request should be dropped
-        method = request.method
-        path = request.path
         query_string = request.META.get("QUERY_STRING", "")
         target = f"{path}?{query_string}" if query_string else path
 
@@ -154,19 +171,17 @@ class DriftMiddleware:
         if self.transform_engine and self.transform_engine.should_drop_inbound_request(
             method, target, request_headers
         ):
-            # Reset trace context before early return
+            # Reset context before early return
             if replay_token:
                 replay_trace_id_context.reset(replay_token)
-            current_trace_id_context.reset(trace_token)
-            current_span_id_context.reset(span_token)
+            otel_context.detach(token)
+            span.end()
             return self.get_response(request)
 
         # Store metadata on request for later use
         request._drift_start_time_ns = start_time_ns  # type: ignore
-        request._drift_trace_id = trace_id  # type: ignore
-        request._drift_span_id = span_id  # type: ignore
-        request._drift_trace_token = trace_token  # type: ignore
-        request._drift_span_token = span_token  # type: ignore
+        request._drift_span = span  # type: ignore
+        request._drift_token = token  # type: ignore
         request._drift_replay_token = replay_token  # type: ignore
         request._drift_request_body = request_body  # type: ignore
         request._drift_request_body_truncated = body_truncated  # type: ignore
@@ -187,11 +202,11 @@ class DriftMiddleware:
             self._capture_error_span(request, e)
             raise
         finally:
-            # Reset trace context
+            # Reset context
             if replay_token:
                 replay_trace_id_context.reset(replay_token)
-            current_trace_id_context.reset(trace_token)
-            current_span_id_context.reset(span_token)
+            otel_context.detach(token)
+            span.end()
 
     def process_view(
         self,
@@ -224,11 +239,15 @@ class DriftMiddleware:
             response: Django HttpResponse object
         """
         start_time_ns = getattr(request, "_drift_start_time_ns", None)
-        trace_id = getattr(request, "_drift_trace_id", None)
-        span_id = getattr(request, "_drift_span_id", None)
+        span = getattr(request, "_drift_span", None)
 
-        if not all([start_time_ns, trace_id, span_id]):
+        if not start_time_ns or not span or not span.is_recording():
             return
+
+        # Extract trace_id and span_id from the span context
+        span_context = span.get_span_context()
+        trace_id = format(span_context.trace_id, '032x')
+        span_id = format(span_context.span_id, '016x')
 
         end_time_ns = time.time_ns()
         duration_ns = end_time_ns - start_time_ns
@@ -394,11 +413,15 @@ class DriftMiddleware:
             exception: The exception that was raised
         """
         start_time_ns = getattr(request, "_drift_start_time_ns", None)
-        trace_id = getattr(request, "_drift_trace_id", None)
-        span_id = getattr(request, "_drift_span_id", None)
+        span = getattr(request, "_drift_span", None)
 
-        if not all([start_time_ns, trace_id, span_id]):
+        if not start_time_ns or not span or not span.is_recording():
             return
+
+        # Extract trace_id and span_id from the span context
+        span_context = span.get_span_context()
+        trace_id = format(span_context.trace_id, '032x')
+        span_id = format(span_context.span_id, '016x')
 
         end_time_ns = time.time_ns()
         duration_ns = end_time_ns - start_time_ns
