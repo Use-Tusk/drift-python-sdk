@@ -30,8 +30,8 @@ from ..http import HttpSpanData, HttpTransformEngine
 from ..wsgi import (
     build_input_value,
     build_output_value,
-    generate_input_schema_info,
-    generate_output_schema_info,
+    build_input_schema_merges,
+    build_output_schema_merges,
 )
 
 
@@ -328,13 +328,31 @@ class DriftMiddleware:
             input_value = span_data.input_value or input_value
             output_value = span_data.output_value or output_value
 
-        # Generate schemas using WSGI utilities
-        input_schema_info = generate_input_schema_info(
-            input_value, request_body_truncated
-        )
-        output_schema_info = generate_output_schema_info(
-            output_value, response_body_truncated
-        )
+        # Build schema merges and generate schemas
+        # Note: Django uses direct CleanSpanData creation instead of OTel spans,
+        # so we need to generate schemas here instead of in the converter
+        from ...core.json_schema_helper import JsonSchemaHelper
+
+        input_schema_merges_dict = build_input_schema_merges(input_value, request_body_truncated)
+        output_schema_merges_dict = build_output_schema_merges(output_value, response_body_truncated)
+
+        # Convert dict back to SchemaMerge objects for JsonSchemaHelper
+        from ...core.json_schema_helper import SchemaMerge, EncodingType, DecodedType
+
+        def dict_to_schema_merges(merges_dict):
+            result = {}
+            for key, merge_data in merges_dict.items():
+                encoding = EncodingType(merge_data["encoding"]) if "encoding" in merge_data else None
+                decoded_type = DecodedType(merge_data["decoded_type"]) if "decoded_type" in merge_data else None
+                match_importance = merge_data.get("match_importance")
+                result[key] = SchemaMerge(encoding=encoding, decoded_type=decoded_type, match_importance=match_importance)
+            return result
+
+        input_schema_merges = dict_to_schema_merges(input_schema_merges_dict)
+        output_schema_merges = dict_to_schema_merges(output_schema_merges_dict)
+
+        input_schema_info = JsonSchemaHelper.generate_schema_and_hash(input_value, input_schema_merges)
+        output_schema_info = JsonSchemaHelper.generate_schema_and_hash(output_value, output_schema_merges)
 
         from ...core.drift_sdk import TuskDrift
 
@@ -445,11 +463,26 @@ class DriftMiddleware:
             str(exception),
         )
 
-        # Generate schemas
-        input_schema_info = generate_input_schema_info(
-            input_value, request_body_truncated
-        )
-        output_schema_info = generate_output_schema_info(output_value, False)
+        # Build schema merges and generate schemas
+        from ...core.json_schema_helper import JsonSchemaHelper, SchemaMerge, EncodingType, DecodedType
+
+        input_schema_merges_dict = build_input_schema_merges(input_value, request_body_truncated)
+        output_schema_merges_dict = build_output_schema_merges(output_value, False)
+
+        def dict_to_schema_merges(merges_dict):
+            result = {}
+            for key, merge_data in merges_dict.items():
+                encoding = EncodingType(merge_data["encoding"]) if "encoding" in merge_data else None
+                decoded_type = DecodedType(merge_data["decoded_type"]) if "decoded_type" in merge_data else None
+                match_importance = merge_data.get("match_importance")
+                result[key] = SchemaMerge(encoding=encoding, decoded_type=decoded_type, match_importance=match_importance)
+            return result
+
+        input_schema_merges = dict_to_schema_merges(input_schema_merges_dict)
+        output_schema_merges = dict_to_schema_merges(output_schema_merges_dict)
+
+        input_schema_info = JsonSchemaHelper.generate_schema_and_hash(input_value, input_schema_merges)
+        output_schema_info = JsonSchemaHelper.generate_schema_and_hash(output_value, output_schema_merges)
 
         from ...core.drift_sdk import TuskDrift
 

@@ -317,8 +317,7 @@ class RequestsInstrumentation(InstrumentationBase):
 
             input_value = create_mock_input_value(raw_input_value)
 
-            # ===== GENERATE SCHEMAS AND HASHES (matches Node SDK) =====
-            # Create schema merge hints for input (same as in _create_span)
+            # Create schema merge hints for input (centralized schema generation)
             input_schema_merges = {
                 "headers": SchemaMerge(match_importance=0.0),
             }
@@ -329,56 +328,25 @@ class RequestsInstrumentation(InstrumentationBase):
                     decoded_type=self._get_decoded_type_from_content_type(request_content_type),
                 )
 
-            # Generate schema and hashes for CLI matching
-            input_result = JsonSchemaHelper.generate_schema_and_hash(input_value, input_schema_merges)
+            # Use centralized mock finding utility (matches Node SDK pattern)
+            from ...core.mock_utils import find_mock_response_sync
 
-            # Create mock span for matching
-            # Convert timestamp from milliseconds to Timestamp object
-            timestamp_ms = time.time() * 1000
-            timestamp_seconds = int(timestamp_ms // 1000)
-            timestamp_nanos = int((timestamp_ms % 1000) * 1_000_000)
-
-            from ...core.types import Timestamp, Duration
-
-            mock_span = CleanSpanData(
+            mock_response_output = find_mock_response_sync(
+                sdk=sdk,
                 trace_id=trace_id,
                 span_id=span_id,
-                parent_span_id=None,
                 name=f"{method.upper()} {parsed_url.path or '/'}",
                 package_name=parsed_url.scheme,
                 package_type=PackageType.HTTP,
                 instrumentation_name="RequestsInstrumentation",
                 submodule_name=method.upper(),
                 input_value=input_value,
-                output_value=None,
-                # ===== ADD SCHEMA/HASH METADATA (matches Node SDK) =====
-                input_schema=input_result.schema,
-                input_schema_hash=input_result.decoded_schema_hash,
-                input_value_hash=input_result.decoded_value_hash,
                 kind=SpanKind.CLIENT,
-                status=SpanStatus(code=StatusCode.UNSPECIFIED, message=""),
-                timestamp=Timestamp(seconds=timestamp_seconds, nanos=timestamp_nanos),
-                duration=Duration(seconds=0, nanos=0),
-                is_root_span=False,
-                is_pre_app_start=False,
+                input_schema_merges=input_schema_merges,
             )
 
-            # Request mock from CLI (synchronous for requests library)
-            # Get replay trace ID from context (matches Node.js behavior)
-            replay_trace_id = replay_trace_id_context.get()
-
-            mock_request = MockRequestInput(
-                test_id=replay_trace_id or "",  # ✅ Uses replay trace ID from context
-                outbound_span=mock_span,
-            )
-
-            mock_response_output = sdk.request_mock_sync(mock_request)
-
-            if not mock_response_output.found:
-                logger.debug(
-                    f"No mock found for {method} {url} "
-                    f"(replay_trace_id={replay_trace_id}, span_trace_id={trace_id})"
-                )
+            if not mock_response_output or not mock_response_output.found:
+                logger.debug(f"No mock found for {method} {url} (trace_id={trace_id})")
                 return None
 
             # Create mocked response object
@@ -614,23 +582,18 @@ class RequestsInstrumentation(InstrumentationBase):
             if response_body_truncated:
                 output_schema_merges["bodyProcessingError"] = SchemaMerge(match_importance=1.0)
 
-            # ===== GENERATE SCHEMAS AND HASHES =====
-            input_result = JsonSchemaHelper.generate_schema_and_hash(input_value, input_schema_merges)
-            output_result = JsonSchemaHelper.generate_schema_and_hash(output_value, output_schema_merges)
-
             # ===== SET SPAN ATTRIBUTES =====
             span.set_attribute(TdSpanAttributes.INPUT_VALUE, json.dumps(input_value))
             span.set_attribute(TdSpanAttributes.OUTPUT_VALUE, json.dumps(output_value))
 
-            # Set schemas
-            span.set_attribute(TdSpanAttributes.INPUT_SCHEMA, json.dumps(input_result.schema.to_primitive()))
-            span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA, json.dumps(output_result.schema.to_primitive()))
+            # Set schema merges (schemas will be generated at export time)
+            from ..wsgi.utilities import _schema_merges_to_dict
 
-            # Set hashes
-            span.set_attribute(TdSpanAttributes.INPUT_SCHEMA_HASH, input_result.decoded_schema_hash)
-            span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA_HASH, output_result.decoded_schema_hash)
-            span.set_attribute(TdSpanAttributes.INPUT_VALUE_HASH, input_result.decoded_value_hash)
-            span.set_attribute(TdSpanAttributes.OUTPUT_VALUE_HASH, output_result.decoded_value_hash)
+            input_schema_merges_dict = _schema_merges_to_dict(input_schema_merges)
+            output_schema_merges_dict = _schema_merges_to_dict(output_schema_merges)
+
+            span.set_attribute(TdSpanAttributes.INPUT_SCHEMA_MERGES, json.dumps(input_schema_merges_dict))
+            span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA_MERGES, json.dumps(output_schema_merges_dict))
 
             # Set transform metadata if present
             if transform_metadata:

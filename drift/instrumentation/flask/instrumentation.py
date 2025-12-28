@@ -32,10 +32,10 @@ from ..wsgi import (
     ResponseBodyCapture,
     build_input_value,
     build_output_value,
+    build_input_schema_merges,
+    build_output_schema_merges,
     capture_request_body,
     extract_headers,
-    generate_input_schema_info,
-    generate_output_schema_info,
     parse_status_line,
 )
 
@@ -316,19 +316,12 @@ def _finalize_span(
         # Set output value
         span.set_attribute(TdSpanAttributes.OUTPUT_VALUE, json.dumps(output_value))
 
-        # Generate schemas and hashes
-        input_schema_info = generate_input_schema_info(input_value_dict, request_body_truncated)
-        output_schema_info = generate_output_schema_info(
-            output_value, response_body_truncated, decoded_type
-        )
+        # Build and set schema merge hints (schemas will be generated at export time)
+        input_schema_merges = build_input_schema_merges(input_value_dict, request_body_truncated)
+        output_schema_merges = build_output_schema_merges(output_value, response_body_truncated)
 
-        # Set schema attributes (convert JsonSchema to dict first)
-        span.set_attribute(TdSpanAttributes.INPUT_SCHEMA, json.dumps(input_schema_info.schema.to_primitive()))
-        span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA, json.dumps(output_schema_info.schema.to_primitive()))
-        span.set_attribute(TdSpanAttributes.INPUT_SCHEMA_HASH, input_schema_info.decoded_schema_hash)
-        span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA_HASH, output_schema_info.decoded_schema_hash)
-        span.set_attribute(TdSpanAttributes.INPUT_VALUE_HASH, input_schema_info.decoded_value_hash)
-        span.set_attribute(TdSpanAttributes.OUTPUT_VALUE_HASH, output_schema_info.decoded_value_hash)
+        span.set_attribute(TdSpanAttributes.INPUT_SCHEMA_MERGES, json.dumps(input_schema_merges))
+        span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA_MERGES, json.dumps(output_schema_merges))
 
         # Set transform metadata if present
         if transform_metadata:

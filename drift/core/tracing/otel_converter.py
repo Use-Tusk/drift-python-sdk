@@ -195,6 +195,64 @@ def get_attribute_as_bool(attributes: dict, key: str, default: bool = False) -> 
     return bool(value)
 
 
+def get_attribute_as_schema_merges(attributes: dict, key: str) -> dict | None:
+    """Get attribute as SchemaMerges by parsing JSON string.
+
+    Args:
+        attributes: Span attributes dictionary
+        key: Attribute key
+
+    Returns:
+        SchemaMerges dictionary or None if not found/invalid
+    """
+    from ..json_schema_helper import SchemaMerge, EncodingType, DecodedType
+
+    value = attributes.get(key)
+    if value is None:
+        return None
+
+    if isinstance(value, str):
+        try:
+            merges_dict = json.loads(value)
+            if not isinstance(merges_dict, dict):
+                return None
+
+            # Convert dict to SchemaMerge objects
+            result = {}
+            for field_key, merge_data in merges_dict.items():
+                if not isinstance(merge_data, dict):
+                    continue
+
+                encoding = None
+                if "encoding" in merge_data:
+                    try:
+                        encoding = EncodingType(merge_data["encoding"])
+                    except (ValueError, KeyError):
+                        pass
+
+                decoded_type = None
+                if "decoded_type" in merge_data:
+                    try:
+                        decoded_type = DecodedType(merge_data["decoded_type"])
+                    except (ValueError, KeyError):
+                        pass
+
+                match_importance = merge_data.get("match_importance")
+
+                result[field_key] = SchemaMerge(
+                    encoding=encoding,
+                    decoded_type=decoded_type,
+                    match_importance=match_importance
+                )
+
+            return result
+        except json.JSONDecodeError:
+            logger.warning(f"Failed to parse attribute {key} as JSON: {value[:100]}")
+            return None
+
+    return None
+
+
 def parse_package_type(package_type_str: str) -> PackageType:
     """Parse package type string to PackageType enum."""
     try:
@@ -244,15 +302,23 @@ def otel_span_to_clean_span_data(otel_span: ReadableSpan) -> CleanSpanData:
     input_value = get_attribute_as_dict(attributes, TdSpanAttributes.INPUT_VALUE) or {}
     output_value = get_attribute_as_dict(attributes, TdSpanAttributes.OUTPUT_VALUE) or {}
 
-    # Extract schemas
-    input_schema = get_attribute_as_dict(attributes, TdSpanAttributes.INPUT_SCHEMA)
-    output_schema = get_attribute_as_dict(attributes, TdSpanAttributes.OUTPUT_SCHEMA)
+    # Extract schema merges
+    input_schema_merges = get_attribute_as_schema_merges(attributes, TdSpanAttributes.INPUT_SCHEMA_MERGES)
+    output_schema_merges = get_attribute_as_schema_merges(attributes, TdSpanAttributes.OUTPUT_SCHEMA_MERGES)
 
-    # Extract hashes
-    input_schema_hash = get_attribute_as_str(attributes, TdSpanAttributes.INPUT_SCHEMA_HASH)
-    output_schema_hash = get_attribute_as_str(attributes, TdSpanAttributes.OUTPUT_SCHEMA_HASH)
-    input_value_hash = get_attribute_as_str(attributes, TdSpanAttributes.INPUT_VALUE_HASH)
-    output_value_hash = get_attribute_as_str(attributes, TdSpanAttributes.OUTPUT_VALUE_HASH)
+    # Generate schemas and hashes at export time
+    from ..json_schema_helper import JsonSchemaHelper
+
+    input_schema_result = JsonSchemaHelper.generate_schema_and_hash(input_value, input_schema_merges)
+    output_schema_result = JsonSchemaHelper.generate_schema_and_hash(output_value, output_schema_merges)
+
+    # Extract computed values
+    input_schema = input_schema_result.schema.to_primitive()
+    output_schema = output_schema_result.schema.to_primitive()
+    input_schema_hash = input_schema_result.decoded_schema_hash
+    output_schema_hash = output_schema_result.decoded_schema_hash
+    input_value_hash = input_schema_result.decoded_value_hash
+    output_value_hash = output_schema_result.decoded_value_hash
 
     # Extract flags
     is_pre_app_start = get_attribute_as_bool(attributes, TdSpanAttributes.IS_PRE_APP_START)
