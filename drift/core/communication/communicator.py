@@ -18,9 +18,7 @@ from .types import (
     CliMessage,
     ConnectRequest,
     EnvVarRequest,
-    EnvVarResponse,
     GetMockRequest,
-    GetMockResponse,
     InstrumentationVersionMismatchAlert,
     MessageType,
     MockRequestInput,
@@ -190,7 +188,7 @@ class ProtobufCommunicator:
         )
 
         await self._send_protobuf_message(sdk_message)
-        
+
         # Wait for connect response from CLI
         await self._receive_connect_response(request_id)
 
@@ -253,7 +251,7 @@ class ProtobufCommunicator:
             ConnectionError: If connection fails
             TimeoutError: If connection times out
         """
-        logger.info(f"[CONNECT_SYNC] Starting synchronous connection")
+        logger.info("[CONNECT_SYNC] Starting synchronous connection")
         # Determine address
         if connection_info:
             if "socketPath" in connection_info:
@@ -323,8 +321,12 @@ class ProtobufCommunicator:
                 if response.success:
                     logger.debug("CLI acknowledged connection successfully")
                     self._connected = True
-                    logger.info(f"[CONNECT_SYNC] Connection successful! Socket is: {self._socket}")
-                    logger.info(f"[CONNECT_SYNC] _connected={self._connected}, is_connected={self.is_connected}")
+                    logger.info(
+                        f"[CONNECT_SYNC] Connection successful! Socket is: {self._socket}"
+                    )
+                    logger.info(
+                        f"[CONNECT_SYNC] _connected={self._connected}, is_connected={self.is_connected}"
+                    )
                 else:
                     error_msg = response.error or "Unknown error"
                     raise ConnectionError(f"CLI rejected connection: {error_msg}")
@@ -340,7 +342,9 @@ class ProtobufCommunicator:
             self._cleanup()
             raise ConnectionError(f"Socket error: {e}") from e
 
-        logger.info(f"[CONNECT_SYNC] Exiting connect_sync(). Socket still open: {self._socket is not None}")
+        logger.info(
+            f"[CONNECT_SYNC] Exiting connect_sync(). Socket still open: {self._socket is not None}"
+        )
 
     async def disconnect(self) -> None:
         """Disconnect from CLI."""
@@ -625,8 +629,8 @@ class ProtobufCommunicator:
     ) -> Any:
         """Execute a synchronous request using a dedicated connection.
 
-        Creates a new socket for each sync request to avoid message buffering issues
-        with the async connection. This matches Node.js behavior of spawning child processes.
+        Creates a new socket for each sync request to avoid message buffering
+        issues with the async connection.
         """
         # Always create a new connection for sync requests
         # This avoids reading buffered messages from the async connection
@@ -720,50 +724,57 @@ class ProtobufCommunicator:
             return {}
 
         try:
+
             def value_to_python(value):
                 """Convert protobuf Value to Python type."""
-                if hasattr(value, 'null_value'):
+                if hasattr(value, "null_value"):
                     return None
-                elif hasattr(value, 'number_value'):
+                elif hasattr(value, "number_value"):
                     return value.number_value
-                elif hasattr(value, 'string_value'):
+                elif hasattr(value, "string_value"):
                     return value.string_value
-                elif hasattr(value, 'bool_value'):
+                elif hasattr(value, "bool_value"):
                     return value.bool_value
-                elif hasattr(value, 'struct_value') and value.struct_value:
+                elif hasattr(value, "struct_value") and value.struct_value:
                     return struct_to_dict(value.struct_value)
-                elif hasattr(value, 'list_value') and value.list_value:
+                elif hasattr(value, "list_value") and value.list_value:
                     return [value_to_python(v) for v in value.list_value.values]
                 return None
-            
+
             def struct_to_dict(s):
                 """Convert protobuf Struct to Python dict."""
-                if not hasattr(s, 'fields'):
+                if not hasattr(s, "fields"):
                     return {}
                 result = {}
                 for key, value in s.fields.items():
                     result[key] = value_to_python(value)
                 return result
-            
+
             data = struct_to_dict(struct)
-            
+
             if "response" in data:
                 mock_interaction = data["response"]
-                
-                if isinstance(mock_interaction, dict) and "response" in mock_interaction:
+
+                if (
+                    isinstance(mock_interaction, dict)
+                    and "response" in mock_interaction
+                ):
                     response_obj = mock_interaction["response"]
                     if isinstance(response_obj, dict) and "body" in response_obj:
                         return response_obj["body"] or {}
                     elif isinstance(response_obj, dict):
                         return response_obj
-                
-                if isinstance(mock_interaction, dict) and "Response" in mock_interaction:
+
+                if (
+                    isinstance(mock_interaction, dict)
+                    and "Response" in mock_interaction
+                ):
                     response_obj = mock_interaction["Response"]
                     if isinstance(response_obj, dict) and "Body" in response_obj:
                         return response_obj["Body"] or {}
-                
+
                 return mock_interaction
-            
+
             return data
 
         except Exception as e:
@@ -798,7 +809,8 @@ class ProtobufCommunicator:
     def _cleanup(self) -> None:
         """Clean up resources."""
         import traceback
-        logger.warning(f"[CLEANUP] _cleanup() called! Stack trace:")
+
+        logger.warning("[CLEANUP] _cleanup() called! Stack trace:")
         logger.warning("".join(traceback.format_stack()))
 
         self._connected = False
@@ -807,46 +819,10 @@ class ProtobufCommunicator:
 
         if self._socket:
             try:
-                logger.warning(f"[CLEANUP] Closing socket")
+                logger.warning("[CLEANUP] Closing socket")
                 self._socket.close()
             except Exception:
                 pass
             self._socket = None
 
         self._pending_requests.clear()
-
-    # ========== Legacy API (for backwards compatibility) ==========
-
-    async def request_mock(self, request: GetMockRequest) -> GetMockResponse:
-        """Request mocked response data from CLI (legacy API).
-
-        Prefer request_mock_async() for new code.
-        """
-        if not self.is_connected:
-            raise ConnectionError("Not connected to CLI")
-
-        mock_input = MockRequestInput(
-            test_id=request.test_id,
-            outbound_span=request.outbound_span,
-        )
-
-        result = await self.request_mock_async(mock_input)
-
-        return GetMockResponse(
-            request_id=request.request_id,
-            found=result.found,
-            response_data=result.response,
-            error=result.error,
-        )
-
-    async def request_env_vars(self, request: EnvVarRequest) -> EnvVarResponse:
-        """Request environment variables from CLI (legacy API)."""
-        if not self.is_connected:
-            raise ConnectionError("Not connected to CLI")
-
-        env_vars = self.request_env_vars_sync(request.trace_test_server_span_id)
-
-        return EnvVarResponse(
-            request_id=request.request_id,
-            env_vars=env_vars,
-        )

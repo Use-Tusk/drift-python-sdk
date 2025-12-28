@@ -6,11 +6,11 @@ import unittest
 from drift.instrumentation.wsgi import (
     build_input_value,
     build_output_value,
+    build_input_schema_merges,
+    build_output_schema_merges,
     build_url,
     capture_request_body,
     extract_headers,
-    generate_input_schema_info,
-    generate_output_schema_info,
     parse_status_line,
 )
 
@@ -254,43 +254,77 @@ class TestBuildOutputValue(unittest.TestCase):
         self.assertEqual(output_value["bodyProcessingError"], "truncated")
 
 
-class TestGenerateSchemaInfo(unittest.TestCase):
-    """Test schema generation functions."""
+class TestBuildSchemaMerges(unittest.TestCase):
+    """Test schema merge builder functions."""
 
-    def test_generates_input_schema(self):
-        """Test input schema generation."""
+    def test_builds_input_schema_merges(self):
+        """Test input schema merge building."""
         input_value = {
             "method": "GET",
             "url": "http://example.com/test",
             "headers": {"Content-Type": "application/json"},
         }
-        schema_info = generate_input_schema_info(input_value)
-        self.assertIsNotNone(schema_info.schema)
-        self.assertIsNotNone(schema_info.decoded_schema_hash)
-        self.assertIsNotNone(schema_info.decoded_value_hash)
+        schema_merges = build_input_schema_merges(input_value)
 
-    def test_generates_output_schema(self):
-        """Test output schema generation."""
-        output_value = {
-            "statusCode": 200,
-            "statusMessage": "OK",
-            "headers": {"Content-Type": "application/json"},
-        }
-        schema_info = generate_output_schema_info(output_value)
-        self.assertIsNotNone(schema_info.schema)
-        self.assertIsNotNone(schema_info.decoded_schema_hash)
-        self.assertIsNotNone(schema_info.decoded_value_hash)
+        # Should have headers merge
+        self.assertIn("headers", schema_merges)
+        self.assertEqual(schema_merges["headers"]["match_importance"], 0.0)
 
-    def test_handles_body_encoding(self):
-        """Test schema generation with BASE64 encoded body."""
+        # Should not have body merge (no body present)
+        self.assertNotIn("body", schema_merges)
+
+    def test_builds_input_schema_merges_with_body(self):
+        """Test input schema merge building with body."""
         input_value = {
             "method": "POST",
             "url": "http://example.com/api",
             "body": base64.b64encode(b"test data").decode("ascii"),
         }
-        schema_info = generate_input_schema_info(input_value)
-        # Schema should indicate BASE64 encoding
-        self.assertIsNotNone(schema_info.schema)
+        schema_merges = build_input_schema_merges(input_value)
+
+        # Should have body merge with BASE64 encoding
+        self.assertIn("body", schema_merges)
+        self.assertEqual(schema_merges["body"]["encoding"], 1)  # BASE64 = 1
+
+    def test_builds_input_schema_merges_with_truncation(self):
+        """Test input schema merge building with truncation."""
+        input_value = {
+            "method": "POST",
+            "url": "http://example.com/api",
+            "body": "encoded_body",
+            "bodyProcessingError": "truncated",
+        }
+        schema_merges = build_input_schema_merges(input_value, body_truncated=True)
+
+        # Should have bodyProcessingError merge
+        self.assertIn("bodyProcessingError", schema_merges)
+        self.assertEqual(schema_merges["bodyProcessingError"]["match_importance"], 1.0)
+
+    def test_builds_output_schema_merges(self):
+        """Test output schema merge building."""
+        output_value = {
+            "statusCode": 200,
+            "statusMessage": "OK",
+            "headers": {"Content-Type": "application/json"},
+        }
+        schema_merges = build_output_schema_merges(output_value)
+
+        # Should have headers merge
+        self.assertIn("headers", schema_merges)
+        self.assertEqual(schema_merges["headers"]["match_importance"], 0.0)
+
+    def test_builds_output_schema_merges_with_body(self):
+        """Test output schema merge building with body."""
+        output_value = {
+            "statusCode": 200,
+            "statusMessage": "OK",
+            "body": base64.b64encode(b"response").decode("ascii"),
+        }
+        schema_merges = build_output_schema_merges(output_value)
+
+        # Should have body merge with BASE64 encoding
+        self.assertIn("body", schema_merges)
+        self.assertEqual(schema_merges["body"]["encoding"], 1)  # BASE64 = 1
 
 
 if __name__ == "__main__":
