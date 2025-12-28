@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import json
 import time
-import uuid
 from functools import wraps
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Callable, override
@@ -15,8 +14,14 @@ if TYPE_CHECKING:
     Receive = Callable[[], Awaitable[dict[str, Any]]]
     Send = Callable[[dict[str, Any]], Awaitable[None]]
 
+from opentelemetry import context as otel_context
+from opentelemetry import trace
+from opentelemetry.trace import SpanKind as OTelSpanKind
+from opentelemetry.trace import Status, StatusCode as OTelStatusCode, set_span_in_context
+
 from ...core.drift_sdk import TuskDrift
 from ...core.json_schema_helper import JsonSchemaHelper, SchemaMerge
+from ...core.tracing import TdSpanAttributes
 from ...core.types import (
     CleanSpanData,
     Duration,
@@ -25,8 +30,6 @@ from ...core.types import (
     SpanStatus,
     StatusCode,
     Timestamp,
-    current_trace_id_context,
-    current_span_id_context,
 )
 from ..base import InstrumentationBase
 from ..http import HttpSpanData, HttpTransformEngine
@@ -140,7 +143,12 @@ async def _handle_replay_request(
     if should_fetch_env_vars:
         try:
             env_vars = sdk.request_env_vars_sync(replay_trace_id)
-            # TODO: Store env vars somewhere (EnvVarTracker needs to be implemented)
+
+            # Store in tracker for env instrumentation to use
+            from ..env import EnvVarTracker
+            tracker = EnvVarTracker.get_instance()
+            tracker.set_env_vars(replay_trace_id, env_vars)
+
             logger.debug(f"[FastAPIInstrumentation] Fetched {len(env_vars)} env vars from CLI for trace {replay_trace_id}")
         except Exception as e:
             logger.error(f"[FastAPIInstrumentation] Failed to fetch env vars from CLI: {e}")
@@ -155,18 +163,36 @@ async def _handle_replay_request(
             if k.decode("utf-8", errors="replace").lower() != "accept-encoding"
         ]
 
-    # Set replay trace context using context variable
+    # Set replay trace context using context variable (for CLI communication)
+    from ...core.types import replay_trace_id_context
     replay_token = replay_trace_id_context.set(replay_trace_id)
 
     try:
-        # Generate span IDs
+        # Get tracer and create span
         start_time_ns = time.time_ns()
-        trace_id = replay_trace_id
-        span_id = str(uuid.uuid4()).replace("-", "")[:16]
+        route = scope.get("route")
+        route_path = getattr(route, "path", None) if route else None
+        span_name = f"{method} {route_path or raw_path}"
 
-        # Set trace context for child spans (e.g., outbound HTTP calls)
-        trace_token = current_trace_id_context.set(trace_id)
-        span_token = current_span_id_context.set(span_id)
+        tracer = sdk.get_tracer()
+        span = tracer.start_span(
+            name=span_name,
+            kind=OTelSpanKind.SERVER,
+            attributes={
+                TdSpanAttributes.NAME: span_name,
+                TdSpanAttributes.PACKAGE_NAME: "fastapi",
+                TdSpanAttributes.INSTRUMENTATION_NAME: "FastAPIInstrumentation",
+                TdSpanAttributes.SUBMODULE_NAME: method,
+                TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
+                TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
+                TdSpanAttributes.IS_ROOT_SPAN: True,
+            },
+        )
+
+        # Make span active
+        ctx = otel_context.get_current()
+        ctx_with_span = set_span_in_context(span, ctx)
+        token = otel_context.attach(ctx_with_span)
 
         response_data: dict[str, Any] = {}
         request_body_parts: list[bytes] = []
@@ -222,7 +248,8 @@ async def _handle_replay_request(
         await original_call(app, scope, wrapped_receive, wrapped_send)
         request_body = b"".join(request_body_parts) if request_body_parts else None
         response_body = b"".join(response_body_parts) if response_body_parts else None
-        _capture_span(
+        _finalize_span(
+            span,
             scope,
             response_data,
             request_body,
@@ -230,15 +257,13 @@ async def _handle_replay_request(
             response_body,
             response_body_truncated,
             start_time_ns,
-            trace_id,
-            span_id,
             transform_engine,
         )
     finally:
         # Reset context
         replay_trace_id_context.reset(replay_token)
-        current_trace_id_context.reset(trace_token)
-        current_span_id_context.reset(span_token)
+        otel_context.detach(token)
+        span.end()
 
 
 async def _handle_request(
@@ -277,12 +302,32 @@ async def _handle_request(
 
     # RECORD mode or DISABLED mode
     start_time_ns = time.time_ns()
-    trace_id = str(uuid.uuid4()).replace("-", "")
-    span_id = str(uuid.uuid4()).replace("-", "")[:16]
 
-    # Set trace context for child spans (e.g., outbound HTTP calls)
-    trace_token = current_trace_id_context.set(trace_id)
-    span_token = current_span_id_context.set(span_id)
+    # Get route for span name
+    route = scope.get("route")
+    route_path = getattr(route, "path", None) if route else None
+    span_name = f"{method} {route_path or raw_path}"
+
+    # Create OpenTelemetry span
+    tracer = sdk.get_tracer()
+    span = tracer.start_span(
+        name=span_name,
+        kind=OTelSpanKind.SERVER,
+        attributes={
+            TdSpanAttributes.NAME: span_name,
+            TdSpanAttributes.PACKAGE_NAME: "fastapi",
+            TdSpanAttributes.INSTRUMENTATION_NAME: "FastAPIInstrumentation",
+            TdSpanAttributes.SUBMODULE_NAME: method,
+            TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
+            TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
+            TdSpanAttributes.IS_ROOT_SPAN: True,
+        },
+    )
+
+    # Make span active for child spans (e.g., outbound HTTP calls)
+    ctx = otel_context.get_current()
+    ctx_with_span = set_span_in_context(span, ctx)
+    token = otel_context.attach(ctx_with_span)
 
     response_data: dict[str, Any] = {}
     request_body_parts: list[bytes] = []
@@ -343,7 +388,8 @@ async def _handle_request(
         await original_call(app, scope, wrapped_receive, wrapped_send)
         request_body = b"".join(request_body_parts) if request_body_parts else None
         response_body = b"".join(response_body_parts) if response_body_parts else None
-        _capture_span(
+        _finalize_span(
+            span,
             scope,
             response_data,
             request_body,
@@ -351,8 +397,6 @@ async def _handle_request(
             response_body,
             response_body_truncated,
             start_time_ns,
-            trace_id,
-            span_id,
             transform_engine,
         )
     except Exception as e:
@@ -361,7 +405,8 @@ async def _handle_request(
         response_data["error_type"] = type(e).__name__
         request_body = b"".join(request_body_parts) if request_body_parts else None
         response_body = b"".join(response_body_parts) if response_body_parts else None
-        _capture_span(
+        _finalize_span(
+            span,
             scope,
             response_data,
             request_body,
@@ -369,18 +414,17 @@ async def _handle_request(
             response_body,
             response_body_truncated,
             start_time_ns,
-            trace_id,
-            span_id,
             transform_engine,
         )
         raise
     finally:
         # Reset trace context
-        current_trace_id_context.reset(trace_token)
-        current_span_id_context.reset(span_token)
+        otel_context.detach(token)
+        span.end()
 
 
-def _capture_span(
+def _finalize_span(
+    span: "trace.Span",
     scope: Scope,
     response_data: dict[str, Any],
     request_body: bytes | None,
@@ -388,13 +432,9 @@ def _capture_span(
     response_body: bytes | None,
     response_body_truncated: bool,
     start_time_ns: int,
-    trace_id: str,
-    span_id: str,
     transform_engine: HttpTransformEngine | None,
 ) -> None:
-    """Create and collect a span from request/response data"""
-    end_time_ns = time.time_ns()
-    duration_ns = end_time_ns - start_time_ns
+    """Finalize span with request/response data"""
 
     method = scope.get("method", "GET")
     path = scope.get("path", "/")
@@ -451,6 +491,32 @@ def _capture_span(
     if "error_type" in response_data:
         output_value["errorName"] = response_data["error_type"]  # Match Node SDK field name
 
+    # Check if content type should block the trace
+    from ...core.content_type_utils import get_decoded_type, should_block_content_type
+    from ...core.trace_blocking_manager import TraceBlockingManager
+    import logging
+
+    logger = logging.getLogger(__name__)
+    response_headers = response_data.get("headers", {})
+    content_type = response_headers.get("content-type") or response_headers.get("Content-Type")
+    decoded_type = get_decoded_type(content_type)
+
+    if should_block_content_type(decoded_type):
+        # Extract trace_id from span
+        span_context = span.get_span_context()
+        trace_id = format(span_context.trace_id, '032x')
+
+        blocking_mgr = TraceBlockingManager.get_instance()
+        blocking_mgr.block_trace(
+            trace_id,
+            reason=f"binary_content:{decoded_type.name if decoded_type else 'unknown'}"
+        )
+        logger.warning(
+            f"Blocking trace {trace_id} - binary response: {content_type} "
+            f"(decoded as {decoded_type.name if decoded_type else 'unknown'})"
+        )
+        return  # Skip span finalization
+
     transform_metadata = None
     if transform_engine:
         span_data = HttpSpanData(
@@ -464,17 +530,12 @@ def _capture_span(
         transform_metadata = span_data.transform_metadata
 
     sdk = TuskDrift.get_instance()
-    # Derive timestamp from start_time_ns (not datetime.now() which would be end time)
-    timestamp_seconds = start_time_ns // 1_000_000_000
-    timestamp_nanos = start_time_ns % 1_000_000_000
-    duration_seconds = duration_ns // 1_000_000_000
-    duration_nanos = duration_ns % 1_000_000_000
 
     status_code = response_data.get("status_code", 200)
     if status_code >= 400:
-        status = SpanStatus(code=StatusCode.ERROR, message=f"HTTP {status_code}")
+        span.set_status(Status(OTelStatusCode.ERROR, f"HTTP {status_code}"))
     else:
-        status = SpanStatus(code=StatusCode.OK, message="")
+        span.set_status(Status(OTelStatusCode.OK))
 
     # Build schema merge hints including body encoding and truncation flags
     input_schema_merges = dict(HEADER_SCHEMA_MERGES)
@@ -500,39 +561,32 @@ def _capture_span(
         output_value, output_schema_merges
     )
 
-    # Use route template if available (e.g., "/greet/{name}") to avoid cardinality explosion
-    # Falls back to literal path if route not set (e.g., 404 responses)
-    route = scope.get("route")
-    route_path = getattr(route, "path", None) if route else None
-    span_name = f"{method} {route_path or path}"
+    # Set span attributes
+    span.set_attribute(TdSpanAttributes.INPUT_VALUE, json.dumps(input_value))
+    span.set_attribute(TdSpanAttributes.OUTPUT_VALUE, json.dumps(output_value))
+    span.set_attribute(TdSpanAttributes.INPUT_SCHEMA, json.dumps(input_schema_info.schema.to_primitive()))
+    span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA, json.dumps(output_schema_info.schema.to_primitive()))
+    span.set_attribute(TdSpanAttributes.INPUT_SCHEMA_HASH, input_schema_info.decoded_schema_hash)
+    span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA_HASH, output_schema_info.decoded_schema_hash)
+    span.set_attribute(TdSpanAttributes.INPUT_VALUE_HASH, input_schema_info.decoded_value_hash)
+    span.set_attribute(TdSpanAttributes.OUTPUT_VALUE_HASH, output_schema_info.decoded_value_hash)
 
-    span = CleanSpanData(
-        trace_id=trace_id,
-        span_id=span_id,
-        parent_span_id="",
-        name=span_name,
-        package_name="fastapi",
-        instrumentation_name="FastAPIInstrumentation",
-        submodule_name=method,
-        package_type=PackageType.HTTP,
-        kind=SpanKind.SERVER,
-        input_value=input_value,
-        output_value=output_value,
-        input_schema=input_schema_info.schema,
-        output_schema=output_schema_info.schema,
-        input_value_hash=input_schema_info.decoded_value_hash,
-        output_value_hash=output_schema_info.decoded_value_hash,
-        input_schema_hash=input_schema_info.decoded_schema_hash,
-        output_schema_hash=output_schema_info.decoded_schema_hash,
-        status=status,
-        is_pre_app_start=not sdk.app_ready,
-        is_root_span=True,
-        timestamp=Timestamp(seconds=timestamp_seconds, nanos=timestamp_nanos),
-        duration=Duration(seconds=duration_seconds, nanos=duration_nanos),
-        transform_metadata=transform_metadata,
-    )
+    if transform_metadata:
+        span.set_attribute(TdSpanAttributes.TRANSFORM_METADATA, json.dumps(transform_metadata))
 
-    sdk.collect_span(span)
+    # Attach env vars to metadata if present
+    from ..env import EnvVarTracker
+    span_context = span.get_span_context()
+    trace_id = format(span_context.trace_id, '032x')
+    tracker = EnvVarTracker.get_instance()
+    env_vars = tracker.get_env_vars(trace_id)
+    if env_vars:
+        from ...core.types import MetadataObject
+        metadata = MetadataObject(ENV_VARS=env_vars)
+        span.set_attribute(TdSpanAttributes.METADATA, json.dumps(metadata.__dict__))
+
+    # Clear tracker after span finalization
+    tracker.clear_env_vars(trace_id)
 
 
 def _build_url(scope: Scope) -> str:

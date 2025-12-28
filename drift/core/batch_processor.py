@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .types import CleanSpanData
-    from .tracing.adapters.base import SpanExportAdapter
+    from .tracing.span_exporter import TdSpanExporter
 
 logger = logging.getLogger(__name__)
 
@@ -44,17 +44,17 @@ class BatchSpanProcessor:
 
     def __init__(
         self,
-        adapters: list["SpanExportAdapter"],
+        exporter: "TdSpanExporter",
         config: BatchSpanProcessorConfig | None = None,
     ) -> None:
         """
         Initialize the batch processor.
 
         Args:
-            adapters: List of adapters to export spans to
+            exporter: Span exporter to delegate exports to
             config: Optional configuration (uses defaults if not provided)
         """
-        self._adapters = adapters
+        self._exporter = exporter
         self._config = config or BatchSpanProcessorConfig()
         self._queue: deque[CleanSpanData] = deque(maxlen=self._config.max_queue_size)
         self._lock = threading.Lock()
@@ -149,17 +149,20 @@ class BatchSpanProcessor:
         if not batch:
             return
 
+        # Get current adapters from exporter (ensures adapter changes take effect)
+        adapters = self._exporter.get_adapters()
+
         # Export to all adapters
-        for adapter in self._adapters:
+        for adapter in adapters:
             try:
-                # Handle async adapters
+                # Handle async adapters (create new event loop for this thread)
                 if asyncio.iscoroutinefunction(adapter.export_spans):
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
                     try:
-                        loop = asyncio.get_running_loop()
-                        asyncio.create_task(adapter.export_spans(batch))
-                    except RuntimeError:
-                        # No running loop, create one
-                        asyncio.run(adapter.export_spans(batch))
+                        loop.run_until_complete(adapter.export_spans(batch))
+                    finally:
+                        loop.close()
                 else:
                     adapter.export_spans(batch)  # type: ignore
 

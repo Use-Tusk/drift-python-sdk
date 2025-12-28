@@ -208,17 +208,20 @@ def build_output_value(
     return output_value
 
 
-def generate_input_schema_info(
+def build_input_schema_merges(
     input_value: dict[str, Any], body_truncated: bool = False
-):
-    """Generate schema and hash for input_value.
+) -> dict[str, Any]:
+    """Build schema merge hints for HTTP input_value.
+
+    This function creates schema merge metadata that will be used by the exporter
+    to generate schemas at export time (not during request processing).
 
     Args:
         input_value: Input value dictionary
         body_truncated: Whether body was truncated
 
     Returns:
-        Schema info object with schema and hashes
+        Dictionary of schema merge hints (serializable to JSON)
     """
     # Build schema merge hints including body encoding
     input_schema_merges = dict(HEADER_SCHEMA_MERGES)
@@ -227,27 +230,58 @@ def generate_input_schema_info(
     if body_truncated and "bodyProcessingError" in input_value:
         input_schema_merges["bodyProcessingError"] = SchemaMerge(match_importance=1.0)
 
-    return JsonSchemaHelper.generate_schema_and_hash(input_value, input_schema_merges)
+    # Convert to serializable dict format
+    return _schema_merges_to_dict(input_schema_merges)
 
 
-def generate_output_schema_info(
+def build_output_schema_merges(
     output_value: dict[str, Any], body_truncated: bool = False
-):
-    """Generate schema and hash for output_value.
+) -> dict[str, Any]:
+    """Build schema merge hints for HTTP output_value.
+
+    This function creates schema merge metadata that will be used by the exporter
+    to generate schemas at export time (not during request processing).
 
     Args:
         output_value: Output value dictionary
         body_truncated: Whether body was truncated
 
     Returns:
-        Schema info object with schema and hashes
+        Dictionary of schema merge hints (serializable to JSON)
     """
     # Build schema merge hints including body encoding and truncation flags
     output_schema_merges = dict(HEADER_SCHEMA_MERGES)
     if "body" in output_value:
+        # Only set encoding, not decoded_type
+        # The decoded_type causes the schema generator to decode and parse the body,
+        # creating a schema for the parsed object instead of the encoded string.
+        # The CLI will decode based on Content-Type headers during comparison.
         output_schema_merges["body"] = SchemaMerge(encoding=EncodingType.BASE64)
     # Add bodyProcessingError to schema merges if truncated (matches Node SDK)
     if body_truncated and "bodyProcessingError" in output_value:
         output_schema_merges["bodyProcessingError"] = SchemaMerge(match_importance=1.0)
 
-    return JsonSchemaHelper.generate_schema_and_hash(output_value, output_schema_merges)
+    # Convert to serializable dict format
+    return _schema_merges_to_dict(output_schema_merges)
+
+
+def _schema_merges_to_dict(schema_merges: dict[str, SchemaMerge]) -> dict[str, Any]:
+    """Convert SchemaMerge objects to JSON-serializable dict.
+
+    Args:
+        schema_merges: Dictionary of SchemaMerge objects
+
+    Returns:
+        JSON-serializable dictionary
+    """
+    result = {}
+    for key, merge in schema_merges.items():
+        merge_dict = {}
+        if merge.encoding is not None:
+            merge_dict["encoding"] = merge.encoding.value
+        if merge.decoded_type is not None:
+            merge_dict["decoded_type"] = merge.decoded_type.value
+        if merge.match_importance is not None:
+            merge_dict["match_importance"] = merge.match_importance
+        result[key] = merge_dict
+    return result

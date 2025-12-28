@@ -1,0 +1,29 @@
+version: "3.8"
+
+services:
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: ../../../../..
+      dockerfile: python/drift/instrumentation/redis/e2e-tests/Dockerfile
+      args:
+        - TUSK_CLI_VERSION=${TUSK_CLI_VERSION:-latest}
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - TUSK_ANALYTICS_DISABLED=1
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./.tusk:/app/.tusk
+      - ../../../../../python:/sdk
+    working_dir: /app

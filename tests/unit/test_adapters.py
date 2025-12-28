@@ -271,6 +271,8 @@ class TestApiSpanAdapter(unittest.TestCase):
     """Tests for ApiSpanAdapter."""
 
     def setUp(self):
+        # ApiSpanAdapterConfig is used internally by the SDK
+        # These parameters are read from config file, not init params
         self.config = ApiSpanAdapterConfig(
             api_key="test-api-key",
             tusk_backend_base_url="https://api.test.com",
@@ -334,7 +336,7 @@ class TestApiSpanAdapter(unittest.TestCase):
         """Test that the API URL is constructed correctly."""
         self.assertEqual(
             self.adapter._base_url,
-            "https://api.test.com/api/drift/SpanExportService/ExportSpans"
+            "https://api.test.com/api/drift/tusk.drift.backend.v1.SpanExportService/ExportSpans"
         )
 
     def test_aiohttp_not_installed(self):

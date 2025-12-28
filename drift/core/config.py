@@ -1,13 +1,8 @@
-"""Configuration loading and schema for the Tusk Drift SDK.
-
-This module provides configuration types and loading functions that mirror
-the Node SDK's config file schema (.tusk/config.yaml).
-"""
+"""Configuration loading and schema for the Tusk Drift SDK."""
 
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -18,12 +13,14 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ServiceStartConfig:
     """Configuration for service startup command."""
+
     command: Optional[str] = None
 
 
 @dataclass
 class ReadinessCheckConfig:
     """Configuration for service readiness checks."""
+
     command: Optional[str] = None
     timeout: Optional[str] = None
     interval: Optional[str] = None
@@ -32,6 +29,7 @@ class ReadinessCheckConfig:
 @dataclass
 class ServiceConfig:
     """Configuration for the service being instrumented."""
+
     id: Optional[str] = None
     name: Optional[str] = None
     port: Optional[int] = None
@@ -42,18 +40,21 @@ class ServiceConfig:
 @dataclass
 class TracesConfig:
     """Configuration for trace storage."""
+
     dir: Optional[str] = None
 
 
 @dataclass
 class TuskApiConfig:
     """Configuration for the Tusk API."""
+
     url: Optional[str] = None
 
 
 @dataclass
 class TestExecutionConfig:
     """Configuration for test execution."""
+
     concurrency: Optional[int] = None
     timeout: Optional[str] = None
 
@@ -61,12 +62,14 @@ class TestExecutionConfig:
 @dataclass
 class ComparisonConfig:
     """Configuration for span comparison."""
+
     ignore_fields: list[str] = field(default_factory=list)
 
 
 @dataclass
 class RecordingConfig:
     """Configuration for recording behavior."""
+
     sampling_rate: Optional[float] = None
     export_spans: Optional[bool] = None
     enable_env_var_recording: Optional[bool] = None
@@ -81,6 +84,7 @@ class TuskFileConfig:
 
     This matches the Node SDK's TuskConfig interface exactly.
     """
+
     service: Optional[ServiceConfig] = None
     traces: Optional[TracesConfig] = None
     tusk_api: Optional[TuskApiConfig] = None
@@ -98,6 +102,7 @@ class TuskConfig:
     This combines values from initialization parameters, environment variables,
     and the config file.
     """
+
     api_key: Optional[str] = None
     env: Optional[str] = None
     sampling_rate: float = 1.0
@@ -275,7 +280,9 @@ def load_tusk_config() -> Optional[TuskFileConfig]:
             return TuskFileConfig()
 
         if not isinstance(data, dict):
-            logger.warning(f"Config file has invalid format (expected dict, got {type(data).__name__})")
+            logger.warning(
+                f"Config file has invalid format (expected dict, got {type(data).__name__})"
+            )
             return None
 
         config = _parse_file_config(data)

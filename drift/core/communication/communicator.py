@@ -1,17 +1,3 @@
-"""Protobuf communicator for CLI communication.
-
-This module implements the communication layer between the SDK and CLI
-using Protocol Buffers over Unix sockets or TCP.
-
-The communicator supports:
-- Async communication for most operations
-- Sync communication for blocking operations (mocks, env vars)
-- Automatic reconnection on connection loss
-- Request tracking with timeout handling
-
-This implementation mirrors the Node.js SDK's ProtobufCommunicator.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -24,15 +10,15 @@ import traceback
 from dataclasses import dataclass
 from typing import Any
 
+from tusk.drift.core.v1 import GetMockRequest as ProtoGetMockRequest
+
 from ...version import MIN_CLI_VERSION, SDK_VERSION
 from ..types import CleanSpanData
 from .types import (
     CliMessage,
     ConnectRequest,
     EnvVarRequest,
-    EnvVarResponse,
     GetMockRequest,
-    GetMockResponse,
     InstrumentationVersionMismatchAlert,
     MessageType,
     MockRequestInput,
@@ -60,32 +46,15 @@ class CommunicatorConfig:
     """Configuration for ProtobufCommunicator."""
 
     socket_path: str | None = None
-    """Unix socket path. If None, uses TUSK_MOCK_SOCKET env var or default."""
-
     host: str | None = None
-    """TCP host. If set with port, uses TCP instead of Unix socket."""
-
     port: int | None = None
-    """TCP port. If set with host, uses TCP instead of Unix socket."""
-
     connect_timeout: float = DEFAULT_CONNECT_TIMEOUT
-    """Timeout for initial connection (seconds)."""
-
     request_timeout: float = DEFAULT_REQUEST_TIMEOUT
-    """Timeout for individual requests (seconds)."""
-
     auto_reconnect: bool = True
-    """Whether to automatically reconnect on connection loss."""
 
     @classmethod
     def from_env(cls) -> CommunicatorConfig:
-        """Create config from environment variables.
-
-        Environment variables:
-        - TUSK_MOCK_SOCKET: Unix socket path
-        - TUSK_MOCK_HOST: TCP host
-        - TUSK_MOCK_PORT: TCP port
-        """
+        """Create config from environment variables."""
         socket_path = os.environ.get("TUSK_MOCK_SOCKET")
         host = os.environ.get("TUSK_MOCK_HOST")
         port_str = os.environ.get("TUSK_MOCK_PORT")
@@ -99,28 +68,7 @@ class CommunicatorConfig:
 
 
 class ProtobufCommunicator:
-    """Handles communication between SDK and CLI using Protocol Buffers.
-
-    This class manages the socket connection and message framing
-    for bidirectional protobuf communication.
-
-    Message format:
-    - 4-byte big-endian length prefix
-    - Serialized protobuf message
-
-    Usage:
-        config = CommunicatorConfig.from_env()
-        communicator = ProtobufCommunicator(config)
-
-        # Connect to CLI
-        await communicator.connect("my-service")
-
-        # Request mock data (async)
-        mock = await communicator.request_mock_async(MockRequestInput(...))
-
-        # Request mock data (sync - blocks)
-        mock = communicator.request_mock_sync(MockRequestInput(...))
-    """
+    """Handles protobuf communication between SDK and CLI."""
 
     def __init__(self, config: CommunicatorConfig | None = None) -> None:
         self.config = config or CommunicatorConfig.from_env()
@@ -225,25 +173,183 @@ class ProtobufCommunicator:
             raise ConnectionError(f"Socket error: {e}") from e
 
     async def _send_connect_message(self, service_id: str) -> None:
-        """Send the initial connection message to CLI."""
+        """Send the initial connection message to CLI and wait for acknowledgement."""
         connect_request = ConnectRequest(
             service_id=service_id,
             sdk_version=SDK_VERSION,
             min_cli_version=MIN_CLI_VERSION,
         )
 
+        request_id = self._generate_request_id()
         sdk_message = SdkMessage(
             type=MessageType.SDK_CONNECT,
-            request_id=self._generate_request_id(),
+            request_id=request_id,
             connect_request=connect_request.to_proto(),
         )
 
         await self._send_protobuf_message(sdk_message)
 
+        # Wait for connect response from CLI
+        await self._receive_connect_response(request_id)
+
+    async def _receive_connect_response(self, request_id: str) -> None:
+        """Wait for and handle the connect response from CLI."""
+        if not self._socket:
+            raise ConnectionError("Socket not initialized")
+
+        self._socket.settimeout(self.config.connect_timeout)
+
+        try:
+            # Read length prefix
+            length_data = self._recv_exact(4)
+            if not length_data:
+                raise ConnectionError("Connection closed by CLI")
+
+            length = struct.unpack(">I", length_data)[0]
+
+            # Read message data
+            message_data = self._recv_exact(length)
+            if not message_data:
+                raise ConnectionError("Connection closed by CLI")
+
+            cli_message = CliMessage().parse(message_data)
+
+            logger.debug(
+                f"Received connect response: type={cli_message.type}, requestId={cli_message.request_id}"
+            )
+
+            if cli_message.connect_response:
+                response = cli_message.connect_response
+                if response.success:
+                    logger.debug("CLI acknowledged connection successfully")
+                else:
+                    error_msg = response.error or "Unknown error"
+                    raise ConnectionError(f"CLI rejected connection: {error_msg}")
+            else:
+                raise ConnectionError(
+                    f"Expected connect response but got message type: {cli_message.type}"
+                )
+
+        except socket.timeout as e:
+            raise TimeoutError(f"Timeout waiting for connect response: {e}") from e
+
+    def connect_sync(
+        self,
+        connection_info: dict[str, Any] | None = None,
+        service_id: str = "",
+    ) -> None:
+        """Connect to the CLI synchronously and perform handshake.
+
+        This is a synchronous version of connect() that doesn't use async/await.
+        The socket will remain open after this method returns.
+
+        Args:
+            connection_info: Dict with 'socketPath' or 'host'/'port'
+            service_id: Service identifier for the connection
+
+        Raises:
+            ConnectionError: If connection fails
+            TimeoutError: If connection times out
+        """
+        logger.info("[CONNECT_SYNC] Starting synchronous connection")
+        # Determine address
+        if connection_info:
+            if "socketPath" in connection_info:
+                address: tuple[str, int] | str = connection_info["socketPath"]
+            else:
+                address = (connection_info["host"], connection_info["port"])
+        else:
+            address = self._get_socket_address()
+
+        try:
+            # Create appropriate socket type
+            if isinstance(address, str):
+                # Unix socket
+                self._socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                logger.debug(f"Connecting to Unix socket: {address}")
+            else:
+                # TCP socket
+                self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                logger.debug(f"Connecting to TCP: {address}")
+
+            self._socket.settimeout(self.config.connect_timeout)
+            self._socket.connect(address)
+
+            conn_type = "Unix socket" if isinstance(address, str) else "TCP"
+            logger.debug(f"Connected to CLI via protobuf ({conn_type})")
+
+            # Send connect message synchronously
+            connect_request = ConnectRequest(
+                service_id=service_id,
+                sdk_version=SDK_VERSION,
+                min_cli_version=MIN_CLI_VERSION,
+            )
+
+            request_id = self._generate_request_id()
+            sdk_message = SdkMessage(
+                type=MessageType.SDK_CONNECT,
+                request_id=request_id,
+                connect_request=connect_request.to_proto(),
+            )
+
+            # Send message (synchronous socket operation)
+            message_bytes = bytes(sdk_message)
+            length_prefix = struct.pack(">I", len(message_bytes))
+            self._socket.sendall(length_prefix + message_bytes)
+
+            # Receive connect response synchronously
+            # Read length prefix
+            length_data = self._recv_exact(4)
+            if not length_data:
+                raise ConnectionError("Connection closed by CLI")
+
+            length = struct.unpack(">I", length_data)[0]
+
+            # Read message data
+            message_data = self._recv_exact(length)
+            if not message_data:
+                raise ConnectionError("Connection closed by CLI")
+
+            cli_message = CliMessage().parse(message_data)
+
+            logger.debug(
+                f"Received connect response: type={cli_message.type}, requestId={cli_message.request_id}"
+            )
+
+            if cli_message.connect_response:
+                response = cli_message.connect_response
+                if response.success:
+                    logger.debug("CLI acknowledged connection successfully")
+                    self._connected = True
+                    logger.info(
+                        f"[CONNECT_SYNC] Connection successful! Socket is: {self._socket}"
+                    )
+                    logger.info(
+                        f"[CONNECT_SYNC] _connected={self._connected}, is_connected={self.is_connected}"
+                    )
+                else:
+                    error_msg = response.error or "Unknown error"
+                    raise ConnectionError(f"CLI rejected connection: {error_msg}")
+            else:
+                raise ConnectionError(
+                    f"Expected connect response but got message type: {cli_message.type}"
+                )
+
+        except socket.timeout as e:
+            self._cleanup()
+            raise TimeoutError(f"Connection timed out: {e}") from e
+        except (socket.error, OSError) as e:
+            self._cleanup()
+            raise ConnectionError(f"Socket error: {e}") from e
+
+        logger.info(
+            f"[CONNECT_SYNC] Exiting connect_sync(). Socket still open: {self._socket is not None}"
+        )
+
     async def disconnect(self) -> None:
         """Disconnect from CLI."""
         self._cleanup()
-        logger.info("Disconnected from CLI")
+        logger.debug("Disconnected from CLI")
 
     async def request_mock_async(
         self, mock_request: MockRequestInput
@@ -313,21 +419,17 @@ class ProtobufCommunicator:
         """
         request_id = self._generate_request_id()
 
-        # Clean and convert span to protobuf
-        clean_span = self._clean_span(mock_request.outbound_span)
-        proto_span = span_to_proto(clean_span) if clean_span else None
+        # Convert span to protobuf
+        proto_span = mock_request.outbound_span.to_proto()
 
-        # Create SDK message
-        proto_mock_request = GetMockRequest(
+        # Create protobuf SDK message directly
+        proto_mock_request = ProtoGetMockRequest(
             request_id=request_id,
             test_id=mock_request.test_id,
-            outbound_span={"name": "placeholder"},
+            outbound_span=proto_span,
             tags={},
-            stack_trace=getattr(clean_span, "stack_trace", "") if clean_span else "",
-        ).to_proto()
-
-        if proto_span:
-            proto_mock_request.outbound_span = proto_span
+            stack_trace=mock_request.outbound_span.stack_trace or "",
+        )
 
         sdk_message = SdkMessage(
             type=MessageType.MOCK_REQUEST,
@@ -489,30 +591,22 @@ class ProtobufCommunicator:
                 if not message_data:
                     raise ConnectionError("Connection closed by CLI")
 
-                # Parse CLI message
                 cli_message = CliMessage().parse(message_data)
 
                 logger.debug(
-                    f"[ProtobufCommunicator] Received CLI message type: {cli_message.type}, "
-                    f"requestId: {cli_message.request_id}"
+                    f"Received CLI message type: {cli_message.type}, requestId: {cli_message.request_id}"
                 )
 
-                # Handle based on message type
                 if cli_message.request_id == request_id:
                     return self._handle_cli_message(cli_message)
 
-                # Handle other message types (connect response, etc.)
                 if cli_message.connect_response:
                     response = cli_message.connect_response
                     if response.success:
-                        logger.debug(
-                            "[ProtobufCommunicator] CLI acknowledged connection"
-                        )
+                        logger.debug("CLI acknowledged connection")
                         self._session_id = response.session_id
                     else:
-                        logger.error(
-                            f"[ProtobufCommunicator] CLI rejected connection: {response.error}"
-                        )
+                        logger.error(f"CLI rejected connection: {response.error}")
                     continue
 
         except socket.timeout as e:
@@ -533,24 +627,22 @@ class ProtobufCommunicator:
         sdk_message: SdkMessage,
         response_handler: Any,
     ) -> Any:
-        """Execute a synchronous request using the existing connection.
+        """Execute a synchronous request using a dedicated connection.
 
-        Unlike Node.js which spawns a child process, Python can use
-        blocking socket operations directly.
+        Creates a new socket for each sync request to avoid message buffering
+        issues with the async connection.
         """
-        if not self._socket:
-            # Create a new connection for sync request
-            address = self._get_socket_address()
+        # Always create a new connection for sync requests
+        # This avoids reading buffered messages from the async connection
+        address = self._get_socket_address()
 
-            if isinstance(address, str):
-                sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            else:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-            sock.settimeout(SYNC_REQUEST_TIMEOUT)
-            sock.connect(address)
+        if isinstance(address, str):
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         else:
-            sock = self._socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+        sock.settimeout(SYNC_REQUEST_TIMEOUT)
+        sock.connect(address)
 
         try:
             # Serialize and send
@@ -584,9 +676,8 @@ class ProtobufCommunicator:
             return response_handler(cli_message)
 
         finally:
-            # Only close if we created a new socket
-            if sock != self._socket:
-                sock.close()
+            # Always close the sync socket
+            sock.close()
 
     def _handle_cli_message(self, message: CliMessage) -> MockResponseOutput:
         """Handle a CLI message and extract mock response."""
@@ -608,7 +699,6 @@ class ProtobufCommunicator:
             raise ValueError("No mock response in CLI message")
 
         if mock_response.found:
-            # Extract response data from protobuf Struct
             response_data = self._extract_response_data(mock_response.response_data)
             return MockResponseOutput(
                 found=True,
@@ -629,29 +719,66 @@ class ProtobufCommunicator:
         return dict(env_response.env_vars) if env_response.env_vars else {}
 
     def _extract_response_data(self, struct: Any) -> dict[str, Any]:
-        """Extract response data from protobuf Struct.
-
-        The CLI returns response data wrapped in a Struct with a "response" field.
-        """
+        """Extract response data from protobuf Struct."""
         if not struct:
             return {}
 
         try:
-            # betterproto converts Struct to dict-like
-            if hasattr(struct, "items"):
-                data = dict(struct)
-                if "response" in data:
-                    return data["response"]
-                return data
 
-            if isinstance(struct, dict):
-                if "response" in struct:
-                    return struct["response"]
-                return struct
+            def value_to_python(value):
+                """Convert protobuf Value to Python type."""
+                if hasattr(value, "null_value"):
+                    return None
+                elif hasattr(value, "number_value"):
+                    return value.number_value
+                elif hasattr(value, "string_value"):
+                    return value.string_value
+                elif hasattr(value, "bool_value"):
+                    return value.bool_value
+                elif hasattr(value, "struct_value") and value.struct_value:
+                    return struct_to_dict(value.struct_value)
+                elif hasattr(value, "list_value") and value.list_value:
+                    return [value_to_python(v) for v in value.list_value.values]
+                return None
 
-            return {}
+            def struct_to_dict(s):
+                """Convert protobuf Struct to Python dict."""
+                if not hasattr(s, "fields"):
+                    return {}
+                result = {}
+                for key, value in s.fields.items():
+                    result[key] = value_to_python(value)
+                return result
+
+            data = struct_to_dict(struct)
+
+            if "response" in data:
+                mock_interaction = data["response"]
+
+                if (
+                    isinstance(mock_interaction, dict)
+                    and "response" in mock_interaction
+                ):
+                    response_obj = mock_interaction["response"]
+                    if isinstance(response_obj, dict) and "body" in response_obj:
+                        return response_obj["body"] or {}
+                    elif isinstance(response_obj, dict):
+                        return response_obj
+
+                if (
+                    isinstance(mock_interaction, dict)
+                    and "Response" in mock_interaction
+                ):
+                    response_obj = mock_interaction["Response"]
+                    if isinstance(response_obj, dict) and "Body" in response_obj:
+                        return response_obj["Body"] or {}
+
+                return mock_interaction
+
+            return data
+
         except Exception as e:
-            logger.error(f"[ProtobufCommunicator] Failed to extract response data: {e}")
+            logger.error(f"Failed to extract response data: {e}")
             return {}
 
     def _clean_span(self, data: Any) -> Any:
@@ -681,51 +808,21 @@ class ProtobufCommunicator:
 
     def _cleanup(self) -> None:
         """Clean up resources."""
+        import traceback
+
+        logger.warning("[CLEANUP] _cleanup() called! Stack trace:")
+        logger.warning("".join(traceback.format_stack()))
+
         self._connected = False
         self._session_id = None
         self._incoming_buffer.clear()
 
         if self._socket:
             try:
+                logger.warning("[CLEANUP] Closing socket")
                 self._socket.close()
             except Exception:
                 pass
             self._socket = None
 
         self._pending_requests.clear()
-
-    # ========== Legacy API (for backwards compatibility) ==========
-
-    async def request_mock(self, request: GetMockRequest) -> GetMockResponse:
-        """Request mocked response data from CLI (legacy API).
-
-        Prefer request_mock_async() for new code.
-        """
-        if not self.is_connected:
-            raise ConnectionError("Not connected to CLI")
-
-        mock_input = MockRequestInput(
-            test_id=request.test_id,
-            outbound_span=request.outbound_span,
-        )
-
-        result = await self.request_mock_async(mock_input)
-
-        return GetMockResponse(
-            request_id=request.request_id,
-            found=result.found,
-            response_data=result.response,
-            error=result.error,
-        )
-
-    async def request_env_vars(self, request: EnvVarRequest) -> EnvVarResponse:
-        """Request environment variables from CLI (legacy API)."""
-        if not self.is_connected:
-            raise ConnectionError("Not connected to CLI")
-
-        env_vars = self.request_env_vars_sync(request.trace_test_server_span_id)
-
-        return EnvVarResponse(
-            request_id=request.request_id,
-            env_vars=env_vars,
-        )

@@ -1,0 +1,18 @@
+version: "3.8"
+
+services:
+  app:
+    build:
+      context: ../../../../..
+      dockerfile: python/drift/instrumentation/flask/e2e-tests/Dockerfile
+      args:
+        - TUSK_CLI_VERSION=${TUSK_CLI_VERSION:-latest}
+    environment:
+      - PORT=8000
+      - TUSK_ANALYTICS_DISABLED=1
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./.tusk:/app/.tusk
+      - ../../../../..:/workspace  # Mount workspace root
+      - ../../../../../python:/sdk  # Mount SDK for development (writable for pip editable install)
+    working_dir: /app

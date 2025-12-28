@@ -45,6 +45,7 @@ class TraceBlockingManager:
     def __init__(self) -> None:
         self._blocked_trace_ids: Set[str] = set()
         self._trace_timestamps: dict[str, float] = {}
+        self._block_reasons: dict[str, str] = {}
         self._cleanup_thread: threading.Thread | None = None
         self._stop_cleanup = threading.Event()
 
@@ -58,17 +59,19 @@ class TraceBlockingManager:
                     cls._instance._start_cleanup_thread()
         return cls._instance
 
-    def block_trace(self, trace_id: str) -> None:
+    def block_trace(self, trace_id: str, reason: str = "size_limit") -> None:
         """Block a trace ID from being recorded.
 
         Args:
             trace_id: The trace ID to block
+            reason: The reason for blocking (e.g., "size_limit", "binary_content:PNG")
         """
         with self._lock:
             if trace_id not in self._blocked_trace_ids:
                 self._blocked_trace_ids.add(trace_id)
                 self._trace_timestamps[trace_id] = time.time() * 1000  # milliseconds
-                logger.debug(f"Blocked trace: {trace_id}")
+                self._block_reasons[trace_id] = reason
+                logger.debug(f"Blocked trace {trace_id}: {reason}")
 
     def is_trace_blocked(self, trace_id: str) -> bool:
         """Check if a trace ID is blocked.
@@ -82,6 +85,18 @@ class TraceBlockingManager:
         with self._lock:
             return trace_id in self._blocked_trace_ids
 
+    def get_block_reason(self, trace_id: str) -> str | None:
+        """Get the reason a trace was blocked.
+
+        Args:
+            trace_id: The trace ID to check
+
+        Returns:
+            The block reason string, or None if not blocked
+        """
+        with self._lock:
+            return self._block_reasons.get(trace_id)
+
     def unblock_trace(self, trace_id: str) -> None:
         """Unblock a trace ID.
 
@@ -91,6 +106,7 @@ class TraceBlockingManager:
         with self._lock:
             self._blocked_trace_ids.discard(trace_id)
             self._trace_timestamps.pop(trace_id, None)
+            self._block_reasons.pop(trace_id, None)
             logger.debug(f"Unblocked trace: {trace_id}")
 
     def get_blocked_count(self) -> int:
@@ -103,6 +119,7 @@ class TraceBlockingManager:
         with self._lock:
             self._blocked_trace_ids.clear()
             self._trace_timestamps.clear()
+            self._block_reasons.clear()
             logger.debug("Cleared all blocked traces")
 
     def _start_cleanup_thread(self) -> None:
@@ -136,6 +153,7 @@ class TraceBlockingManager:
             for trace_id in expired_traces:
                 self._blocked_trace_ids.discard(trace_id)
                 self._trace_timestamps.pop(trace_id, None)
+                self._block_reasons.pop(trace_id, None)
 
             if expired_traces:
                 logger.debug(f"Cleaned up {len(expired_traces)} expired traces")
@@ -197,14 +215,17 @@ def should_block_span(span: Any) -> bool:
 
     if size > MAX_SPAN_SIZE_BYTES:
         trace_id = getattr(span, "trace_id", "unknown")
+        span_name = getattr(span, "name", "unknown")
         size_mb = size / (1024 * 1024)
 
         logger.warning(
-            f"Blocking trace {trace_id} - span '{getattr(span, 'name', 'unknown')}' "
+            f"Blocking trace {trace_id} - span '{span_name}' "
             f"has estimated size of {size_mb:.2f} MB, exceeding limit of {MAX_SPAN_SIZE_MB} MB"
         )
 
-        TraceBlockingManager.get_instance().block_trace(trace_id)
+        TraceBlockingManager.get_instance().block_trace(
+            trace_id, reason=f"size_limit:{size_mb:.2f}MB"
+        )
         return True
 
     return False

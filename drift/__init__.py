@@ -18,6 +18,7 @@ from .core import (
     load_tusk_config,
     find_project_root,
 )
+from .core.logger import LogLevel, set_log_level, get_log_level
 from .instrumentation.flask import FlaskInstrumentation
 from .instrumentation.fastapi import FastAPIInstrumentation
 from .instrumentation.requests import RequestsInstrumentation
@@ -52,6 +53,10 @@ __all__ = [
     "TuskApiConfig",
     "load_tusk_config",
     "find_project_root",
+    # Logger
+    "LogLevel",
+    "set_log_level",
+    "get_log_level",
     # Instrumentations
     "FlaskInstrumentation",
     "FastAPIInstrumentation",

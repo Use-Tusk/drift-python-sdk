@@ -30,6 +30,8 @@ dependencies = [
     "tusk-drift-schemas>=0.1.9.dev1",
     "aiohttp>=3.9.0",
     "aiofiles>=23.0.0",
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
 ]
 
 [project.optional-dependencies]
