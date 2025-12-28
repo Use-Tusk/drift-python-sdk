@@ -1,0 +1,27 @@
+version: 1
+
+service:
+  id: "flask-http-e2e-test"
+  name: "flask-http-e2e"
+  port: 8000
+  start:
+    command: "python src/app.py"
+  readiness_check:
+    command: "curl -fsS http://localhost:8000/health"
+    timeout: 30s
+    interval: 2s
+
+tusk_api:
+  url: "http://localhost:8000"
+
+test_execution:
+  concurrent_limit: 5
+  batch_size: 5
+  timeout: 30s
+
+recording:
+  sampling_rate: 1.0
+  export_spans: false
+
+replay:
+  enable_telemetry: false
