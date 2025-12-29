@@ -56,3 +56,6 @@ include = ["drift*"]
 
 [tool.setuptools.package-data]
 drift = ["py.typed"]
+
+[tool.uv]
+prerelease = "allow"

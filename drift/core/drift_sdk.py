@@ -467,13 +467,14 @@ class TuskDrift:
             and self.file_config.recording
             and self.file_config.recording.enable_env_var_recording
         ):
-            try:
-                from ..instrumentation.env import EnvInstrumentation
+            # try:
+            #     from ..instrumentation.env import EnvInstrumentation
 
-                _ = EnvInstrumentation(enabled=True)
-                logger.debug("Env instrumentation initialized")
-            except Exception:
-                pass
+            #     _ = EnvInstrumentation(enabled=True)
+            #     logger.debug("Env instrumentation initialized")
+            # except Exception:
+            #     pass
+            pass
 
     def get_tracer(self, name: str = "drift", version: str = "") -> "Tracer":
         """Get OpenTelemetry tracer.

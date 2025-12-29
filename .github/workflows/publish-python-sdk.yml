@@ -23,27 +23,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
         with:
-          python-version: '3.12'
-          cache: 'pip'
+          version: "latest"
+
+      - name: Setup Python
+        run: uv python install 3.12
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+        run: uv sync --all-extras
 
       - name: Override Python package version for testing
         if: env.TEMP_VERSION != ''
         run: |
           sed -i.bak "s/^version = \".*\"/version = \"$TEMP_VERSION\"/" pyproject.toml
 
-      - name: Install Python build tools
-        run: pip install build
-
       - name: Build Python package
-        run: python -m build
+        run: uv build
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
