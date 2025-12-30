@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, override
 
 from .base import ExportResult, SpanExportAdapter
 
 if TYPE_CHECKING:
+    from betterproto.lib.google.protobuf import Struct
+
     from ...types import CleanSpanData
 
 logger = logging.getLogger(__name__)
@@ -62,7 +64,7 @@ class ApiSpanAdapter(SpanExportAdapter):
         return "api"
 
     @override
-    async def export_spans(self, spans: list["CleanSpanData"]) -> ExportResult:
+    async def export_spans(self, spans: list[CleanSpanData]) -> ExportResult:
         """Export spans to the Tusk backend API using native binary protobuf."""
         try:
             import aiohttp
@@ -88,46 +90,36 @@ class ApiSpanAdapter(SpanExportAdapter):
                 "x-td-skip-instrumentation": "true",
             }
 
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    self._base_url, data=request_bytes, headers=headers
-                ) as http_response:
-                    if http_response.status != 200:
-                        error_text = await http_response.text()
-                        raise Exception(
-                            f"API request failed (status {http_response.status}): {error_text}"
-                        )
+            async with (
+                aiohttp.ClientSession() as session,
+                session.post(self._base_url, data=request_bytes, headers=headers) as http_response,
+            ):
+                if http_response.status != 200:
+                    error_text = await http_response.text()
+                    raise Exception(f"API request failed (status {http_response.status}): {error_text}")
 
-                    response_bytes = await http_response.read()
-                    response = ExportSpansResponse().parse(response_bytes)
+                response_bytes = await http_response.read()
+                response = ExportSpansResponse().parse(response_bytes)
 
-                    if not response.success:
-                        raise Exception(
-                            f'API export reported failure: "{response.message}"'
-                        )
+                if not response.success:
+                    raise Exception(f'API export reported failure: "{response.message}"')
 
             logger.debug(f"Successfully exported {len(spans)} spans to remote endpoint")
             return ExportResult.success()
 
         except ImportError as error:
-            logger.error(
-                "aiohttp is required for API adapter. Install it with: pip install aiohttp"
-            )
+            logger.error("aiohttp is required for API adapter. Install it with: pip install aiohttp")
             return ExportResult.failed(error)
         except Exception as error:
             logger.error("Failed to export spans to remote:", exc_info=error)
-            return ExportResult.failed(
-                error
-                if isinstance(error, Exception)
-                else Exception("API export failed")
-            )
+            return ExportResult.failed(error if isinstance(error, Exception) else Exception("API export failed"))
 
     @override
     async def shutdown(self) -> None:
         """Shutdown and cleanup."""
         pass
 
-    def _transform_span_to_protobuf(self, clean_span: "CleanSpanData") -> Any:
+    def _transform_span_to_protobuf(self, clean_span: CleanSpanData) -> Any:
         """Transform CleanSpanData to protobuf Span format."""
         from tusk.drift.core.v1 import Span
 
@@ -136,7 +128,7 @@ class ApiSpanAdapter(SpanExportAdapter):
 
         timestamp = datetime.fromtimestamp(
             clean_span.timestamp.seconds + clean_span.timestamp.nanos / 1_000_000_000,
-            tz=timezone.utc,
+            tz=UTC,
         )
 
         duration = timedelta(
@@ -151,9 +143,7 @@ class ApiSpanAdapter(SpanExportAdapter):
 
                 metadata_dict = asdict(clean_span.metadata)
             else:
-                metadata_dict = (
-                    clean_span.metadata if isinstance(clean_span.metadata, dict) else {}
-                )
+                metadata_dict = clean_span.metadata if isinstance(clean_span.metadata, dict) else {}
             metadata_struct = _dict_to_struct(metadata_dict)
 
         package_type_value = (
@@ -164,20 +154,12 @@ class ApiSpanAdapter(SpanExportAdapter):
 
         from tusk.drift.core.v1 import SpanStatus as ProtoSpanStatus
 
-        kind_value = (
-            clean_span.kind.value
-            if hasattr(clean_span.kind, "value")
-            else clean_span.kind
-        )
+        kind_value = clean_span.kind.value if hasattr(clean_span.kind, "value") else clean_span.kind
 
         status_code_value = (
-            clean_span.status.code.value
-            if hasattr(clean_span.status.code, "value")
-            else clean_span.status.code
+            clean_span.status.code.value if hasattr(clean_span.status.code, "value") else clean_span.status.code
         )
-        proto_status = ProtoSpanStatus(
-            code=status_code_value, message=clean_span.status.message or ""
-        )
+        proto_status = ProtoSpanStatus(code=status_code_value, message=clean_span.status.message or "")
 
         def convert_json_schema(sdk_schema: Any) -> Any:
             """Convert SDK JsonSchema to protobuf JsonSchema."""
@@ -201,15 +183,9 @@ class ApiSpanAdapter(SpanExportAdapter):
                     if converted is not None:
                         proto_properties[key] = converted
 
-            proto_items = (
-                convert_json_schema(sdk_schema.items) if sdk_schema.items else None
-            )
+            proto_items = convert_json_schema(sdk_schema.items) if sdk_schema.items else None
 
-            type_value = (
-                sdk_schema.type.value
-                if hasattr(sdk_schema.type, "value")
-                else sdk_schema.type
-            )
+            type_value = sdk_schema.type.value if hasattr(sdk_schema.type, "value") else sdk_schema.type
             encoding_value = (
                 sdk_schema.encoding.value
                 if sdk_schema.encoding and hasattr(sdk_schema.encoding, "value")
@@ -260,7 +236,7 @@ class ApiSpanAdapter(SpanExportAdapter):
         )
 
 
-def _dict_to_struct(data: dict[str, Any]) -> "Struct":
+def _dict_to_struct(data: dict[str, Any]) -> Struct:
     """Convert a Python dict to protobuf Struct."""
     from betterproto.lib.google.protobuf import ListValue, Struct, Value
 

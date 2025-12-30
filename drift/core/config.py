@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -14,49 +14,49 @@ logger = logging.getLogger(__name__)
 class ServiceStartConfig:
     """Configuration for service startup command."""
 
-    command: Optional[str] = None
+    command: str | None = None
 
 
 @dataclass
 class ReadinessCheckConfig:
     """Configuration for service readiness checks."""
 
-    command: Optional[str] = None
-    timeout: Optional[str] = None
-    interval: Optional[str] = None
+    command: str | None = None
+    timeout: str | None = None
+    interval: str | None = None
 
 
 @dataclass
 class ServiceConfig:
     """Configuration for the service being instrumented."""
 
-    id: Optional[str] = None
-    name: Optional[str] = None
-    port: Optional[int] = None
-    start: Optional[ServiceStartConfig] = None
-    readiness_check: Optional[ReadinessCheckConfig] = None
+    id: str | None = None
+    name: str | None = None
+    port: int | None = None
+    start: ServiceStartConfig | None = None
+    readiness_check: ReadinessCheckConfig | None = None
 
 
 @dataclass
 class TracesConfig:
     """Configuration for trace storage."""
 
-    dir: Optional[str] = None
+    dir: str | None = None
 
 
 @dataclass
 class TuskApiConfig:
     """Configuration for the Tusk API."""
 
-    url: Optional[str] = None
+    url: str | None = None
 
 
 @dataclass
 class TestExecutionConfig:
     """Configuration for test execution."""
 
-    concurrency: Optional[int] = None
-    timeout: Optional[str] = None
+    concurrency: int | None = None
+    timeout: str | None = None
 
 
 @dataclass
@@ -70,10 +70,10 @@ class ComparisonConfig:
 class RecordingConfig:
     """Configuration for recording behavior."""
 
-    sampling_rate: Optional[float] = None
-    export_spans: Optional[bool] = None
-    enable_env_var_recording: Optional[bool] = None
-    enable_analytics: Optional[bool] = None
+    sampling_rate: float | None = None
+    export_spans: bool | None = None
+    enable_env_var_recording: bool | None = None
+    enable_analytics: bool | None = None
     exclude_paths: list[str] = field(default_factory=list)
 
 
@@ -85,13 +85,13 @@ class TuskFileConfig:
     This matches the Node SDK's TuskConfig interface exactly.
     """
 
-    service: Optional[ServiceConfig] = None
-    traces: Optional[TracesConfig] = None
-    tusk_api: Optional[TuskApiConfig] = None
-    test_execution: Optional[TestExecutionConfig] = None
-    comparison: Optional[ComparisonConfig] = None
-    recording: Optional[RecordingConfig] = None
-    transforms: Optional[dict[str, Any]] = None
+    service: ServiceConfig | None = None
+    traces: TracesConfig | None = None
+    tusk_api: TuskApiConfig | None = None
+    test_execution: TestExecutionConfig | None = None
+    comparison: ComparisonConfig | None = None
+    recording: RecordingConfig | None = None
+    transforms: dict[str, Any] | None = None
 
 
 @dataclass
@@ -103,10 +103,10 @@ class TuskConfig:
     and the config file.
     """
 
-    api_key: Optional[str] = None
-    env: Optional[str] = None
+    api_key: str | None = None
+    env: str | None = None
     sampling_rate: float = 1.0
-    transforms: Optional[dict[str, Any]] = None
+    transforms: dict[str, Any] | None = None
 
 
 def _parse_service_config(data: dict[str, Any]) -> ServiceConfig:
@@ -198,7 +198,7 @@ def _parse_file_config(data: dict[str, Any]) -> TuskFileConfig:
     )
 
 
-def find_project_root() -> Optional[Path]:
+def find_project_root() -> Path | None:
     """
     Find project root by traversing up from the current working directory.
 
@@ -242,7 +242,7 @@ def find_project_root() -> Optional[Path]:
     return None
 
 
-def load_tusk_config() -> Optional[TuskFileConfig]:
+def load_tusk_config() -> TuskFileConfig | None:
     """
     Load the Tusk config from .tusk/config.yaml in the customer's project.
 
@@ -270,7 +270,7 @@ def load_tusk_config() -> Optional[TuskFileConfig]:
 
         logger.debug(f"Loading config from {config_path}")
 
-        with open(config_path, "r", encoding="utf-8") as f:
+        with open(config_path, encoding="utf-8") as f:
             config_content = f.read()
 
         data = yaml.safe_load(config_content)
@@ -280,9 +280,7 @@ def load_tusk_config() -> Optional[TuskFileConfig]:
             return TuskFileConfig()
 
         if not isinstance(data, dict):
-            logger.warning(
-                f"Config file has invalid format (expected dict, got {type(data).__name__})"
-            )
+            logger.warning(f"Config file has invalid format (expected dict, got {type(data).__name__})")
             return None
 
         config = _parse_file_config(data)

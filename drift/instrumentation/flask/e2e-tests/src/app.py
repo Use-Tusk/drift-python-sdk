@@ -3,9 +3,10 @@
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
-from drift import TuskDrift
 from flask import Flask, jsonify, request
 from opentelemetry import context as otel_context
+
+from drift import TuskDrift
 
 # Initialize SDK
 sdk = TuskDrift.initialize(

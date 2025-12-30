@@ -1,0 +1,27 @@
+{
+    // Use ruff for linting and formatting
+    "[python]": {
+      "editor.defaultFormatter": "charliermarsh.ruff",
+      "editor.formatOnSave": true,
+      "editor.codeActionsOnSave": {
+        "source.fixAll.ruff": "explicit",
+        "source.organizeImports.ruff": "explicit"
+      }
+    },
+  
+    // Ruff extension settings
+    "ruff.configurationPreference": "filesystemFirst",
+  
+    // Exclude from search/watch
+    "files.exclude": {
+      "**/__pycache__": true,
+      "**/*.egg-info": true,
+      ".venv": true
+    },
+  
+    // Recommended extensions
+    "recommendations": [
+      "charliermarsh.ruff",
+      "astral-sh.ty"
+    ]
+}

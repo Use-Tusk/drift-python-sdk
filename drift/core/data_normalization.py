@@ -11,7 +11,6 @@ import json
 from datetime import date, datetime
 from typing import Any
 
-
 # Sentinel object for tracking seen references (for circular reference detection)
 _CIRCULAR_MARKER = "[Circular]"
 
@@ -89,6 +88,7 @@ def normalize_input_data(data: Any, _seen: set[int] | None = None) -> Any:
         # Handle bytes
         if isinstance(data, (bytes, bytearray)):
             import base64
+
             return base64.b64encode(data).decode("ascii")
 
         # Handle other objects by converting to string
@@ -150,17 +150,11 @@ def remove_none_values(data: Any, _seen: set[int] | None = None) -> Any:
 
         # Handle lists (arrays) - convert None to None (like JS null)
         if isinstance(data, list):
-            return [
-                None if item is None else remove_none_values(item, _seen)
-                for item in data
-            ]
+            return [None if item is None else remove_none_values(item, _seen) for item in data]
 
         # Handle tuples (treat like arrays)
         if isinstance(data, tuple):
-            return [
-                None if item is None else remove_none_values(item, _seen)
-                for item in data
-            ]
+            return [None if item is None else remove_none_values(item, _seen) for item in data]
 
         # Handle sets (convert to list)
         if isinstance(data, set):
@@ -169,6 +163,7 @@ def remove_none_values(data: Any, _seen: set[int] | None = None) -> Any:
         # Handle bytes
         if isinstance(data, (bytes, bytearray)):
             import base64
+
             return base64.b64encode(data).decode("ascii")
 
         # Handle other objects by converting to string

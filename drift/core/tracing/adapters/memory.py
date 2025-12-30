@@ -32,21 +32,19 @@ class InMemorySpanAdapter(SpanExportAdapter):
     def name(self) -> str:
         return "in-memory"
 
-    def collect_span(self, span: "CleanSpanData") -> None:
+    def collect_span(self, span: CleanSpanData) -> None:
         """Add a single span to the in-memory store."""
         self._spans.append(span)
 
-    def get_all_spans(self) -> list["CleanSpanData"]:
+    def get_all_spans(self) -> list[CleanSpanData]:
         """Get all stored spans."""
         return list(self._spans)
 
-    def get_spans_by_instrumentation(self, instrumentation_name: str) -> list["CleanSpanData"]:
+    def get_spans_by_instrumentation(self, instrumentation_name: str) -> list[CleanSpanData]:
         """Get spans matching an instrumentation name (partial match)."""
-        return [
-            span for span in self._spans if instrumentation_name in span.instrumentation_name
-        ]
+        return [span for span in self._spans if instrumentation_name in span.instrumentation_name]
 
-    def get_spans_by_kind(self, kind: "SpanKind") -> list["CleanSpanData"]:
+    def get_spans_by_kind(self, kind: SpanKind) -> list[CleanSpanData]:
         """Get spans of a specific kind."""
         return [span for span in self._spans if span.kind == kind]
 
@@ -55,7 +53,7 @@ class InMemorySpanAdapter(SpanExportAdapter):
         self._spans.clear()
 
     @override
-    async def export_spans(self, spans: list["CleanSpanData"]) -> ExportResult:
+    async def export_spans(self, spans: list[CleanSpanData]) -> ExportResult:
         """Export spans by storing them in memory."""
         for span in spans:
             self.collect_span(span)
@@ -113,7 +111,7 @@ def register_in_memory_adapter(adapter: InMemorySpanAdapter) -> None:
     """
     from ...drift_sdk import TuskDrift
 
-    sdk = TuskDrift.get_instance()
+    TuskDrift.get_instance()
 
     # Initialize if not already initialized
     if not TuskDrift._initialized:

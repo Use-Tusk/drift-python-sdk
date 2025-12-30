@@ -3,33 +3,34 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, Dict, Optional
 from types import ModuleType
+from typing import Any
 
 from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind as OTelSpanKind
-from opentelemetry.trace import Status, StatusCode as OTelStatusCode, set_span_in_context
+from opentelemetry.trace import Status, set_span_in_context
+from opentelemetry.trace import StatusCode as OTelStatusCode
 
-from ..base import InstrumentationBase
 from ...core.communication.types import MockRequestInput
 from ...core.drift_sdk import TuskDrift
 from ...core.json_schema_helper import JsonSchemaHelper
 from ...core.tracing import TdSpanAttributes
 from ...core.types import (
     CleanSpanData,
+    Duration,
     PackageType,
     SpanKind,
     SpanStatus,
     StatusCode,
-    replay_trace_id_context,
     Timestamp,
-    Duration,
+    replay_trace_id_context,
 )
+from ..base import InstrumentationBase
 
 logger = logging.getLogger(__name__)
 
-_instance: Optional["RedisInstrumentation"] = None
+_instance: RedisInstrumentation | None = None
 
 
 class RedisInstrumentation(InstrumentationBase):
@@ -64,7 +65,7 @@ class RedisInstrumentation(InstrumentationBase):
             def patched_execute_command(redis_self, *args, **kwargs):
                 """Patched execute_command method."""
                 sdk = TuskDrift.get_instance()
-                
+
                 if sdk.mode == "DISABLED":
                     return original_method(redis_self, *args, **kwargs)
 
@@ -82,7 +83,7 @@ class RedisInstrumentation(InstrumentationBase):
         # Patch Pipeline.execute
         try:
             from redis.client import Pipeline
-            
+
             if hasattr(Pipeline, "execute"):
                 original_pipeline_execute = Pipeline.execute
                 self._original_pipeline_execute = original_pipeline_execute
@@ -91,7 +92,7 @@ class RedisInstrumentation(InstrumentationBase):
                 def patched_pipeline_execute(pipeline_self, *args, **kwargs):
                     """Patched Pipeline.execute method."""
                     sdk = TuskDrift.get_instance()
-                    
+
                     if sdk.mode == "DISABLED":
                         return original_pipeline_execute(pipeline_self, *args, **kwargs)
 
@@ -111,7 +112,7 @@ class RedisInstrumentation(InstrumentationBase):
         # Patch async Redis client if available
         try:
             import redis.asyncio
-            
+
             async_redis_class = redis.asyncio.Redis
             if hasattr(async_redis_class, "execute_command"):
                 original_async_execute = async_redis_class.execute_command
@@ -120,7 +121,7 @@ class RedisInstrumentation(InstrumentationBase):
                 async def patched_async_execute_command(redis_self, *args, **kwargs):
                     """Patched async execute_command method."""
                     sdk = TuskDrift.get_instance()
-                    
+
                     if sdk.mode == "DISABLED":
                         return await original_async_execute(redis_self, *args, **kwargs)
 
@@ -173,24 +174,22 @@ class RedisInstrumentation(InstrumentationBase):
         try:
             # Get span IDs for mock requests
             span_context = span.get_span_context()
-            trace_id = format(span_context.trace_id, '032x')
-            span_id = format(span_context.span_id, '016x')
+            trace_id = format(span_context.trace_id, "032x")
+            span_id = format(span_context.span_id, "016x")
 
             # Get parent span ID from parent context
             parent_span = trace.get_current_span(ctx)
             parent_span_id = None
             if parent_span and parent_span.is_recording():
                 parent_ctx = parent_span.get_span_context()
-                parent_span_id = format(parent_ctx.span_id, '016x')
+                parent_span_id = format(parent_ctx.span_id, "016x")
 
             if sdk.mode == "REPLAY":
                 # Handle background requests (app ready + no parent span)
                 if sdk.app_ready and not parent_span_id:
                     return self._get_default_response(command_name)
 
-                mock_result = self._try_get_mock(
-                    sdk, command_str, args, trace_id, span_id, parent_span_id
-                )
+                mock_result = self._try_get_mock(sdk, command_str, args, trace_id, span_id, parent_span_id)
 
                 if mock_result is None:
                     is_pre_app_start = not sdk.app_ready
@@ -324,24 +323,22 @@ class RedisInstrumentation(InstrumentationBase):
         try:
             # Get span IDs for mock requests
             span_context = span.get_span_context()
-            trace_id = format(span_context.trace_id, '032x')
-            span_id = format(span_context.span_id, '016x')
+            trace_id = format(span_context.trace_id, "032x")
+            span_id = format(span_context.span_id, "016x")
 
             # Get parent span ID from parent context
             parent_span = trace.get_current_span(ctx)
             parent_span_id = None
             if parent_span and parent_span.is_recording():
                 parent_ctx = parent_span.get_span_context()
-                parent_span_id = format(parent_ctx.span_id, '016x')
+                parent_span_id = format(parent_ctx.span_id, "016x")
 
             if sdk.mode == "REPLAY":
                 # Handle background requests
                 if sdk.app_ready and not parent_span_id:
                     return []
 
-                mock_result = self._try_get_mock(
-                    sdk, command_str, command_stack, trace_id, span_id, parent_span_id
-                )
+                mock_result = self._try_get_mock(sdk, command_str, command_stack, trace_id, span_id, parent_span_id)
 
                 if mock_result is None:
                     is_pre_app_start = not sdk.app_ready
@@ -380,7 +377,7 @@ class RedisInstrumentation(InstrumentationBase):
         """Format Redis command as string."""
         if not args:
             return ""
-        
+
         # Format: "COMMAND arg1 arg2 ..."
         # Sanitize sensitive values
         parts = []
@@ -391,7 +388,7 @@ class RedisInstrumentation(InstrumentationBase):
             else:
                 # Mask argument values
                 parts.append("?")
-        
+
         return " ".join(parts)
 
     def _get_pipeline_commands(self, pipeline: Any) -> list:
@@ -409,7 +406,7 @@ class RedisInstrumentation(InstrumentationBase):
         """Format pipeline commands as string."""
         if not command_stack:
             return "PIPELINE"
-        
+
         commands = []
         for cmd in command_stack:
             if hasattr(cmd, "args"):
@@ -418,10 +415,10 @@ class RedisInstrumentation(InstrumentationBase):
                 cmd_args = cmd[0] if isinstance(cmd[0], (tuple, list)) else cmd
             else:
                 continue
-            
+
             if cmd_args:
                 commands.append(str(cmd_args[0]).upper())
-        
+
         return "PIPELINE: " + " ".join(commands)
 
     def _try_get_mock(
@@ -431,8 +428,8 @@ class RedisInstrumentation(InstrumentationBase):
         args: Any,
         trace_id: str,
         span_id: str,
-        parent_span_id: Optional[str],
-    ) -> Optional[Dict[str, Any]]:
+        parent_span_id: str | None,
+    ) -> dict[str, Any] | None:
         """Try to get a mocked response from CLI."""
         try:
             # Build input value
@@ -499,7 +496,7 @@ class RedisInstrumentation(InstrumentationBase):
 
     def _finalize_command_span(
         self,
-        span: "trace.Span",
+        span: trace.Span,
         command: str,
         args: tuple,
         result: Any,
@@ -549,7 +546,7 @@ class RedisInstrumentation(InstrumentationBase):
 
     def _finalize_pipeline_span(
         self,
-        span: "trace.Span",
+        span: trace.Span,
         command_str: str,
         command_stack: list,
         result: Any,
@@ -558,9 +555,10 @@ class RedisInstrumentation(InstrumentationBase):
         """Finalize span with pipeline data."""
         try:
             # Build input value
-            serialized_commands = [self._serialize_args(cmd.args if hasattr(cmd, "args") else cmd[0])
-                                  for cmd in command_stack]
-            input_value: Dict[str, Any] = {
+            serialized_commands = [
+                self._serialize_args(cmd.args if hasattr(cmd, "args") else cmd[0]) for cmd in command_stack
+            ]
+            input_value: dict[str, Any] = {
                 "command": command_str,
                 "commands": serialized_commands,
             }
@@ -608,7 +606,7 @@ class RedisInstrumentation(InstrumentationBase):
         """Serialize a single value for JSON."""
         if isinstance(value, bytes):
             try:
-                return value.decode('utf-8')
+                return value.decode("utf-8")
             except UnicodeDecodeError:
                 return value.hex()
         elif isinstance(value, (str, int, float, bool, type(None))):
@@ -626,14 +624,14 @@ class RedisInstrumentation(InstrumentationBase):
         """Serialize Redis response for recording."""
         return self._serialize_value(response)
 
-    def _deserialize_response(self, mock_data: Dict[str, Any]) -> Any:
+    def _deserialize_response(self, mock_data: dict[str, Any]) -> Any:
         """Deserialize mocked response data from CLI.
-        
+
         The CLI wraps the response in: {"response": {"Body": {...output_value...}}}
         For Redis, output_value is: {"result": value} or {"results": [values]}
         """
         logger.debug(f"Deserializing mock_data keys: {list(mock_data.keys()) if mock_data else None}")
-        
+
         # Navigate through CLI response structure
         if "response" in mock_data:
             response = mock_data["response"]
@@ -646,13 +644,13 @@ class RedisInstrumentation(InstrumentationBase):
                         return body["result"]
                     elif "results" in body:
                         return body["results"]
-        
+
         # Fallback: check top level (for backwards compatibility)
         if "result" in mock_data:
             return mock_data["result"]
         elif "results" in mock_data:
             return mock_data["results"]
-        
+
         logger.warning(f"Could not deserialize mock_data structure: {mock_data}")
         return None
 

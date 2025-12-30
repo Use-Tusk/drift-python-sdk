@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .adapters.base import SpanExportAdapter
     from ..types import CleanSpanData, DriftMode
+    from .adapters.base import SpanExportAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +59,7 @@ class TdSpanExporter:
             self.add_adapter(ApiSpanAdapter(api_config))
         else:
             logger.debug("TdSpanExporter falling back to filesystem adapter")
-            self.add_adapter(
-                FilesystemSpanAdapter(base_directory=config.base_directory)
-            )
+            self.add_adapter(FilesystemSpanAdapter(base_directory=config.base_directory))
 
     def get_adapters(self) -> list[SpanExportAdapter]:
         """Get all configured adapters."""
@@ -70,17 +68,13 @@ class TdSpanExporter:
     def add_adapter(self, adapter: SpanExportAdapter) -> None:
         """Add a custom export adapter."""
         self.adapters.append(adapter)
-        logger.debug(
-            f"Added {adapter.name} adapter. Total adapters: {len(self.adapters)}"
-        )
+        logger.debug(f"Added {adapter.name} adapter. Total adapters: {len(self.adapters)}")
 
     def remove_adapter(self, adapter: SpanExportAdapter) -> None:
         """Remove a specific adapter."""
         if adapter in self.adapters:
             self.adapters.remove(adapter)
-            logger.debug(
-                f"Removed {adapter.name} adapter. Total adapters: {len(self.adapters)}"
-            )
+            logger.debug(f"Removed {adapter.name} adapter. Total adapters: {len(self.adapters)}")
 
     def clear_adapters(self) -> None:
         """Clear all adapters."""
@@ -114,11 +108,7 @@ class TdSpanExporter:
     def _get_active_adapters(self) -> list[SpanExportAdapter]:
         """Get active adapters based on mode."""
         if self.mode != "RECORD":
-            return [
-                adapter
-                for adapter in self.adapters
-                if adapter.name in ("in-memory", "callback")
-            ]
+            return [adapter for adapter in self.adapters if adapter.name in ("in-memory", "callback")]
 
         return self.adapters
 

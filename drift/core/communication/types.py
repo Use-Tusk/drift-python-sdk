@@ -14,26 +14,40 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from tusk.drift.core.v1 import (
+    ConnectRequest as ProtoConnectRequest,
+)
+from tusk.drift.core.v1 import (
+    ConnectResponse as ProtoConnectResponse,
+)
+from tusk.drift.core.v1 import (
+    EnvVarRequest as ProtoEnvVarRequest,
+)
+from tusk.drift.core.v1 import (
+    EnvVarResponse as ProtoEnvVarResponse,
+)
+from tusk.drift.core.v1 import (
+    GetMockRequest as ProtoGetMockRequest,
+)
+from tusk.drift.core.v1 import (
+    GetMockResponse as ProtoGetMockResponse,
+)
+
 # Re-export protobuf types from tusk-drift-schemas
 from tusk.drift.core.v1 import (
-    CliMessage,
-    ConnectRequest as ProtoConnectRequest,
-    ConnectResponse as ProtoConnectResponse,
-    EnvVarRequest as ProtoEnvVarRequest,
-    EnvVarResponse as ProtoEnvVarResponse,
-    GetMockRequest as ProtoGetMockRequest,
-    GetMockResponse as ProtoGetMockResponse,
-    InstrumentationVersionMismatchAlert,
     MessageType,
-    SdkMessage,
-    SendAlertRequest,
-    SendInboundSpanForReplayRequest,
-    SendInboundSpanForReplayResponse,
+)
+from tusk.drift.core.v1 import (
     Span as ProtoSpan,
+)
+from tusk.drift.core.v1 import (
     SpanKind as ProtoSpanKind,
+)
+from tusk.drift.core.v1 import (
     SpanStatus as ProtoSpanStatus,
+)
+from tusk.drift.core.v1 import (
     StatusCode as ProtoStatusCode,
-    UnpatchedDependencyAlert,
 )
 
 # Re-export MessageType for convenience

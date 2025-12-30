@@ -38,10 +38,7 @@ def configure_logger(log_level: LogLevel = "info", prefix: str = "TuskDrift") ->
         handler.setLevel(level)
 
         # Format: timestamp [TuskDrift] message
-        formatter = logging.Formatter(
-            f"%(asctime)s [{prefix}] %(message)s",
-            datefmt="%Y-%m-%dT%H:%M:%S"
-        )
+        formatter = logging.Formatter(f"%(asctime)s [{prefix}] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S")
         handler.setFormatter(formatter)
 
         drift_logger.addHandler(handler)

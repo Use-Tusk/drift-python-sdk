@@ -4,9 +4,10 @@ import base64
 import copy
 import hashlib
 import json
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from fnmatch import fnmatch
-from typing import Any, Callable, Literal, Sequence
+from typing import Any, Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 try:
@@ -14,7 +15,8 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     JSONPath = None
 
-from ...core.types import SpanKind, TransformAction as MetadataAction, TransformMetadata
+from ...core.types import SpanKind, TransformMetadata
+from ...core.types import TransformAction as MetadataAction
 
 ActionFunction = Callable[[str], str]
 Direction = Literal["inbound", "outbound"]
@@ -29,7 +31,7 @@ class HttpSpanData:
     output_value: dict[str, Any] | None = None
     transform_metadata: TransformMetadata | None = None
 
-    def clone(self) -> "HttpSpanData":
+    def clone(self) -> HttpSpanData:
         return HttpSpanData(
             kind=self.kind,
             input_value=copy.deepcopy(self.input_value) if self.input_value is not None else None,
@@ -101,11 +103,7 @@ class HttpTransformEngine:
                 "headers": headers or {},
             },
         )
-        return any(
-            drop.matches(span)
-            for drop in self._drop_transforms
-            if drop.direction == "inbound"
-        )
+        return any(drop.matches(span) for drop in self._drop_transforms if drop.direction == "inbound")
 
     def should_drop_outbound_request(
         self,
@@ -129,11 +127,7 @@ class HttpTransformEngine:
                 "headers": headers or {},
             },
         )
-        return any(
-            drop.matches(span)
-            for drop in self._drop_transforms
-            if drop.direction == "outbound"
-        )
+        return any(drop.matches(span) for drop in self._drop_transforms if drop.direction == "outbound")
 
     def apply_transforms(self, span: HttpSpanData) -> TransformMetadata | None:
         actions: list[MetadataAction] = []
@@ -269,9 +263,7 @@ class HttpTransformEngine:
 
         raise ValueError(f"Unsupported transform action: {action_type}")
 
-    def _compile_header_action(
-        self, header_name: str, action_fn: ActionFunction
-    ) -> Callable[[HttpSpanData], bool]:
+    def _compile_header_action(self, header_name: str, action_fn: ActionFunction) -> Callable[[HttpSpanData], bool]:
         normalized = header_name.lower()
 
         def _apply(span: HttpSpanData) -> bool:
@@ -417,9 +409,7 @@ def _extract_host(span: HttpSpanData) -> str | None:
     return None
 
 
-def _transform_query_string(
-    value: str, query_param: str, action_fn: ActionFunction
-) -> tuple[str, bool]:
+def _transform_query_string(value: str, query_param: str, action_fn: ActionFunction) -> tuple[str, bool]:
     parts = urlsplit(value)
     if not parts.query:
         return value, False
@@ -569,9 +559,7 @@ def _parse_json_path_expression(expression: str) -> list[str | int]:
     return tokens
 
 
-def _apply_json_path_tokens(
-    body: Any, tokens: list[str | int], action_fn: ActionFunction
-) -> bool:
+def _apply_json_path_tokens(body: Any, tokens: list[str | int], action_fn: ActionFunction) -> bool:
     matches: list[tuple[Any, str | int]] = []
 
     def _collect(current: Any, index: int, parent: Any, key: str | int | None) -> None:
@@ -730,9 +718,7 @@ def _jsonpath_path_to_tokens(path: str) -> list[str | int]:
     return tokens
 
 
-def _navigate_to_parent(
-    data: Any, tokens: list[str | int]
-) -> tuple[Any | None, str | int | None]:
+def _navigate_to_parent(data: Any, tokens: list[str | int]) -> tuple[Any | None, str | int | None]:
     if not tokens:
         return None, None
     current = data

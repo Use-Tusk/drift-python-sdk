@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
 
 from ..instrumentation.registry import install_hooks
 from .communication.communicator import CommunicatorConfig, ProtobufCommunicator
@@ -27,6 +27,7 @@ from .types import CleanSpanData, DriftMode, SpanKind
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Tracer
+
     from .batch_processor import BatchSpanProcessor
 
 logger = logging.getLogger(__name__)
@@ -49,7 +50,7 @@ class TuskDrift:
         self._init_params: dict[str, Any] = {}
 
         self.span_exporter: TdSpanExporter | None = None
-        self.batch_processor: "BatchSpanProcessor | None" = None
+        self.batch_processor: BatchSpanProcessor | None = None
 
         # OpenTelemetry components
         self._tracer_provider: TracerProvider | None = None
@@ -75,9 +76,7 @@ class TuskDrift:
     def _generate_sdk_instance_id(self) -> str:
         """Generate a unique SDK instance ID matching Node SDK pattern."""
         timestamp_ms = int(time.time() * 1000)
-        random_suffix = "".join(
-            random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=9)
-        )
+        random_suffix = "".join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=9))
         return f"sdk-{timestamp_ms}-{random_suffix}"
 
     @classmethod
@@ -119,7 +118,7 @@ class TuskDrift:
 
         if not env:
             env_from_var = os.environ.get("NODE_ENV") or "development"
-            logger.warn(
+            logger.warning(
                 f"Environment not provided in initialization parameters. Using '{env_from_var}' as the environment."
             )
             env = env_from_var
@@ -146,11 +145,7 @@ class TuskDrift:
         if file_config and file_config.service:
             effective_observable_service_id = file_config.service.id
 
-        export_spans_enabled = (
-            file_config.recording.export_spans
-            if file_config and file_config.recording
-            else False
-        )
+        export_spans_enabled = file_config.recording.export_spans if file_config and file_config.recording else False
 
         if export_spans_enabled and not effective_observable_service_id:
             logger.error(
@@ -184,19 +179,13 @@ class TuskDrift:
         if file_config and file_config.tusk_api and file_config.tusk_api.url:
             effective_backend_url = file_config.tusk_api.url
 
-        base_dir = (
-            Path(effective_export_directory)
-            if effective_export_directory
-            else Path.cwd() / ".tusk" / "traces"
-        )
+        base_dir = Path(effective_export_directory) if effective_export_directory else Path.cwd() / ".tusk" / "traces"
 
         logger.debug(f"Config: {file_config}")
         logger.debug(f"Base directory: {base_dir}")
 
         use_remote_export = bool(
-            export_spans_enabled
-            and effective_api_key is not None
-            and effective_observable_service_id is not None
+            export_spans_enabled and effective_api_key is not None and effective_observable_service_id is not None
         )
 
         from ..version import SDK_VERSION as sdk_version
@@ -216,11 +205,13 @@ class TuskDrift:
 
         # Initialize OpenTelemetry TracerProvider
         service_name = effective_observable_service_id or "drift-python-sdk"
-        resource = Resource.create({
-            "service.name": service_name,
-            "service.version": sdk_version,
-            "deployment.environment": env,
-        })
+        resource = Resource.create(
+            {
+                "service.name": service_name,
+                "service.version": sdk_version,
+                "deployment.environment": env,
+            }
+        )
 
         instance._tracer_provider = TracerProvider(resource=resource)
 
@@ -254,8 +245,10 @@ class TuskDrift:
                 instance._init_communicator_for_replay()
                 logger.debug("Replay communicator initialized during SDK initialization")
             except Exception as e:
-                logger.warn(f"Failed to initialize replay communicator: {e}")
-                logger.warn("Continuing with SDK initialization. Mock responses will not be available until CLI is running.")
+                logger.warning(f"Failed to initialize replay communicator: {e}")
+                logger.warning(
+                    "Continuing with SDK initialization. Mock responses will not be available until CLI is running."
+                )
 
         install_hooks()
 
@@ -291,11 +284,7 @@ class TuskDrift:
                 logger.warning(f"Invalid TUSK_SAMPLING_RATE env var: {env_rate}")
 
         # 3. Config file
-        if (
-            self.file_config
-            and self.file_config.recording
-            and self.file_config.recording.sampling_rate is not None
-        ):
+        if self.file_config and self.file_config.recording and self.file_config.recording.sampling_rate is not None:
             config_rate = self.file_config.recording.sampling_rate
             validated = validate_sampling_rate(config_rate, "config file")
             if validated is not None:
@@ -339,9 +328,7 @@ class TuskDrift:
 
             socket_file = Path(socket_path)
             if not socket_file.exists():
-                raise FileNotFoundError(
-                    f"Socket not found at {socket_path}. Make sure Tusk CLI is running."
-                )
+                raise FileNotFoundError(f"Socket not found at {socket_path}. Make sure Tusk CLI is running.")
 
             file_stat = socket_file.stat()
             if not stat.S_ISSOCK(file_stat.st_mode):
@@ -354,9 +341,7 @@ class TuskDrift:
 
         service_id: str = (
             self.file_config.service.id
-            if self.file_config
-            and self.file_config.service
-            and self.file_config.service.id
+            if self.file_config and self.file_config.service and self.file_config.service.id
             else "unknown"
         )
 
@@ -369,20 +354,22 @@ class TuskDrift:
                 logger.debug("SDK successfully connected to CLI synchronously")
         except Exception as e:
             logger.warning(f"Failed to initialize replay communicator: {e}")
-            logger.info("Continuing with SDK initialization. Mock responses will not be available until CLI is running.")
+            logger.info(
+                "Continuing with SDK initialization. Mock responses will not be available until CLI is running."
+            )
             self._is_connected_with_cli = False
             # Don't raise - allow Django to start even if CLI isn't ready yet
 
         logger.info(f"[INIT_COMPLETE] SDK initialization finished. Connected to CLI: {self._is_connected_with_cli}")
         if self.communicator and self.communicator.is_connected:
-            logger.info(f"[INIT_COMPLETE] Communicator reports connected: True")
+            logger.info("[INIT_COMPLETE] Communicator reports connected: True")
         else:
-            logger.info(f"[INIT_COMPLETE] Communicator reports connected: False")
+            logger.info("[INIT_COMPLETE] Communicator reports connected: False")
 
     def _init_auto_instrumentations(self) -> None:
         """Initialize instrumentations."""
         try:
-            import flask  # pyright: ignore[reportUnusedImport]
+            import flask
 
             from ..instrumentation.flask import FlaskInstrumentation
 
@@ -392,7 +379,7 @@ class TuskDrift:
             pass
 
         try:
-            import fastapi  # pyright: ignore[reportUnusedImport]
+            import fastapi
 
             from ..instrumentation.fastapi import FastAPIInstrumentation
 
@@ -402,7 +389,7 @@ class TuskDrift:
             pass
 
         try:
-            import requests  # pyright: ignore[reportUnusedImport]
+            import requests
 
             from ..instrumentation.requests import RequestsInstrumentation
 
@@ -416,34 +403,38 @@ class TuskDrift:
         # This allows apps to use either or both
         psycopg2_available = False
         psycopg_available = False
-        
+
         # Try psycopg2 first
         try:
-            import psycopg2  # pyright: ignore[reportUnusedImport]
+            import psycopg2  # type: ignore[unresolved-import]
+
             from ..instrumentation.psycopg2 import Psycopg2Instrumentation
+
             _ = Psycopg2Instrumentation()
             logger.debug("Psycopg2 instrumentation initialized")
             psycopg2_available = True
         except ImportError:
             pass
-        
+
         # Try psycopg (v3)
         try:
-            import psycopg  # pyright: ignore[reportUnusedImport]
+            import psycopg  # type: ignore[unresolved-import]
+
             from ..instrumentation.psycopg import PsycopgInstrumentation
+
             _ = PsycopgInstrumentation()
             logger.debug("Psycopg instrumentation initialized")
             psycopg_available = True
         except ImportError:
             pass
-        
+
         if not psycopg2_available and not psycopg_available:
             logger.debug("No PostgreSQL client library found (psycopg2 or psycopg)")
         elif psycopg2_available and psycopg_available:
             logger.debug("Both psycopg2 and psycopg available - instrumented both")
 
         try:
-            import redis  # pyright: ignore[reportUnusedImport]
+            import redis  # type: ignore[unresolved-import]
 
             from ..instrumentation.redis import RedisInstrumentation
 
@@ -453,7 +444,7 @@ class TuskDrift:
             pass
 
         try:
-            import django  # pyright: ignore[reportUnusedImport]
+            import django  # type: ignore[unresolved-import]
 
             from ..instrumentation.django import DjangoInstrumentation
 
@@ -462,11 +453,7 @@ class TuskDrift:
         except ImportError:
             pass
 
-        if (
-            self.file_config
-            and self.file_config.recording
-            and self.file_config.recording.enable_env_var_recording
-        ):
+        if self.file_config and self.file_config.recording and self.file_config.recording.enable_env_var_recording:
             # try:
             #     from ..instrumentation.env import EnvInstrumentation
 
@@ -476,7 +463,7 @@ class TuskDrift:
             #     pass
             pass
 
-    def get_tracer(self, name: str = "drift", version: str = "") -> "Tracer":
+    def get_tracer(self, name: str = "drift", version: str = "") -> Tracer:
         """Get OpenTelemetry tracer.
 
         Args:
@@ -488,6 +475,7 @@ class TuskDrift:
         """
         if not version:
             from ..version import SDK_VERSION
+
             version = SDK_VERSION
 
         if self._tracer_provider:
@@ -500,9 +488,7 @@ class TuskDrift:
         """Mark the application as ready (started listening)."""
         if not self._initialized:
             if self.mode != "DISABLED":
-                logger.error(
-                    "mark_app_as_ready() called before initialize(). Call initialize() first."
-                )
+                logger.error("mark_app_as_ready() called before initialize(). Call initialize() first.")
             return
 
         self.app_ready = True
@@ -516,9 +502,7 @@ class TuskDrift:
         if self.mode == "REPLAY":
             logger.debug("Replay mode active - ready to serve mocked responses")
         elif self.mode == "RECORD":
-            logger.debug(
-                "Record mode active - capturing inbound requests and responses"
-            )
+            logger.debug("Record mode active - capturing inbound requests and responses")
 
     def collect_span(self, span: CleanSpanData) -> None:
         """[DEPRECATED] Collect and export a span.
@@ -534,7 +518,7 @@ class TuskDrift:
             return
 
         if should_block_span(span):
-            logger.warn(
+            logger.warning(
                 f"Blocking trace {span.trace_id} - span '{span.name}' exceeds size limit. Future spans for this trace will be prevented."
             )
             return
@@ -567,9 +551,7 @@ class TuskDrift:
                 except RuntimeError:
                     asyncio.run(self.span_exporter.export_spans([span]))
 
-    async def request_mock_async(
-        self, mock_request: MockRequestInput
-    ) -> MockResponseOutput:
+    async def request_mock_async(self, mock_request: MockRequestInput) -> MockResponseOutput:
         """Request mocked response data from CLI (async)."""
         if self.mode != "REPLAY":
             logger.error("Cannot request mock: not in replay mode")
@@ -591,9 +573,7 @@ class TuskDrift:
             return MockResponseOutput(found=False, error="Not connected to CLI")
 
         try:
-            logger.debug(
-                f"Sending protobuf request to CLI (async) {mock_request.test_id}"
-            )
+            logger.debug(f"Sending protobuf request to CLI (async) {mock_request.test_id}")
             response = await self.communicator.request_mock_async(mock_request)
             logger.debug(f"Received protobuf response from CLI {response.found}")
             return response
@@ -610,7 +590,7 @@ class TuskDrift:
         if not self.communicator:
             logger.error("Cannot request mock: communicator not initialized")
             return MockResponseOutput(found=False, error="Communicator not initialized")
-        
+
         if not self._is_connected_with_cli:
             logger.error("Requesting sync mock but CLI is not ready yet")
             return MockResponseOutput(found=False, error="CLI not connected yet")
@@ -692,9 +672,7 @@ class TuskDrift:
             return
 
         try:
-            await self.communicator.send_unpatched_dependency_alert(
-                stack_trace, trace_test_server_span_id
-            )
+            await self.communicator.send_unpatched_dependency_alert(stack_trace, trace_test_server_span_id)
         except Exception:
             pass
 

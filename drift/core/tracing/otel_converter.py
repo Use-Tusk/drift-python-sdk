@@ -13,7 +13,9 @@ from typing import TYPE_CHECKING, Any
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import StatusCode as OTelStatusCode
 
-from .td_attributes import TdSpanAttributes
+if TYPE_CHECKING:
+    from ..json_schema_helper import JsonSchema
+
 from ..types import (
     CleanSpanData,
     Duration,
@@ -23,6 +25,7 @@ from ..types import (
     StatusCode,
     Timestamp,
 )
+from .td_attributes import TdSpanAttributes
 
 if TYPE_CHECKING:
     from opentelemetry.sdk.trace import ReadableSpan
@@ -32,12 +35,12 @@ logger = logging.getLogger(__name__)
 
 def format_trace_id(trace_id: int) -> str:
     """Format OpenTelemetry trace ID (int) to hex string."""
-    return format(trace_id, '032x')
+    return format(trace_id, "032x")
 
 
 def format_span_id(span_id: int) -> str:
     """Format OpenTelemetry span ID (int) to hex string."""
-    return format(span_id, '016x')
+    return format(span_id, "016x")
 
 
 def ns_to_timestamp(time_ns: int) -> Timestamp:
@@ -115,9 +118,9 @@ def get_attribute_as_dict(attributes: dict, key: str) -> dict | None:
     return None
 
 
-def dict_to_json_schema(schema_dict: dict | None) -> "JsonSchema":
+def dict_to_json_schema(schema_dict: dict | None) -> JsonSchema:
     """Recursively convert a schema dict to JsonSchema object."""
-    from ..json_schema_helper import JsonSchema, JsonSchemaType, EncodingType, DecodedType
+    from ..json_schema_helper import DecodedType, EncodingType, JsonSchema, JsonSchemaType
 
     if schema_dict is None or not schema_dict:
         return JsonSchema()
@@ -136,8 +139,7 @@ def dict_to_json_schema(schema_dict: dict | None) -> "JsonSchema":
     properties = {}
     if "properties" in schema_dict and isinstance(schema_dict["properties"], dict):
         properties = {
-            k: dict_to_json_schema(v) if isinstance(v, dict) else v
-            for k, v in schema_dict["properties"].items()
+            k: dict_to_json_schema(v) if isinstance(v, dict) else v for k, v in schema_dict["properties"].items()
         }
 
     # Recursively convert items
@@ -205,7 +207,7 @@ def get_attribute_as_schema_merges(attributes: dict, key: str) -> dict | None:
     Returns:
         SchemaMerges dictionary or None if not found/invalid
     """
-    from ..json_schema_helper import SchemaMerge, EncodingType, DecodedType
+    from ..json_schema_helper import DecodedType, EncodingType, SchemaMerge
 
     value = attributes.get(key)
     if value is None:
@@ -240,9 +242,7 @@ def get_attribute_as_schema_merges(attributes: dict, key: str) -> dict | None:
                 match_importance = merge_data.get("match_importance")
 
                 result[field_key] = SchemaMerge(
-                    encoding=encoding,
-                    decoded_type=decoded_type,
-                    match_importance=match_importance
+                    encoding=encoding, decoded_type=decoded_type, match_importance=match_importance
                 )
 
             return result

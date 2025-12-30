@@ -67,8 +67,9 @@ class ResponseBodyCapture(Iterable[bytes]):
     def close(self) -> None:
         """Called by WSGI server when response is done."""
         self._finalize()
-        if hasattr(self._response, "close"):
-            self._response.close()
+        close_method = getattr(self._response, "close", None)
+        if close_method is not None:
+            close_method()
 
     def _finalize(self) -> None:
         """Capture the span with collected response body."""

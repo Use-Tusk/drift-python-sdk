@@ -26,12 +26,12 @@ class ExportResult:
     error: Exception | None = None
 
     @classmethod
-    def success(cls) -> "ExportResult":
+    def success(cls) -> ExportResult:
         """Create a successful export result."""
         return cls(code=ExportResultCode.SUCCESS)
 
     @classmethod
-    def failed(cls, error: Exception | str) -> "ExportResult":
+    def failed(cls, error: Exception | str) -> ExportResult:
         """Create a failed export result."""
         if isinstance(error, str):
             error = Exception(error)
@@ -55,7 +55,7 @@ class SpanExportAdapter(ABC):
         ...
 
     @abstractmethod
-    async def export_spans(self, spans: list["CleanSpanData"]) -> ExportResult:
+    async def export_spans(self, spans: list[CleanSpanData]) -> ExportResult:
         """
         Export a batch of spans.
 

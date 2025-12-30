@@ -6,7 +6,7 @@ import json
 import logging
 from collections import OrderedDict
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, override
 
@@ -63,12 +63,7 @@ class FilesystemSpanAdapter(SpanExportAdapter):
             return self._trace_file_map[trace_id]
 
         # Create new file with timestamp prefix
-        iso_timestamp = (
-            datetime.now(timezone.utc)
-            .isoformat()
-            .replace(":", "-")
-            .replace(".", "-")
-        )
+        iso_timestamp = datetime.now(UTC).isoformat().replace(":", "-").replace(".", "-")
         file_path = self._base_directory / f"{iso_timestamp}_trace_{trace_id}.jsonl"
         self._trace_file_map[trace_id] = file_path
 
@@ -79,7 +74,7 @@ class FilesystemSpanAdapter(SpanExportAdapter):
         return file_path
 
     @override
-    async def export_spans(self, spans: list["CleanSpanData"]) -> ExportResult:
+    async def export_spans(self, spans: list[CleanSpanData]) -> ExportResult:
         """Export spans to trace-specific JSONL files."""
         try:
             import aiofiles
@@ -104,7 +99,7 @@ class FilesystemSpanAdapter(SpanExportAdapter):
             logger.error("Failed to export spans to filesystem: %s", e)
             return ExportResult.failed(e)
 
-    async def _export_spans_sync(self, spans: list["CleanSpanData"]) -> ExportResult:
+    async def _export_spans_sync(self, spans: list[CleanSpanData]) -> ExportResult:
         """Fallback synchronous export when aiofiles is not available."""
         try:
             for span in spans:
@@ -127,7 +122,7 @@ class FilesystemSpanAdapter(SpanExportAdapter):
         """Shutdown and clear the trace file map."""
         self._trace_file_map.clear()
 
-    def _span_to_dict(self, span: "CleanSpanData") -> dict[str, Any]:
+    def _span_to_dict(self, span: CleanSpanData) -> dict[str, Any]:
         """Convert CleanSpanData to a JSON-serializable dictionary."""
         from ...types import PackageType, SpanKind, StatusCode
 
@@ -167,13 +162,13 @@ class FilesystemSpanAdapter(SpanExportAdapter):
         # Add optional fields
         if span.package_type is not None:
             result["packageType"] = (
-                span.package_type.value
-                if isinstance(span.package_type, PackageType)
-                else span.package_type
+                span.package_type.value if isinstance(span.package_type, PackageType) else span.package_type
             )
 
         if span.metadata is not None:
-            result["metadata"] = asdict(span.metadata) if hasattr(span.metadata, "__dataclass_fields__") else span.metadata
+            result["metadata"] = (
+                asdict(span.metadata) if hasattr(span.metadata, "__dataclass_fields__") else span.metadata
+            )
 
         if span.transform_metadata is not None:
             result["transformMetadata"] = asdict(span.transform_metadata)

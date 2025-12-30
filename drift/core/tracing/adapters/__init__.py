@@ -1,14 +1,14 @@
 """Span export adapters for the Drift SDK."""
 
+from .api import ApiSpanAdapter, ApiSpanAdapterConfig, create_api_adapter
 from .base import ExportResult, ExportResultCode, SpanExportAdapter
+from .filesystem import FilesystemSpanAdapter
 from .memory import (
     InMemorySpanAdapter,
+    clear_registered_in_memory_adapters,
     register_in_memory_adapter,
     unregister_in_memory_adapter,
-    clear_registered_in_memory_adapters,
 )
-from .filesystem import FilesystemSpanAdapter
-from .api import ApiSpanAdapter, ApiSpanAdapterConfig, create_api_adapter
 
 __all__ = [
     # Base

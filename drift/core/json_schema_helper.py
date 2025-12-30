@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import base64
-import json
 import hashlib
+import json
+from collections.abc import Mapping, MutableMapping
 from dataclasses import asdict, dataclass, field, is_dataclass
 from enum import Enum
-from typing import Any, Mapping, MutableMapping
+from typing import Any
 
 
 class JsonSchemaType(Enum):
@@ -76,8 +77,8 @@ class SchemaComputationResult:
 @dataclass
 class JsonSchema:
     type: JsonSchemaType = JsonSchemaType.UNSPECIFIED
-    properties: dict[str, "JsonSchema"] = field(default_factory=dict)
-    items: "JsonSchema" | None = None
+    properties: dict[str, JsonSchema] = field(default_factory=dict)
+    items: JsonSchema | None = None
     encoding: EncodingType | None = None
     decoded_type: DecodedType | None = None
     match_importance: float | None = None
@@ -90,15 +91,9 @@ class JsonSchema:
         if self.items is not None:
             data["items"] = self.items.to_primitive()
         if self.encoding is not None:
-            data["encoding"] = (
-                self.encoding.value if isinstance(self.encoding, Enum) else self.encoding
-            )
+            data["encoding"] = self.encoding.value if isinstance(self.encoding, Enum) else self.encoding
         if self.decoded_type is not None:
-            data["decoded_type"] = (
-                self.decoded_type.value
-                if isinstance(self.decoded_type, Enum)
-                else self.decoded_type
-            )
+            data["decoded_type"] = self.decoded_type.value if isinstance(self.decoded_type, Enum) else self.decoded_type
         if self.match_importance is not None:
             data["match_importance"] = float(self.match_importance)
         return data
@@ -136,9 +131,7 @@ class JsonSchemaHelper:
         return JsonSchema(type=schema_type)
 
     @staticmethod
-    def generate_schema_and_hash(
-        data: Any, schema_merges: SchemaMerges | None = None
-    ) -> SchemaComputationResult:
+    def generate_schema_and_hash(data: Any, schema_merges: SchemaMerges | None = None) -> SchemaComputationResult:
         normalized = JsonSchemaHelper._normalize_data(data)
         decoded = JsonSchemaHelper._decode_with_merges(normalized, schema_merges)
         schema = JsonSchemaHelper.generate_schema(decoded, schema_merges)

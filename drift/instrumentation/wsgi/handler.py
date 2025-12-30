@@ -13,9 +13,9 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 from opentelemetry import context as otel_context
-from opentelemetry import trace
 from opentelemetry.trace import SpanKind as OTelSpanKind
-from opentelemetry.trace import Status, StatusCode as OTelStatusCode, set_span_in_context
+from opentelemetry.trace import Status, set_span_in_context
+from opentelemetry.trace import StatusCode as OTelStatusCode
 
 logger = logging.getLogger(__name__)
 
@@ -24,21 +24,20 @@ if TYPE_CHECKING:
     from _typeshed.wsgi import StartResponse, WSGIApplication, WSGIEnvironment
     from opentelemetry.trace import Span
 
-    from ...core.drift_sdk import TuskDrift
 
 from ...core.tracing import TdSpanAttributes
 from ...core.types import (
     PackageType,
-    replay_trace_id_context,
     SpanKind,
+    replay_trace_id_context,
 )
 from ..http import HttpSpanData, HttpTransformEngine
 from .response_capture import ResponseBodyCapture
 from .utilities import (
-    build_input_value,
-    build_output_value,
     build_input_schema_merges,
+    build_input_value,
     build_output_schema_merges,
+    build_output_value,
     capture_request_body,
     extract_headers,
     parse_status_line,
@@ -105,9 +104,7 @@ def handle_wsgi_request(
                     f"[{instrumentation_name}] Fetched {len(env_vars)} env vars from CLI for trace {replay_trace_id}"
                 )
             except Exception as e:
-                logger.error(
-                    f"[{instrumentation_name}] Failed to fetch env vars from CLI: {e}"
-                )
+                logger.error(f"[{instrumentation_name}] Failed to fetch env vars from CLI: {e}")
 
         # Set replay trace context
         replay_token = replay_trace_id_context.set(replay_trace_id)
@@ -125,9 +122,7 @@ def handle_wsgi_request(
 
     # Check if request should be dropped
     request_headers = extract_headers(environ)
-    if transform_engine and transform_engine.should_drop_inbound_request(
-        method, target, request_headers
-    ):
+    if transform_engine and transform_engine.should_drop_inbound_request(method, target, request_headers):
         if replay_token:
             replay_trace_id_context.reset(replay_token)
         return original_wsgi_app(app, environ, start_response)
@@ -191,9 +186,7 @@ def handle_wsgi_request(
     try:
         response = original_wsgi_app(app, environ, wrapped_start_response)
         # Wrap response to capture body and defer span finalization
-        return ResponseBodyCapture(
-            response, environ, response_data, on_response_complete
-        )
+        return ResponseBodyCapture(response, environ, response_data, on_response_complete)
     except Exception as e:
         response_data["status_code"] = 500
         response_data["error"] = str(e)
@@ -224,7 +217,7 @@ def finalize_wsgi_span(
     try:
         # Calculate duration
         end_time_ns = time.time_ns()
-        duration_ms = (end_time_ns - start_time_ns) / 1_000_000
+        (end_time_ns - start_time_ns) / 1_000_000
 
         # Build output_value
         status_code = response_data.get("status_code", 200)
@@ -247,15 +240,13 @@ def finalize_wsgi_span(
         from ...core.content_type_utils import get_decoded_type, should_block_content_type
         from ...core.trace_blocking_manager import TraceBlockingManager
 
-        content_type = response_headers.get("content-type") or response_headers.get(
-            "Content-Type"
-        )
+        content_type = response_headers.get("content-type") or response_headers.get("Content-Type")
         decoded_type = get_decoded_type(content_type)
 
         if should_block_content_type(decoded_type):
             # Get trace ID from span
             span_context = span.get_span_context()
-            trace_id = format(span_context.trace_id, '032x')
+            trace_id = format(span_context.trace_id, "032x")
 
             blocking_mgr = TraceBlockingManager.get_instance()
             blocking_mgr.block_trace(
@@ -310,7 +301,7 @@ def finalize_wsgi_span(
 
         tracker = EnvVarTracker.get_instance()
         span_context = span.get_span_context()
-        trace_id = format(span_context.trace_id, '032x')
+        trace_id = format(span_context.trace_id, "032x")
         env_vars = tracker.get_env_vars(trace_id)
         if env_vars:
             metadata = MetadataObject(ENV_VARS=env_vars)

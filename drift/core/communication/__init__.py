@@ -4,26 +4,26 @@ This module handles bidirectional communication between the SDK and the Tusk CLI
 for replay testing. Communication uses Protocol Buffers over Unix sockets or TCP.
 """
 
+from .communicator import CommunicatorConfig, ProtobufCommunicator
 from .types import (
-    MessageType,
-    SDKMessageType,
+    CliMessage,
     CLIMessageType,
     ConnectRequest,
     ConnectResponse,
-    GetMockRequest,
-    GetMockResponse,
     EnvVarRequest,
     EnvVarResponse,
+    GetMockRequest,
+    GetMockResponse,
+    MessageType,
     MockRequestInput,
     MockResponseOutput,
     # Protobuf types (re-exported)
     SdkMessage,
-    CliMessage,
-    span_to_proto,
+    SDKMessageType,
     dict_to_span,
     extract_response_data,
+    span_to_proto,
 )
-from .communicator import ProtobufCommunicator, CommunicatorConfig
 
 __all__ = [
     # Message types

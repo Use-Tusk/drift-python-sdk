@@ -17,9 +17,7 @@ from ..http import HttpTransformEngine
 
 class FlaskInstrumentation(InstrumentationBase):
     def __init__(self, enabled: bool = True, transforms: dict[str, Any] | None = None):
-        self._transform_engine = HttpTransformEngine(
-            self._resolve_http_transforms(transforms)
-        )
+        self._transform_engine = HttpTransformEngine(self._resolve_http_transforms(transforms))
         super().__init__(
             name="FlaskInstrumentation",
             module_name="flask",

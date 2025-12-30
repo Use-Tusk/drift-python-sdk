@@ -9,9 +9,10 @@ from __future__ import annotations
 import json
 import logging
 import traceback
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from opentelemetry import context as otel_context
 from opentelemetry import trace
@@ -19,11 +20,10 @@ from opentelemetry.trace import SpanKind as OTelSpanKind
 from opentelemetry.trace import Status, StatusCode
 
 from .td_attributes import TdSpanAttributes
-from ..types import SpanKind
 
 if TYPE_CHECKING:
     from opentelemetry.context import Context
-    from opentelemetry.trace import Span, Tracer
+    from opentelemetry.trace import Span
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +40,8 @@ class SpanInfo:
 
     trace_id: str
     span_id: str
-    span: "Span"
-    context: "Context"
+    span: Span
+    context: Context
     is_pre_app_start: bool
 
 
@@ -54,8 +54,8 @@ class CreateSpanOptions:
 
     name: str
     kind: OTelSpanKind
-    attributes: Optional[Dict[str, Any]] = None
-    parent_context: Optional["Context"] = None
+    attributes: dict[str, Any] | None = None
+    parent_context: Context | None = None
     is_pre_app_start: bool = False
 
 
@@ -68,15 +68,15 @@ class SpanExecutorOptions:
 
     name: str
     kind: OTelSpanKind
-    package_type: Optional[str] = None
+    package_type: str | None = None
     package_name: str = ""
     instrumentation_name: str = ""
     submodule: str = ""
-    input_value: Optional[Dict[str, Any]] = None
-    output_value: Optional[Dict[str, Any]] = None
+    input_value: dict[str, Any] | None = None
+    output_value: dict[str, Any] | None = None
     is_pre_app_start: bool = False
-    input_schema_merges: Optional[Dict] = None
-    metadata: Optional[Dict] = None
+    input_schema_merges: dict | None = None
+    metadata: dict | None = None
     stop_recording_child_spans: bool = False
 
 
@@ -87,28 +87,28 @@ class AddSpanAttributesOptions:
     Matches AddSpanAttributesOptions from Node.js SDK.
     """
 
-    name: Optional[str] = None
-    package_name: Optional[str] = None
-    instrumentation_name: Optional[str] = None
-    package_type: Optional[str] = None
-    submodule: Optional[str] = None
-    is_pre_app_start: Optional[bool] = None
-    input_value: Optional[Dict] = None
-    output_value: Optional[Dict] = None
-    input_schema_merges: Optional[Dict] = None
-    output_schema_merges: Optional[Dict] = None
-    metadata: Optional[Dict] = None
-    transform_metadata: Optional[Dict] = None
+    name: str | None = None
+    package_name: str | None = None
+    instrumentation_name: str | None = None
+    package_type: str | None = None
+    submodule: str | None = None
+    is_pre_app_start: bool | None = None
+    input_value: dict | None = None
+    output_value: dict | None = None
+    input_schema_merges: dict | None = None
+    output_schema_merges: dict | None = None
+    metadata: dict | None = None
+    transform_metadata: dict | None = None
 
 
 def format_trace_id(trace_id: int) -> str:
     """Format OpenTelemetry trace ID (int) to hex string."""
-    return format(trace_id, '032x')
+    return format(trace_id, "032x")
 
 
 def format_span_id(span_id: int) -> str:
     """Format OpenTelemetry span ID (int) to hex string."""
-    return format(span_id, '016x')
+    return format(span_id, "016x")
 
 
 class SpanUtils:
@@ -120,7 +120,7 @@ class SpanUtils:
     """
 
     @staticmethod
-    def create_span(options: CreateSpanOptions) -> Optional[SpanInfo]:
+    def create_span(options: CreateSpanOptions) -> SpanInfo | None:
         """Create a new span and return span info.
 
         Matches createSpan() from Node.js SDK.
@@ -153,8 +153,7 @@ class SpanUtils:
 
                 if trace_blocking_manager.is_trace_blocked(parent_trace_id):
                     logger.debug(
-                        f"[SpanUtils] Skipping span creation for '{options.name}' - "
-                        f"trace {parent_trace_id} is blocked"
+                        f"[SpanUtils] Skipping span creation for '{options.name}' - trace {parent_trace_id} is blocked"
                     )
                     return None
 
@@ -239,7 +238,7 @@ class SpanUtils:
         active_span = trace.get_current_span()
         if active_span and active_span.is_recording():
             # Check if parent has stop_recording flag in attributes
-            stop_recording = active_span.get_span_context().trace_flags.sampled == False
+            stop_recording = not active_span.get_span_context().trace_flags.sampled
             if stop_recording:
                 logger.debug(
                     f"[SpanUtils] Stopping recording of child spans for "
@@ -248,7 +247,7 @@ class SpanUtils:
                 )
                 return original_function_call()
 
-        span_info: Optional[SpanInfo] = None
+        span_info: SpanInfo | None = None
 
         try:
             # Build attributes from options (matches Node.js SDK pattern)
@@ -270,9 +269,7 @@ class SpanUtils:
                 attributes[TdSpanAttributes.OUTPUT_VALUE] = json.dumps(options.output_value)
 
             if options.input_schema_merges:
-                attributes[TdSpanAttributes.INPUT_SCHEMA_MERGES] = json.dumps(
-                    options.input_schema_merges
-                )
+                attributes[TdSpanAttributes.INPUT_SCHEMA_MERGES] = json.dumps(options.input_schema_merges)
 
             if options.metadata:
                 attributes[TdSpanAttributes.METADATA] = json.dumps(options.metadata)
@@ -304,7 +301,7 @@ class SpanUtils:
             return fn(span_info)
 
     @staticmethod
-    def get_current_span_info() -> Optional[SpanInfo]:
+    def get_current_span_info() -> SpanInfo | None:
         """Get the current active span info.
 
         Matches getCurrentSpanInfo() from Node.js SDK.
@@ -339,7 +336,7 @@ class SpanUtils:
             return None
 
     @staticmethod
-    def add_span_attributes(span: "Span", options: AddSpanAttributesOptions) -> None:
+    def add_span_attributes(span: Span, options: AddSpanAttributesOptions) -> None:
         """Add attributes to a span.
 
         Matches addSpanAttributes() from Node.js SDK.
@@ -349,7 +346,7 @@ class SpanUtils:
             options: Attributes to add
         """
         try:
-            attributes: Dict[str, Any] = {}
+            attributes: dict[str, Any] = {}
 
             if options.name is not None:
                 attributes[TdSpanAttributes.NAME] = options.name
@@ -376,22 +373,16 @@ class SpanUtils:
                 attributes[TdSpanAttributes.OUTPUT_VALUE] = json.dumps(options.output_value)
 
             if options.input_schema_merges is not None:
-                attributes[TdSpanAttributes.INPUT_SCHEMA_MERGES] = json.dumps(
-                    options.input_schema_merges
-                )
+                attributes[TdSpanAttributes.INPUT_SCHEMA_MERGES] = json.dumps(options.input_schema_merges)
 
             if options.output_schema_merges is not None:
-                attributes[TdSpanAttributes.OUTPUT_SCHEMA_MERGES] = json.dumps(
-                    options.output_schema_merges
-                )
+                attributes[TdSpanAttributes.OUTPUT_SCHEMA_MERGES] = json.dumps(options.output_schema_merges)
 
             if options.metadata is not None:
                 attributes[TdSpanAttributes.METADATA] = json.dumps(options.metadata)
 
             if options.transform_metadata is not None:
-                attributes[TdSpanAttributes.TRANSFORM_METADATA] = json.dumps(
-                    options.transform_metadata
-                )
+                attributes[TdSpanAttributes.TRANSFORM_METADATA] = json.dumps(options.transform_metadata)
 
             span.set_attributes(attributes)
 
@@ -399,7 +390,7 @@ class SpanUtils:
             logger.error(f"SpanUtils error adding span attributes: {e}")
 
     @staticmethod
-    def set_status(span: "Span", status: Status) -> None:
+    def set_status(span: Span, status: Status) -> None:
         """Set span status.
 
         Matches setStatus() from Node.js SDK.
@@ -415,8 +406,8 @@ class SpanUtils:
 
     @staticmethod
     def end_span(
-        span: "Span",
-        status: Optional[Dict[str, Any]] = None,
+        span: Span,
+        status: dict[str, Any] | None = None,
     ) -> None:
         """Set span status and end the span.
 
@@ -443,7 +434,7 @@ class SpanUtils:
             logger.error(f"SpanUtils error ending span: {e}")
 
     @staticmethod
-    def get_current_trace_id() -> Optional[str]:
+    def get_current_trace_id() -> str | None:
         """Extract trace ID from current context.
 
         Matches getCurrentTraceId() from Node.js SDK.
@@ -459,7 +450,7 @@ class SpanUtils:
             return None
 
     @staticmethod
-    def get_current_span_id() -> Optional[str]:
+    def get_current_span_id() -> str | None:
         """Extract span ID from current context.
 
         Matches getCurrentSpanId() from Node.js SDK.
@@ -511,10 +502,7 @@ class SpanUtils:
             stack = traceback.format_stack()
 
             if filter_drift:
-                stack = [
-                    line for line in stack
-                    if "instrumentation" not in line and "drift" not in line.lower()
-                ]
+                stack = [line for line in stack if "instrumentation" not in line and "drift" not in line.lower()]
 
             # Return last N frames
             return "".join(stack[-max_frames:])

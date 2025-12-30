@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from _typeshed.wsgi import WSGIEnvironment
 
-from ...core.json_schema_helper import EncodingType, JsonSchemaHelper, SchemaMerge
+from ...core.json_schema_helper import EncodingType, SchemaMerge
 
 HEADER_SCHEMA_MERGES = {
     "headers": SchemaMerge(match_importance=0.0),
@@ -58,9 +58,7 @@ def extract_headers(environ: WSGIEnvironment) -> dict[str, str]:
     return headers
 
 
-def capture_request_body(
-    environ: WSGIEnvironment, max_size: int = MAX_BODY_SIZE
-) -> tuple[bytes | None, bool]:
+def capture_request_body(environ: WSGIEnvironment, max_size: int = MAX_BODY_SIZE) -> tuple[bytes | None, bool]:
     """Capture request body from WSGI environ.
 
     Captures body for POST/PUT/PATCH requests up to max_size bytes.
@@ -90,6 +88,7 @@ def capture_request_body(
 
                 # Reset input for app to read
                 from io import BytesIO
+
                 environ["wsgi.input"] = BytesIO(body)
 
                 return body, truncated
@@ -136,11 +135,7 @@ def build_input_value(
 
     # Get HTTP version from SERVER_PROTOCOL (e.g., "HTTP/1.1" -> "1.1")
     server_protocol = environ.get("SERVER_PROTOCOL", "HTTP/1.1")
-    http_version = (
-        server_protocol.replace("HTTP/", "")
-        if server_protocol.startswith("HTTP/")
-        else "1.1"
-    )
+    http_version = server_protocol.replace("HTTP/", "") if server_protocol.startswith("HTTP/") else "1.1"
 
     input_value: dict[str, Any] = {
         "method": environ.get("REQUEST_METHOD", ""),
@@ -149,9 +144,7 @@ def build_input_value(
         "headers": extract_headers(environ),
         "httpVersion": http_version,
         "remoteAddress": environ.get("REMOTE_ADDR"),
-        "remotePort": int(environ.get("REMOTE_PORT"))
-        if environ.get("REMOTE_PORT")
-        else None,
+        "remotePort": int(port) if (port := environ.get("REMOTE_PORT")) else None,
     }
 
     # Remove None values
@@ -208,9 +201,7 @@ def build_output_value(
     return output_value
 
 
-def build_input_schema_merges(
-    input_value: dict[str, Any], body_truncated: bool = False
-) -> dict[str, Any]:
+def build_input_schema_merges(input_value: dict[str, Any], body_truncated: bool = False) -> dict[str, Any]:
     """Build schema merge hints for HTTP input_value.
 
     This function creates schema merge metadata that will be used by the exporter
@@ -234,9 +225,7 @@ def build_input_schema_merges(
     return _schema_merges_to_dict(input_schema_merges)
 
 
-def build_output_schema_merges(
-    output_value: dict[str, Any], body_truncated: bool = False
-) -> dict[str, Any]:
+def build_output_schema_merges(output_value: dict[str, Any], body_truncated: bool = False) -> dict[str, Any]:
     """Build schema merge hints for HTTP output_value.
 
     This function creates schema merge metadata that will be used by the exporter

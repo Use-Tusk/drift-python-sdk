@@ -1,20 +1,20 @@
 """Tracing infrastructure for the Drift SDK."""
 
+from .otel_converter import (
+    format_span_id,
+    format_trace_id,
+    otel_span_to_clean_span_data,
+)
 from .span_exporter import TdSpanExporter, TdSpanExporterConfig
-from .td_attributes import TdSpanAttributes
-from .td_span_processor import TdSpanProcessor
 from .span_utils import (
-    SpanUtils,
-    SpanInfo,
+    AddSpanAttributesOptions,
     CreateSpanOptions,
     SpanExecutorOptions,
-    AddSpanAttributesOptions,
+    SpanInfo,
+    SpanUtils,
 )
-from .otel_converter import (
-    otel_span_to_clean_span_data,
-    format_trace_id,
-    format_span_id,
-)
+from .td_attributes import TdSpanAttributes
+from .td_span_processor import TdSpanProcessor
 
 __all__ = [
     # Exporters

@@ -1,7 +1,8 @@
 """Execute test requests against the Flask app."""
 
-import requests
 import time
+
+import requests
 
 BASE_URL = "http://localhost:8000"
 
@@ -26,11 +27,7 @@ if __name__ == "__main__":
     make_request("GET", "/api/user/test123")
     make_request("POST", "/api/user")
     make_request("GET", "/api/post/1")
-    make_request("POST", "/api/post", json={
-        "title": "Test Post",
-        "body": "This is a test post",
-        "userId": 1
-    })
+    make_request("POST", "/api/post", json={"title": "Test Post", "body": "This is a test post", "userId": 1})
     make_request("DELETE", "/api/post/1")
 
     print("\nAll requests completed successfully")

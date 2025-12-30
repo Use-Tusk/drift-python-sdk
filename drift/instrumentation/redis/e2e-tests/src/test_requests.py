@@ -1,7 +1,8 @@
 """Execute test requests against the Redis Flask app."""
 
-import requests
 import time
+
+import requests
 
 BASE_URL = "http://localhost:8000"
 

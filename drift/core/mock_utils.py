@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from .drift_sdk import TuskDrift
     from .json_schema_helper import SchemaMerges
-    from .types import CleanSpanData, MockRequestInput, MockResponseOutput
+    from .types import CleanSpanData, MockResponseOutput
 
 from .json_schema_helper import JsonSchemaHelper
 from .types import (
@@ -70,9 +70,7 @@ def convert_mock_request_to_clean_span(
     from .types import CleanSpanData
 
     # Generate schema and hashes from input value and merges
-    input_result = JsonSchemaHelper.generate_schema_and_hash(
-        input_value, input_schema_merges
-    )
+    input_result = JsonSchemaHelper.generate_schema_and_hash(input_value, input_schema_merges)
 
     # Get current timestamp
     timestamp_ms = time.time() * 1000
@@ -171,9 +169,7 @@ def find_mock_response_sync(
             is_pre_app_start=is_pre_app_start,
         )
 
-        logger.debug(
-            f"Finding mock for {trace_id} with replay trace ID: {replay_trace_id}"
-        )
+        logger.debug(f"Finding mock for {trace_id} with replay trace ID: {replay_trace_id}")
 
         # Request mock from CLI
         from .communication.types import MockRequestInput
@@ -186,9 +182,7 @@ def find_mock_response_sync(
         mock_response = sdk.request_mock_sync(mock_request)
 
         if not mock_response or not mock_response.found:
-            logger.debug(
-                f"No matching mock found for {trace_id} with input value: {input_value}"
-            )
+            logger.debug(f"No matching mock found for {trace_id} with input value: {input_value}")
             return None
 
         logger.debug(f"Found mock response for {trace_id}")
@@ -241,9 +235,7 @@ async def find_mock_response_async(
             is_pre_app_start=is_pre_app_start,
         )
 
-        logger.debug(
-            f"Finding mock for {trace_id} with replay trace ID: {replay_trace_id}"
-        )
+        logger.debug(f"Finding mock for {trace_id} with replay trace ID: {replay_trace_id}")
 
         # Request mock from CLI
         from .communication.types import MockRequestInput
@@ -256,9 +248,7 @@ async def find_mock_response_async(
         mock_response = await sdk.request_mock_async(mock_request)
 
         if not mock_response or not mock_response.found:
-            logger.debug(
-                f"No matching mock found for {trace_id} with input value: {input_value}"
-            )
+            logger.debug(f"No matching mock found for {trace_id} with input value: {input_value}")
             return None
 
         logger.debug(f"Found mock response for {trace_id}")

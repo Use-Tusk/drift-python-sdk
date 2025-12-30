@@ -19,9 +19,7 @@ class DjangoInstrumentation(InstrumentationBase):
     """Django instrumentation via middleware injection."""
 
     def __init__(self, enabled: bool = True, transforms: dict[str, Any] | None = None):
-        self._transform_engine = HttpTransformEngine(
-            self._resolve_http_transforms(transforms)
-        )
+        self._transform_engine = HttpTransformEngine(self._resolve_http_transforms(transforms))
         super().__init__(
             name="DjangoInstrumentation",
             module_name="django",
@@ -59,9 +57,7 @@ class DjangoInstrumentation(InstrumentationBase):
             from django.conf import settings
 
             if not settings.configured:
-                logger.warning(
-                    "Django settings not configured, cannot inject middleware"
-                )
+                logger.warning("Django settings not configured, cannot inject middleware")
                 return
 
             middleware_setting = self._get_middleware_setting(settings)
@@ -86,9 +82,7 @@ class DjangoInstrumentation(InstrumentationBase):
             DriftMiddleware.transform_engine = self._transform_engine  # type: ignore
 
             _middleware_injected = True
-            logger.debug(
-                f"Injected DriftMiddleware at position 0 in {middleware_setting}"
-            )
+            logger.debug(f"Injected DriftMiddleware at position 0 in {middleware_setting}")
 
             self._force_database_reconnect()
 
@@ -107,14 +101,10 @@ class DjangoInstrumentation(InstrumentationBase):
             for conn in connections.all():
                 if conn.connection is not None:
                     conn.close()
-            logger.debug(
-                "Closed all database connections to force reconnect with instrumentation"
-            )
+            logger.debug("Closed all database connections to force reconnect with instrumentation")
 
         except Exception as e:
-            logger.warning(
-                f"[DjangoInstrumentation] Failed to close database connections: {e}"
-            )
+            logger.warning(f"[DjangoInstrumentation] Failed to close database connections: {e}")
 
     def _get_middleware_setting(self, settings: Any) -> str | None:
         """Detect which middleware setting name to use.

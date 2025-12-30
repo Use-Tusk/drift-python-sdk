@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Set
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ class TraceBlockingManager:
     CLEANUP_INTERVAL_MS = 2 * 60 * 1000
 
     def __init__(self) -> None:
-        self._blocked_trace_ids: Set[str] = set()
+        self._blocked_trace_ids: set[str] = set()
         self._trace_timestamps: dict[str, float] = {}
         self._block_reasons: dict[str, str] = {}
         self._cleanup_thread: threading.Thread | None = None
@@ -145,9 +145,7 @@ class TraceBlockingManager:
 
         with self._lock:
             expired_traces = [
-                trace_id
-                for trace_id, timestamp in self._trace_timestamps.items()
-                if current_time - timestamp > ttl
+                trace_id for trace_id, timestamp in self._trace_timestamps.items() if current_time - timestamp > ttl
             ]
 
             for trace_id in expired_traces:
@@ -223,9 +221,7 @@ def should_block_span(span: Any) -> bool:
             f"has estimated size of {size_mb:.2f} MB, exceeding limit of {MAX_SPAN_SIZE_MB} MB"
         )
 
-        TraceBlockingManager.get_instance().block_trace(
-            trace_id, reason=f"size_limit:{size_mb:.2f}MB"
-        )
+        TraceBlockingManager.get_instance().block_trace(trace_id, reason=f"size_limit:{size_mb:.2f}MB")
         return True
 
     return False

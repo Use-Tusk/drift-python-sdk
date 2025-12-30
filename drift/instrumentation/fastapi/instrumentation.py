@@ -3,9 +3,10 @@ from __future__ import annotations
 import base64
 import json
 import time
+from collections.abc import Callable
 from functools import wraps
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Callable, override
+from typing import TYPE_CHECKING, Any, override
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -17,23 +18,18 @@ if TYPE_CHECKING:
 from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind as OTelSpanKind
-from opentelemetry.trace import Status, StatusCode as OTelStatusCode, set_span_in_context
+from opentelemetry.trace import Status, set_span_in_context
+from opentelemetry.trace import StatusCode as OTelStatusCode
 
 from ...core.drift_sdk import TuskDrift
 from ...core.json_schema_helper import JsonSchemaHelper, SchemaMerge
 from ...core.tracing import TdSpanAttributes
 from ...core.types import (
-    CleanSpanData,
-    Duration,
     PackageType,
     SpanKind,
-    SpanStatus,
-    StatusCode,
-    Timestamp,
 )
 from ..base import InstrumentationBase
 from ..http import HttpSpanData, HttpTransformEngine
-
 
 HEADER_SCHEMA_MERGES = {
     "headers": SchemaMerge(match_importance=0.0),
@@ -44,9 +40,7 @@ MAX_BODY_SIZE = 10000  # 10KB limit
 
 class FastAPIInstrumentation(InstrumentationBase):
     def __init__(self, enabled: bool = True, transforms: dict[str, Any] | None = None):
-        self._transform_engine = HttpTransformEngine(
-            self._resolve_http_transforms(transforms)
-        )
+        self._transform_engine = HttpTransformEngine(self._resolve_http_transforms(transforms))
         super().__init__(
             name="FastAPIInstrumentation",
             module_name="fastapi",
@@ -80,9 +74,7 @@ class FastAPIInstrumentation(InstrumentationBase):
         transform_engine = self._transform_engine
 
         @wraps(original_call)
-        async def instrumented_call(
-            self: Any, scope: Scope, receive: Receive, send: Send
-        ) -> None:
+        async def instrumented_call(self: Any, scope: Scope, receive: Receive, send: Send) -> None:
             # Only instrument HTTP requests, pass through websocket/lifespan
             if scope.get("type") != "http":
                 return await original_call(self, scope, receive, send)
@@ -120,6 +112,7 @@ async def _handle_replay_request(
     - Create SERVER span for tracking
     """
     import logging
+
     from ...core.types import replay_trace_id_context
 
     logger = logging.getLogger(__name__)
@@ -146,10 +139,13 @@ async def _handle_replay_request(
 
             # Store in tracker for env instrumentation to use
             from ..env import EnvVarTracker
+
             tracker = EnvVarTracker.get_instance()
             tracker.set_env_vars(replay_trace_id, env_vars)
 
-            logger.debug(f"[FastAPIInstrumentation] Fetched {len(env_vars)} env vars from CLI for trace {replay_trace_id}")
+            logger.debug(
+                f"[FastAPIInstrumentation] Fetched {len(env_vars)} env vars from CLI for trace {replay_trace_id}"
+            )
         except Exception as e:
             logger.error(f"[FastAPIInstrumentation] Failed to fetch env vars from CLI: {e}")
 
@@ -159,12 +155,10 @@ async def _handle_replay_request(
         # Modify headers in scope
         headers_list = scope.get("headers", [])
         scope["headers"] = [
-            (k, v) for k, v in headers_list
-            if k.decode("utf-8", errors="replace").lower() != "accept-encoding"
+            (k, v) for k, v in headers_list if k.decode("utf-8", errors="replace").lower() != "accept-encoding"
         ]
 
     # Set replay trace context using context variable (for CLI communication)
-    from ...core.types import replay_trace_id_context
     replay_token = replay_trace_id_context.set(replay_trace_id)
 
     try:
@@ -228,7 +222,11 @@ async def _handle_replay_request(
                 response_data["status_message"] = _get_status_message(message.get("status", 200))
                 raw_headers = message.get("headers", [])
                 response_data["headers"] = {
-                    k.decode("utf-8", errors="replace") if isinstance(k, bytes) else k: v.decode("utf-8", errors="replace") if isinstance(v, bytes) else v
+                    k.decode("utf-8", errors="replace") if isinstance(k, bytes) else k: v.decode(
+                        "utf-8", errors="replace"
+                    )
+                    if isinstance(v, bytes)
+                    else v
                     for k, v in raw_headers
                 }
             elif message.get("type") == "http.response.body":
@@ -367,7 +365,9 @@ async def _handle_request(
             # Convert headers from list of tuples to dict
             raw_headers = message.get("headers", [])
             response_data["headers"] = {
-                k.decode("utf-8", errors="replace") if isinstance(k, bytes) else k: v.decode("utf-8", errors="replace") if isinstance(v, bytes) else v
+                k.decode("utf-8", errors="replace") if isinstance(k, bytes) else k: v.decode("utf-8", errors="replace")
+                if isinstance(v, bytes)
+                else v
                 for k, v in raw_headers
             }
         elif message.get("type") == "http.response.body":
@@ -424,7 +424,7 @@ async def _handle_request(
 
 
 def _finalize_span(
-    span: "trace.Span",
+    span: trace.Span,
     scope: Scope,
     response_data: dict[str, Any],
     request_body: bytes | None,
@@ -492,9 +492,10 @@ def _finalize_span(
         output_value["errorName"] = response_data["error_type"]  # Match Node SDK field name
 
     # Check if content type should block the trace
+    import logging
+
     from ...core.content_type_utils import get_decoded_type, should_block_content_type
     from ...core.trace_blocking_manager import TraceBlockingManager
-    import logging
 
     logger = logging.getLogger(__name__)
     response_headers = response_data.get("headers", {})
@@ -504,13 +505,10 @@ def _finalize_span(
     if should_block_content_type(decoded_type):
         # Extract trace_id from span
         span_context = span.get_span_context()
-        trace_id = format(span_context.trace_id, '032x')
+        trace_id = format(span_context.trace_id, "032x")
 
         blocking_mgr = TraceBlockingManager.get_instance()
-        blocking_mgr.block_trace(
-            trace_id,
-            reason=f"binary_content:{decoded_type.name if decoded_type else 'unknown'}"
-        )
+        blocking_mgr.block_trace(trace_id, reason=f"binary_content:{decoded_type.name if decoded_type else 'unknown'}")
         logger.warning(
             f"Blocking trace {trace_id} - binary response: {content_type} "
             f"(decoded as {decoded_type.name if decoded_type else 'unknown'})"
@@ -529,7 +527,7 @@ def _finalize_span(
         output_value = span_data.output_value or output_value
         transform_metadata = span_data.transform_metadata
 
-    sdk = TuskDrift.get_instance()
+    TuskDrift.get_instance()
 
     status_code = response_data.get("status_code", 200)
     if status_code >= 400:
@@ -541,6 +539,7 @@ def _finalize_span(
     input_schema_merges = dict(HEADER_SCHEMA_MERGES)
     if "body" in input_value:
         from ...core.json_schema_helper import EncodingType
+
         input_schema_merges["body"] = SchemaMerge(encoding=EncodingType.BASE64)
     # Add bodyProcessingError to schema merges if truncated (matches Node SDK)
     if request_body_truncated:
@@ -549,17 +548,14 @@ def _finalize_span(
     output_schema_merges = dict(HEADER_SCHEMA_MERGES)
     if "body" in output_value:
         from ...core.json_schema_helper import EncodingType
+
         output_schema_merges["body"] = SchemaMerge(encoding=EncodingType.BASE64)
     # Add bodyProcessingError to schema merges if truncated (matches Node SDK)
     if response_body_truncated:
         output_schema_merges["bodyProcessingError"] = SchemaMerge(match_importance=1.0)
 
-    input_schema_info = JsonSchemaHelper.generate_schema_and_hash(
-        input_value, input_schema_merges
-    )
-    output_schema_info = JsonSchemaHelper.generate_schema_and_hash(
-        output_value, output_schema_merges
-    )
+    input_schema_info = JsonSchemaHelper.generate_schema_and_hash(input_value, input_schema_merges)
+    output_schema_info = JsonSchemaHelper.generate_schema_and_hash(output_value, output_schema_merges)
 
     # Set span attributes
     span.set_attribute(TdSpanAttributes.INPUT_VALUE, json.dumps(input_value))
@@ -576,12 +572,14 @@ def _finalize_span(
 
     # Attach env vars to metadata if present
     from ..env import EnvVarTracker
+
     span_context = span.get_span_context()
-    trace_id = format(span_context.trace_id, '032x')
+    trace_id = format(span_context.trace_id, "032x")
     tracker = EnvVarTracker.get_instance()
     env_vars = tracker.get_env_vars(trace_id)
     if env_vars:
         from ...core.types import MetadataObject
+
         metadata = MetadataObject(ENV_VARS=env_vars)
         span.set_attribute(TdSpanAttributes.METADATA, json.dumps(metadata.__dict__))
 

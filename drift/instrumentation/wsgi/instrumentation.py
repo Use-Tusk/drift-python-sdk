@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING, Any, override
 if TYPE_CHECKING:
     from _typeshed.wsgi import WSGIApplication
 
-    from ...core.drift_sdk import TuskDrift
 
 from ..base import InstrumentationBase
 from ..http import HttpTransformEngine
@@ -65,9 +64,7 @@ class WsgiInstrumentation(InstrumentationBase):
             framework_name: Name of framework for span attribution
         """
         self._framework_name = framework_name
-        self._transform_engine = HttpTransformEngine(
-            self._resolve_http_transforms(transforms)
-        )
+        self._transform_engine = HttpTransformEngine(self._resolve_http_transforms(transforms))
 
         # Note: We don't call super().__init__() with a module_name
         # because this is meant to be used programmatically, not via import hooks

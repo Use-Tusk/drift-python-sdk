@@ -15,33 +15,26 @@ CONTENT_TYPE_MAPPING: dict[str, DecodedType] = {
     "application/json": DecodedType.JSON,
     "application/ld+json": DecodedType.JSON,
     "application/vnd.api+json": DecodedType.JSON,
-
     # Plain Text (ALLOWED)
     "text/plain": DecodedType.PLAIN_TEXT,
-
     # HTML (BLOCKED)
     "text/html": DecodedType.HTML,
     "application/xhtml+xml": DecodedType.HTML,
-
     # CSS (BLOCKED)
     "text/css": DecodedType.CSS,
-
     # JavaScript (BLOCKED)
     "text/javascript": DecodedType.JAVASCRIPT,
     "application/javascript": DecodedType.JAVASCRIPT,
     "application/x-javascript": DecodedType.JAVASCRIPT,
     "text/ecmascript": DecodedType.JAVASCRIPT,
     "application/ecmascript": DecodedType.JAVASCRIPT,
-
     # XML (BLOCKED)
     "text/xml": DecodedType.XML,
     "application/xml": DecodedType.XML,
     "application/rss+xml": DecodedType.XML,
     "application/atom+xml": DecodedType.XML,
-
     # SVG (BLOCKED)
     "image/svg+xml": DecodedType.SVG,
-
     # Structured Data (BLOCKED)
     "application/yaml": DecodedType.YAML,
     "text/yaml": DecodedType.YAML,
@@ -53,11 +46,9 @@ CONTENT_TYPE_MAPPING: dict[str, DecodedType] = {
     "text/tab-separated-values": DecodedType.CSV,
     "application/sql": DecodedType.SQL,
     "application/graphql": DecodedType.GRAPHQL,
-
     # Form Data (BLOCKED)
     "application/x-www-form-urlencoded": DecodedType.FORM_DATA,
     "multipart/form-data": DecodedType.MULTIPART_FORM,
-
     # Documents (BLOCKED)
     "application/pdf": DecodedType.PDF,
     "application/msword": DecodedType.BINARY,
@@ -66,7 +57,6 @@ CONTENT_TYPE_MAPPING: dict[str, DecodedType] = {
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": DecodedType.BINARY,
     "application/vnd.ms-powerpoint": DecodedType.BINARY,
     "application/vnd.openxmlformats-officedocument.presentationml.presentation": DecodedType.BINARY,
-
     # Archives (BLOCKED)
     "application/zip": DecodedType.ZIP,
     "application/x-zip-compressed": DecodedType.ZIP,
@@ -75,7 +65,6 @@ CONTENT_TYPE_MAPPING: dict[str, DecodedType] = {
     "application/x-tar": DecodedType.BINARY,
     "application/x-7z-compressed": DecodedType.BINARY,
     "application/x-rar-compressed": DecodedType.BINARY,
-
     # Images (BLOCKED)
     "image/jpeg": DecodedType.JPEG,
     "image/jpg": DecodedType.JPEG,
@@ -87,7 +76,6 @@ CONTENT_TYPE_MAPPING: dict[str, DecodedType] = {
     "image/vnd.microsoft.icon": DecodedType.JPEG,
     "image/tiff": DecodedType.JPEG,
     "image/x-tiff": DecodedType.JPEG,
-
     # Audio (BLOCKED)
     "audio/mpeg": DecodedType.AUDIO,
     "audio/mp3": DecodedType.AUDIO,
@@ -99,7 +87,6 @@ CONTENT_TYPE_MAPPING: dict[str, DecodedType] = {
     "audio/ogg": DecodedType.AUDIO,
     "audio/webm": DecodedType.AUDIO,
     "audio/flac": DecodedType.AUDIO,
-
     # Video (BLOCKED)
     "video/mp4": DecodedType.VIDEO,
     "video/mpeg": DecodedType.VIDEO,
@@ -110,7 +97,6 @@ CONTENT_TYPE_MAPPING: dict[str, DecodedType] = {
     "video/x-flv": DecodedType.VIDEO,
     "video/3gpp": DecodedType.VIDEO,
     "video/3gpp2": DecodedType.VIDEO,
-
     # Fonts (BLOCKED)
     "font/woff": DecodedType.BINARY,
     "font/woff2": DecodedType.BINARY,
@@ -120,7 +106,6 @@ CONTENT_TYPE_MAPPING: dict[str, DecodedType] = {
     "application/font-woff2": DecodedType.BINARY,
     "application/x-font-ttf": DecodedType.BINARY,
     "application/x-font-otf": DecodedType.BINARY,
-
     # Binary/Octet Stream (BLOCKED)
     "application/octet-stream": DecodedType.BINARY,
     "application/binary": DecodedType.BINARY,

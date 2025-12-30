@@ -8,21 +8,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
-from opentelemetry import context as otel_context
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
 from opentelemetry.trace import Span
 
-from .otel_converter import otel_span_to_clean_span_data
 from ..sampling import should_sample
 from ..trace_blocking_manager import TraceBlockingManager, should_block_span
+from .otel_converter import otel_span_to_clean_span_data
 
 if TYPE_CHECKING:
     from opentelemetry.context import Context
-    from .span_exporter import TdSpanExporter
+
     from ..batch_processor import BatchSpanProcessor
-    from ..types import DriftMode, CleanSpanData
+    from ..types import DriftMode
+    from .span_exporter import TdSpanExporter
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +43,8 @@ class TdSpanProcessor(SpanProcessor):
 
     def __init__(
         self,
-        exporter: "TdSpanExporter",
-        mode: "DriftMode",
+        exporter: TdSpanExporter,
+        mode: DriftMode,
         sampling_rate: float = 1.0,
         app_ready: bool = False,
     ) -> None:
@@ -62,7 +62,7 @@ class TdSpanProcessor(SpanProcessor):
         self._app_ready = app_ready
 
         # We'll import and create batch processor lazily to avoid circular imports
-        self._batch_processor: Optional["BatchSpanProcessor"] = None
+        self._batch_processor: BatchSpanProcessor | None = None
         self._started = False
 
     def start(self) -> None:
@@ -84,7 +84,7 @@ class TdSpanProcessor(SpanProcessor):
     def on_start(
         self,
         span: Span,
-        parent_context: Optional["Context"] = None,
+        parent_context: Context | None = None,
     ) -> None:
         """Called when a span starts.
 
@@ -114,14 +114,14 @@ class TdSpanProcessor(SpanProcessor):
             # Convert OTel span to CleanSpanData
             logger.debug(f"[TdSpanProcessor] Converting span '{span.name}' to CleanSpanData")
             clean_span = otel_span_to_clean_span_data(span)
-            logger.debug(f"[TdSpanProcessor] Converted span: {clean_span.name} (package: {clean_span.package_name}, kind: {clean_span.kind})")
+            logger.debug(
+                f"[TdSpanProcessor] Converted span: {clean_span.name} (package: {clean_span.package_name}, kind: {clean_span.kind})"
+            )
 
             # Apply trace blocking logic
             trace_blocking_manager = TraceBlockingManager.get_instance()
             if trace_blocking_manager.is_trace_blocked(clean_span.trace_id):
-                logger.debug(
-                    f"Skipping span '{clean_span.name}' - trace {clean_span.trace_id} is blocked"
-                )
+                logger.debug(f"Skipping span '{clean_span.name}' - trace {clean_span.trace_id} is blocked")
                 return
 
             # Check if this span should block the trace

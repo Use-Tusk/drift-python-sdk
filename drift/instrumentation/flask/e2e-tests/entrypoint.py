@@ -9,30 +9,30 @@ This script orchestrates the full e2e test lifecycle:
 4. Teardown: Cleanup and return exit code
 """
 
-import os
-import sys
-import subprocess
-import time
-import signal
 import json
+import os
+import signal
+import subprocess
+import sys
+import time
 from pathlib import Path
-from typing import Optional
 
 
 class Colors:
     """ANSI color codes for output."""
-    GREEN = '\033[0;32m'
-    RED = '\033[0;31m'
-    YELLOW = '\033[1;33m'
-    BLUE = '\033[0;34m'
-    NC = '\033[0m'  # No Color
+
+    GREEN = "\033[0;32m"
+    RED = "\033[0;31m"
+    YELLOW = "\033[1;33m"
+    BLUE = "\033[0;34m"
+    NC = "\033[0m"  # No Color
 
 
 class E2ETestRunner:
     """Orchestrates the e2e test lifecycle."""
 
     def __init__(self):
-        self.app_process: Optional[subprocess.Popen] = None
+        self.app_process: subprocess.Popen | None = None
         self.exit_code = 0
 
         # Register signal handlers for cleanup
@@ -55,12 +55,7 @@ class E2ETestRunner:
         if env:
             full_env.update(env)
 
-        result = subprocess.run(
-            cmd,
-            env=full_env,
-            capture_output=True,
-            text=True
-        )
+        result = subprocess.run(cmd, env=full_env, capture_output=True, text=True)
 
         if check and result.returncode != 0:
             self.log(f"Command failed: {' '.join(cmd)}", Colors.RED)
@@ -75,11 +70,7 @@ class E2ETestRunner:
         elapsed = 0
         while elapsed < timeout:
             try:
-                result = subprocess.run(
-                    check_cmd,
-                    capture_output=True,
-                    timeout=5
-                )
+                result = subprocess.run(check_cmd, capture_output=True, timeout=5)
                 if result.returncode == 0:
                     return True
             except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
@@ -121,26 +112,20 @@ class E2ETestRunner:
 
         # Start application in RECORD mode
         self.log("Starting application in RECORD mode...", Colors.GREEN)
-        env = {
-            "TUSK_DRIFT_MODE": "RECORD",
-            "PYTHONUNBUFFERED": "1"
-        }
+        env = {"TUSK_DRIFT_MODE": "RECORD", "PYTHONUNBUFFERED": "1"}
 
         self.app_process = subprocess.Popen(
             ["python", "src/app.py"],
             env={**os.environ, **env},
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True
+            text=True,
         )
 
         # Wait for app to be ready
         self.log("Waiting for application to be ready...", Colors.BLUE)
         try:
-            self.wait_for_service(
-                ["curl", "-fsS", "http://localhost:8000/health"],
-                timeout=30
-            )
+            self.wait_for_service(["curl", "-fsS", "http://localhost:8000/health"], timeout=30)
             self.log("Application is ready", Colors.GREEN)
         except TimeoutError:
             self.log("Application failed to become ready", Colors.RED)
@@ -188,14 +173,10 @@ class E2ETestRunner:
         self.log("Phase 3: Running Tusk Tests", Colors.BLUE)
         self.log("=" * 50, Colors.BLUE)
 
-        env = {
-            "TUSK_ANALYTICS_DISABLED": "1"
-        }
+        env = {"TUSK_ANALYTICS_DISABLED": "1"}
 
         result = self.run_command(
-            ["tusk", "run", "--print", "--output-format", "json", "--enable-service-logs"],
-            env=env,
-            check=False
+            ["tusk", "run", "--print", "--output-format", "json", "--enable-service-logs"], env=env, check=False
         )
 
         # Parse JSON results
@@ -212,12 +193,12 @@ class E2ETestRunner:
 
         try:
             # Extract JSON objects from output
-            lines = output.strip().split('\n')
+            lines = output.strip().split("\n")
             results = []
 
             for line in lines:
                 line = line.strip()
-                if line.startswith('{') and line.endswith('}'):
+                if line.startswith("{") and line.endswith("}"):
                     try:
                         results.append(json.loads(line))
                     except json.JSONDecodeError:
@@ -225,9 +206,9 @@ class E2ETestRunner:
 
             all_passed = True
             for result in results:
-                test_id = result.get('test_id', 'unknown')
-                passed = result.get('passed', False)
-                duration = result.get('duration', 0)
+                test_id = result.get("test_id", "unknown")
+                passed = result.get("passed", False)
+                duration = result.get("duration", 0)
 
                 if passed:
                     self.log(f"✓ Test ID: {test_id} (Duration: {duration}ms)", Colors.GREEN)
@@ -280,6 +261,7 @@ class E2ETestRunner:
         except Exception as e:
             self.log(f"Test failed with exception: {e}", Colors.RED)
             import traceback
+
             traceback.print_exc()
             return 1
 

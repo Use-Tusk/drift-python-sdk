@@ -110,11 +110,7 @@ class ProtobufCommunicator:
         """Get the current stack trace, excluding internal frames."""
         lines = traceback.format_stack()
         # Filter out internal frames
-        filtered = [
-            line
-            for line in lines
-            if "ProtobufCommunicator" not in line and "communicator.py" not in line
-        ]
+        filtered = [line for line in lines if "ProtobufCommunicator" not in line and "communicator.py" not in line]
         return "".join(filtered[-20:])  # Limit to last 20 frames
 
     # ========== Connection Methods ==========
@@ -165,10 +161,10 @@ class ProtobufCommunicator:
 
             self._connected = True
 
-        except socket.timeout as e:
+        except TimeoutError as e:
             self._cleanup()
             raise TimeoutError(f"Connection timed out: {e}") from e
-        except (socket.error, OSError) as e:
+        except OSError as e:
             self._cleanup()
             raise ConnectionError(f"Socket error: {e}") from e
 
@@ -214,9 +210,7 @@ class ProtobufCommunicator:
 
             cli_message = CliMessage().parse(message_data)
 
-            logger.debug(
-                f"Received connect response: type={cli_message.type}, requestId={cli_message.request_id}"
-            )
+            logger.debug(f"Received connect response: type={cli_message.type}, requestId={cli_message.request_id}")
 
             if cli_message.connect_response:
                 response = cli_message.connect_response
@@ -226,11 +220,9 @@ class ProtobufCommunicator:
                     error_msg = response.error or "Unknown error"
                     raise ConnectionError(f"CLI rejected connection: {error_msg}")
             else:
-                raise ConnectionError(
-                    f"Expected connect response but got message type: {cli_message.type}"
-                )
+                raise ConnectionError(f"Expected connect response but got message type: {cli_message.type}")
 
-        except socket.timeout as e:
+        except TimeoutError as e:
             raise TimeoutError(f"Timeout waiting for connect response: {e}") from e
 
     def connect_sync(
@@ -312,48 +304,36 @@ class ProtobufCommunicator:
 
             cli_message = CliMessage().parse(message_data)
 
-            logger.debug(
-                f"Received connect response: type={cli_message.type}, requestId={cli_message.request_id}"
-            )
+            logger.debug(f"Received connect response: type={cli_message.type}, requestId={cli_message.request_id}")
 
             if cli_message.connect_response:
                 response = cli_message.connect_response
                 if response.success:
                     logger.debug("CLI acknowledged connection successfully")
                     self._connected = True
-                    logger.info(
-                        f"[CONNECT_SYNC] Connection successful! Socket is: {self._socket}"
-                    )
-                    logger.info(
-                        f"[CONNECT_SYNC] _connected={self._connected}, is_connected={self.is_connected}"
-                    )
+                    logger.info(f"[CONNECT_SYNC] Connection successful! Socket is: {self._socket}")
+                    logger.info(f"[CONNECT_SYNC] _connected={self._connected}, is_connected={self.is_connected}")
                 else:
                     error_msg = response.error or "Unknown error"
                     raise ConnectionError(f"CLI rejected connection: {error_msg}")
             else:
-                raise ConnectionError(
-                    f"Expected connect response but got message type: {cli_message.type}"
-                )
+                raise ConnectionError(f"Expected connect response but got message type: {cli_message.type}")
 
-        except socket.timeout as e:
+        except TimeoutError as e:
             self._cleanup()
             raise TimeoutError(f"Connection timed out: {e}") from e
-        except (socket.error, OSError) as e:
+        except OSError as e:
             self._cleanup()
             raise ConnectionError(f"Socket error: {e}") from e
 
-        logger.info(
-            f"[CONNECT_SYNC] Exiting connect_sync(). Socket still open: {self._socket is not None}"
-        )
+        logger.info(f"[CONNECT_SYNC] Exiting connect_sync(). Socket still open: {self._socket is not None}")
 
     async def disconnect(self) -> None:
         """Disconnect from CLI."""
         self._cleanup()
         logger.debug("Disconnected from CLI")
 
-    async def request_mock_async(
-        self, mock_request: MockRequestInput
-    ) -> MockResponseOutput:
+    async def request_mock_async(self, mock_request: MockRequestInput) -> MockResponseOutput:
         """Request mocked response data from CLI (async).
 
         Args:
@@ -395,8 +375,7 @@ class ProtobufCommunicator:
         )
 
         logger.debug(
-            f"[ProtobufCommunicator] Creating mock request with requestId: {request_id}, "
-            f"testId: {mock_request.test_id}"
+            f"[ProtobufCommunicator] Creating mock request with requestId: {request_id}, testId: {mock_request.test_id}"
         )
 
         # Send and wait for response
@@ -437,9 +416,7 @@ class ProtobufCommunicator:
             get_mock_request=proto_mock_request,
         )
 
-        logger.debug(
-            f"Sending protobuf request to CLI (sync), testId: {mock_request.test_id}"
-        )
+        logger.debug(f"Sending protobuf request to CLI (sync), testId: {mock_request.test_id}")
 
         return self._execute_sync_request(sdk_message, self._handle_mock_response)
 
@@ -465,9 +442,7 @@ class ProtobufCommunicator:
             env_var_request=env_var_request.to_proto(),
         )
 
-        logger.debug(
-            f"[ProtobufCommunicator] Requesting env vars (sync) for trace: {trace_test_server_span_id}"
-        )
+        logger.debug(f"[ProtobufCommunicator] Requesting env vars (sync) for trace: {trace_test_server_span_id}")
 
         return self._execute_sync_request(sdk_message, self._handle_env_var_response)
 
@@ -593,9 +568,7 @@ class ProtobufCommunicator:
 
                 cli_message = CliMessage().parse(message_data)
 
-                logger.debug(
-                    f"Received CLI message type: {cli_message.type}, requestId: {cli_message.request_id}"
-                )
+                logger.debug(f"Received CLI message type: {cli_message.type}, requestId: {cli_message.request_id}")
 
                 if cli_message.request_id == request_id:
                     return self._handle_cli_message(cli_message)
@@ -609,7 +582,7 @@ class ProtobufCommunicator:
                         logger.error(f"CLI rejected connection: {response.error}")
                     continue
 
-        except socket.timeout as e:
+        except TimeoutError as e:
             raise TimeoutError(f"Request timed out: {e}") from e
 
     def _recv_exact(self, n: int) -> bytes | None:
@@ -755,20 +728,14 @@ class ProtobufCommunicator:
             if "response" in data:
                 mock_interaction = data["response"]
 
-                if (
-                    isinstance(mock_interaction, dict)
-                    and "response" in mock_interaction
-                ):
+                if isinstance(mock_interaction, dict) and "response" in mock_interaction:
                     response_obj = mock_interaction["response"]
                     if isinstance(response_obj, dict) and "body" in response_obj:
                         return response_obj["body"] or {}
                     elif isinstance(response_obj, dict):
                         return response_obj
 
-                if (
-                    isinstance(mock_interaction, dict)
-                    and "Response" in mock_interaction
-                ):
+                if isinstance(mock_interaction, dict) and "Response" in mock_interaction:
                     response_obj = mock_interaction["Response"]
                     if isinstance(response_obj, dict) and "Body" in response_obj:
                         return response_obj["Body"] or {}
@@ -790,19 +757,11 @@ class ProtobufCommunicator:
             return [self._clean_span(item) for item in data if item is not None]
 
         if isinstance(data, dict):
-            return {
-                key: self._clean_span(value)
-                for key, value in data.items()
-                if value is not None
-            }
+            return {key: self._clean_span(value) for key, value in data.items() if value is not None}
 
         if hasattr(data, "__dict__"):
             # Handle dataclass/object
-            return {
-                key: self._clean_span(value)
-                for key, value in data.__dict__.items()
-                if value is not None
-            }
+            return {key: self._clean_span(value) for key, value in data.__dict__.items() if value is not None}
 
         return data
 

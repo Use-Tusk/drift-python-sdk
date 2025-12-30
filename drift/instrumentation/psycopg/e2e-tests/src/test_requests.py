@@ -1,7 +1,8 @@
 """Execute test requests against the Psycopg Flask app."""
 
-import requests
 import time
+
+import requests
 
 BASE_URL = "http://localhost:8000"
 
@@ -31,13 +32,17 @@ if __name__ == "__main__":
     resp2 = make_request("POST", "/db/insert", json={"name": "Bob", "email": "bob@example.com"})
 
     # Batch insert
-    make_request("POST", "/db/batch-insert", json={
-        "users": [
-            {"name": "Charlie", "email": "charlie@example.com"},
-            {"name": "David", "email": "david@example.com"},
-            {"name": "Eve", "email": "eve@example.com"}
-        ]
-    })
+    make_request(
+        "POST",
+        "/db/batch-insert",
+        json={
+            "users": [
+                {"name": "Charlie", "email": "charlie@example.com"},
+                {"name": "David", "email": "david@example.com"},
+                {"name": "Eve", "email": "eve@example.com"},
+            ]
+        },
+    )
 
     # Update operation
     if resp1.status_code == 201:

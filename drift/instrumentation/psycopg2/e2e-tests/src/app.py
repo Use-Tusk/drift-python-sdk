@@ -1,10 +1,12 @@
 """Flask app with Psycopg2 (legacy) operations for e2e testing."""
 
 import os
+
 import psycopg2
 import psycopg2.extras
-from drift import TuskDrift
 from flask import Flask, jsonify, request
+
+from drift import TuskDrift
 
 # Initialize Drift SDK
 sdk = TuskDrift.initialize(
@@ -13,6 +15,7 @@ sdk = TuskDrift.initialize(
 )
 
 app = Flask(__name__)
+
 
 # Build connection string from environment variables
 def get_conn_string():
@@ -58,8 +61,7 @@ def db_insert():
         conn = psycopg2.connect(get_conn_string())
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(
-            "INSERT INTO users (name, email) VALUES (%s, %s) RETURNING id, name, email, created_at",
-            (name, email)
+            "INSERT INTO users (name, email) VALUES (%s, %s) RETURNING id, name, email, created_at", (name, email)
         )
         user = cur.fetchone()
         conn.commit()
@@ -80,10 +82,7 @@ def db_update(user_id):
 
         conn = psycopg2.connect(get_conn_string())
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(
-            "UPDATE users SET name = %s WHERE id = %s RETURNING id, name, email",
-            (name, user_id)
-        )
+        cur.execute("UPDATE users SET name = %s WHERE id = %s RETURNING id, name, email", (name, user_id))
         row = cur.fetchone()
         conn.commit()
         cur.close()
@@ -126,10 +125,7 @@ def db_batch_insert():
 
         conn = psycopg2.connect(get_conn_string())
         cur = conn.cursor()
-        cur.executemany(
-            "INSERT INTO users (name, email) VALUES (%s, %s)",
-            [(u["name"], u["email"]) for u in users]
-        )
+        cur.executemany("INSERT INTO users (name, email) VALUES (%s, %s)", [(u["name"], u["email"]) for u in users])
         conn.commit()
         cur.close()
         conn.close()

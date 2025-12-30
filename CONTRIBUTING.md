@@ -16,6 +16,16 @@ cd drift-python-sdk
 uv sync --all-extras
 ```
 
+## Code Quality
+
+This project uses [ruff](https://docs.astral.sh/ruff/) for linting/formatting and [ty](https://github.com/astral-sh/ty) for type checking.
+
+```bash
+uv run ruff check drift/ --fix   # Lint and auto-fix
+uv run ruff format drift/        # Format
+uv run ty check drift/           # Type check
+```
+
 ## Running Tests
 
 ### Unit Tests

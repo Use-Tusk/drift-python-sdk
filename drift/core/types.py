@@ -5,10 +5,9 @@ from __future__ import annotations
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal
 
 from .json_schema_helper import JsonSchema
-
 
 TD_INSTRUMENTATION_LIBRARY_NAME = "tusk-drift-sdk"
 
@@ -89,7 +88,7 @@ class TransformAction:
     type: Literal["redact", "mask", "replace", "drop"]
     field: str
     reason: str
-    description: Optional[str] = None
+    description: str | None = None
 
 
 @dataclass
@@ -97,14 +96,14 @@ class TransformMetadata:
     """Metadata about transforms applied to a span."""
 
     transformed: bool = False
-    actions: List[TransformAction] = field(default_factory=list)
+    actions: list[TransformAction] = field(default_factory=list)
 
 
 @dataclass
 class MetadataObject:
     """Metadata attached to spans (e.g., environment variables)."""
 
-    ENV_VARS: Optional[Dict[str, Any]] = None
+    ENV_VARS: dict[str, Any] | None = None
 
 
 @dataclass
@@ -124,7 +123,7 @@ class CleanSpanData:
     package_name: str
     instrumentation_name: str
     submodule_name: str
-    package_type: Optional[PackageType] = None
+    package_type: PackageType | None = None
     kind: SpanKind = SpanKind.INTERNAL
 
     # Data capture
@@ -151,12 +150,12 @@ class CleanSpanData:
     duration: Duration = field(default_factory=lambda: Duration())
 
     # Metadata
-    metadata: Optional[MetadataObject] = None
-    transform_metadata: Optional[TransformMetadata] = None
+    metadata: MetadataObject | None = None
+    transform_metadata: TransformMetadata | None = None
 
     # SDK-specific
-    is_used: Optional[bool] = None
-    stack_trace: Optional[str] = None
+    is_used: bool | None = None
+    stack_trace: str | None = None
 
     def to_proto(self) -> Any:
         """Serialize this span to a tusk.drift.core.v1.Span message."""
@@ -180,32 +179,22 @@ class MockRequestData:
     submodule_name: str
     input_value: Any
     kind: SpanKind
-    package_type: Optional[PackageType] = None
-    stack_trace: Optional[str] = None
+    package_type: PackageType | None = None
+    stack_trace: str | None = None
 
 
 # Context variables for propagating state through async/sync execution
 # Python's contextvars is the equivalent of OpenTelemetry's Context API
-replay_trace_id_context: ContextVar[Optional[str]] = ContextVar(
-    "replay_trace_id", default=None
-)
-span_kind_context: ContextVar[Optional[SpanKind]] = ContextVar("span_kind", default=None)
+replay_trace_id_context: ContextVar[str | None] = ContextVar("replay_trace_id", default=None)
+span_kind_context: ContextVar[SpanKind | None] = ContextVar("span_kind", default=None)
 is_pre_app_start_context: ContextVar[bool] = ContextVar("is_pre_app_start", default=False)
-stop_recording_child_spans_context: ContextVar[bool] = ContextVar(
-    "stop_recording_child_spans", default=False
-)
-calling_library_context: ContextVar[Optional[str]] = ContextVar(
-    "calling_library", default=None
-)
+stop_recording_child_spans_context: ContextVar[bool] = ContextVar("stop_recording_child_spans", default=False)
+calling_library_context: ContextVar[str | None] = ContextVar("calling_library", default=None)
 
 # Trace context propagation (matches OpenTelemetry behavior)
 # These allow child spans to inherit trace_id and set parent_span_id correctly
-current_trace_id_context: ContextVar[Optional[str]] = ContextVar(
-    "current_trace_id", default=None
-)
-current_span_id_context: ContextVar[Optional[str]] = ContextVar(
-    "current_span_id", default=None
-)
+current_trace_id_context: ContextVar[str | None] = ContextVar("current_trace_id", default=None)
+current_span_id_context: ContextVar[str | None] = ContextVar("current_span_id", default=None)
 
 
 class TdSpanAttributes(str, Enum):

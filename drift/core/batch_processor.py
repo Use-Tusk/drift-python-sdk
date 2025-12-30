@@ -5,14 +5,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-import time
 from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .types import CleanSpanData
     from .tracing.span_exporter import TdSpanExporter
+    from .types import CleanSpanData
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +43,7 @@ class BatchSpanProcessor:
 
     def __init__(
         self,
-        exporter: "TdSpanExporter",
+        exporter: TdSpanExporter,
         config: BatchSpanProcessorConfig | None = None,
     ) -> None:
         """
@@ -99,7 +98,7 @@ class BatchSpanProcessor:
         self._started = False
         logger.debug(f"BatchSpanProcessor stopped. Dropped {self._dropped_spans} spans total.")
 
-    def add_span(self, span: "CleanSpanData") -> bool:
+    def add_span(self, span: CleanSpanData) -> bool:
         """
         Add a span to the queue for export.
 

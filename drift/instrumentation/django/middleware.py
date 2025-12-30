@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from opentelemetry import context as otel_context
-from opentelemetry import trace
 from opentelemetry.trace import SpanKind as OTelSpanKind
-from opentelemetry.trace import Status, StatusCode as OTelStatusCode, set_span_in_context
+from opentelemetry.trace import set_span_in_context
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from django.http import HttpRequest, HttpResponse
+    from django.http import HttpRequest, HttpResponse  # type: ignore[import-not-found]
 from ...core.tracing import TdSpanAttributes
 from ...core.types import (
     CleanSpanData,
@@ -28,10 +28,10 @@ from ...core.types import (
 )
 from ..http import HttpSpanData, HttpTransformEngine
 from ..wsgi import (
-    build_input_value,
-    build_output_value,
     build_input_schema_merges,
+    build_input_value,
     build_output_schema_merges,
+    build_output_value,
 )
 
 
@@ -68,29 +68,19 @@ class DriftMiddleware:
         if sdk.mode == "REPLAY":
             # Extract trace ID from headers (case-insensitive lookup)
             # Django stores headers in request.META
-            headers_lower = {
-                k.lower(): v for k, v in request.META.items() if k.startswith("HTTP_")
-            }
-            logger.info(
-                f"[DJANGO_MIDDLEWARE] REPLAY mode, headers: {list(headers_lower.keys())}"
-            )
+            headers_lower = {k.lower(): v for k, v in request.META.items() if k.startswith("HTTP_")}
+            logger.info(f"[DJANGO_MIDDLEWARE] REPLAY mode, headers: {list(headers_lower.keys())}")
             # Convert HTTP_X_TD_TRACE_ID -> x-td-trace-id
             replay_trace_id = headers_lower.get("http_x_td_trace_id")
-            logger.info(
-                f"[DJANGO_MIDDLEWARE] replay_trace_id from header: {replay_trace_id}"
-            )
+            logger.info(f"[DJANGO_MIDDLEWARE] replay_trace_id from header: {replay_trace_id}")
 
             if not replay_trace_id:
                 # No trace context in REPLAY mode; proceed without span
-                logger.warning(
-                    "[DJANGO_MIDDLEWARE] No replay_trace_id found in headers, proceeding without span"
-                )
+                logger.warning("[DJANGO_MIDDLEWARE] No replay_trace_id found in headers, proceeding without span")
                 return self.get_response(request)
 
             # Fetch env vars from CLI if requested
-            should_fetch_env_vars = (
-                headers_lower.get("http_x_td_fetch_env_vars") == "true"
-            )
+            should_fetch_env_vars = headers_lower.get("http_x_td_fetch_env_vars") == "true"
             if should_fetch_env_vars:
                 try:
                     env_vars = sdk.request_env_vars_sync(replay_trace_id)
@@ -105,9 +95,7 @@ class DriftMiddleware:
                         f"[DjangoMiddleware] Fetched {len(env_vars)} env vars from CLI for trace {replay_trace_id}"
                     )
                 except Exception as e:
-                    logger.error(
-                        f"[DjangoMiddleware] Failed to fetch env vars from CLI: {e}"
-                    )
+                    logger.error(f"[DjangoMiddleware] Failed to fetch env vars from CLI: {e}")
 
             # Set replay trace context
             replay_token = replay_trace_id_context.set(replay_trace_id)
@@ -116,6 +104,7 @@ class DriftMiddleware:
 
         # Create OpenTelemetry span
         from ...core.drift_sdk import TuskDrift
+
         sdk = TuskDrift.get_instance()
         tracer = sdk.get_tracer()
 
@@ -168,9 +157,7 @@ class DriftMiddleware:
 
         request_headers = extract_headers(request.META)
 
-        if self.transform_engine and self.transform_engine.should_drop_inbound_request(
-            method, target, request_headers
-        ):
+        if self.transform_engine and self.transform_engine.should_drop_inbound_request(method, target, request_headers):
             # Reset context before early return
             if replay_token:
                 replay_trace_id_context.reset(replay_token)
@@ -185,9 +172,7 @@ class DriftMiddleware:
         request._drift_replay_token = replay_token  # type: ignore
         request._drift_request_body = request_body  # type: ignore
         request._drift_request_body_truncated = body_truncated  # type: ignore
-        request._drift_route_template = (
-            None  # Will be set in process_view  # type: ignore
-        )
+        request._drift_route_template = None  # Will be set in process_view  # type: ignore
 
         try:
             # Call next middleware or view
@@ -246,26 +231,20 @@ class DriftMiddleware:
 
         # Extract trace_id and span_id from the span context
         span_context = span.get_span_context()
-        trace_id = format(span_context.trace_id, '032x')
-        span_id = format(span_context.span_id, '016x')
+        trace_id = format(span_context.trace_id, "032x")
+        span_id = format(span_context.span_id, "016x")
 
         end_time_ns = time.time_ns()
         duration_ns = end_time_ns - start_time_ns
 
         # Build input_value using WSGI utilities
         request_body = getattr(request, "_drift_request_body", None)
-        request_body_truncated = getattr(
-            request, "_drift_request_body_truncated", False
-        )
-        input_value = build_input_value(
-            request.META, request_body, request_body_truncated
-        )
+        request_body_truncated = getattr(request, "_drift_request_body_truncated", False)
+        input_value = build_input_value(request.META, request_body, request_body_truncated)
 
         # Build output_value using WSGI utilities
         status_code = response.status_code
-        status_message = (
-            response.reason_phrase if hasattr(response, "reason_phrase") else ""
-        )
+        status_message = response.reason_phrase if hasattr(response, "reason_phrase") else ""
 
         # Convert response headers to dict
         response_headers = dict(response.items()) if hasattr(response, "items") else {}
@@ -298,9 +277,7 @@ class DriftMiddleware:
         )
         from ...core.trace_blocking_manager import TraceBlockingManager
 
-        content_type = response_headers.get("content-type") or response_headers.get(
-            "Content-Type"
-        )
+        content_type = response_headers.get("content-type") or response_headers.get("Content-Type")
         decoded_type = get_decoded_type(content_type)
 
         if should_block_content_type(decoded_type):
@@ -337,7 +314,7 @@ class DriftMiddleware:
         output_schema_merges_dict = build_output_schema_merges(output_value, response_body_truncated)
 
         # Convert dict back to SchemaMerge objects for JsonSchemaHelper
-        from ...core.json_schema_helper import SchemaMerge, EncodingType, DecodedType
+        from ...core.json_schema_helper import DecodedType, EncodingType, SchemaMerge
 
         def dict_to_schema_merges(merges_dict):
             result = {}
@@ -345,7 +322,9 @@ class DriftMiddleware:
                 encoding = EncodingType(merge_data["encoding"]) if "encoding" in merge_data else None
                 decoded_type = DecodedType(merge_data["decoded_type"]) if "decoded_type" in merge_data else None
                 match_importance = merge_data.get("match_importance")
-                result[key] = SchemaMerge(encoding=encoding, decoded_type=decoded_type, match_importance=match_importance)
+                result[key] = SchemaMerge(
+                    encoding=encoding, decoded_type=decoded_type, match_importance=match_importance
+                )
             return result
 
         input_schema_merges = dict_to_schema_merges(input_schema_merges_dict)
@@ -438,20 +417,16 @@ class DriftMiddleware:
 
         # Extract trace_id and span_id from the span context
         span_context = span.get_span_context()
-        trace_id = format(span_context.trace_id, '032x')
-        span_id = format(span_context.span_id, '016x')
+        trace_id = format(span_context.trace_id, "032x")
+        span_id = format(span_context.span_id, "016x")
 
         end_time_ns = time.time_ns()
         duration_ns = end_time_ns - start_time_ns
 
         # Build input_value
         request_body = getattr(request, "_drift_request_body", None)
-        request_body_truncated = getattr(
-            request, "_drift_request_body_truncated", False
-        )
-        input_value = build_input_value(
-            request.META, request_body, request_body_truncated
-        )
+        request_body_truncated = getattr(request, "_drift_request_body_truncated", False)
+        input_value = build_input_value(request.META, request_body, request_body_truncated)
 
         # Build error output_value
         output_value = build_output_value(
@@ -464,7 +439,7 @@ class DriftMiddleware:
         )
 
         # Build schema merges and generate schemas
-        from ...core.json_schema_helper import JsonSchemaHelper, SchemaMerge, EncodingType, DecodedType
+        from ...core.json_schema_helper import DecodedType, EncodingType, JsonSchemaHelper, SchemaMerge
 
         input_schema_merges_dict = build_input_schema_merges(input_value, request_body_truncated)
         output_schema_merges_dict = build_output_schema_merges(output_value, False)
@@ -475,7 +450,9 @@ class DriftMiddleware:
                 encoding = EncodingType(merge_data["encoding"]) if "encoding" in merge_data else None
                 decoded_type = DecodedType(merge_data["decoded_type"]) if "decoded_type" in merge_data else None
                 match_importance = merge_data.get("match_importance")
-                result[key] = SchemaMerge(encoding=encoding, decoded_type=decoded_type, match_importance=match_importance)
+                result[key] = SchemaMerge(
+                    encoding=encoding, decoded_type=decoded_type, match_importance=match_importance
+                )
             return result
 
         input_schema_merges = dict_to_schema_merges(input_schema_merges_dict)
@@ -494,11 +471,7 @@ class DriftMiddleware:
 
         method = request.method
         route_template = getattr(request, "_drift_route_template", None)
-        span_name = (
-            f"{method} {route_template}"
-            if route_template
-            else f"{method} {request.path}"
-        )
+        span_name = f"{method} {route_template}" if route_template else f"{method} {request.path}"
 
         # Attach env vars to metadata if present
         from ...core.types import MetadataObject
@@ -528,9 +501,7 @@ class DriftMiddleware:
             output_value_hash=output_schema_info.decoded_value_hash,
             input_schema_hash=input_schema_info.decoded_schema_hash,
             output_schema_hash=output_schema_info.decoded_schema_hash,
-            status=SpanStatus(
-                code=StatusCode.ERROR, message=f"Exception: {type(exception).__name__}"
-            ),
+            status=SpanStatus(code=StatusCode.ERROR, message=f"Exception: {type(exception).__name__}"),
             is_pre_app_start=not sdk.app_ready,
             is_root_span=True,
             timestamp=Timestamp(seconds=timestamp_seconds, nanos=timestamp_nanos),

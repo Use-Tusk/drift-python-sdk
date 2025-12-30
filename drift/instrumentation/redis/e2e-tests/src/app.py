@@ -1,9 +1,11 @@
 """Flask app with Redis operations for e2e testing."""
 
 import os
+
 import redis
-from drift import TuskDrift
 from flask import Flask, jsonify, request
+
+from drift import TuskDrift
 
 # Initialize Drift SDK
 sdk = TuskDrift.initialize(
@@ -15,10 +17,7 @@ app = Flask(__name__)
 
 # Initialize Redis client
 redis_client = redis.Redis(
-    host=os.getenv("REDIS_HOST", "redis"),
-    port=int(os.getenv("REDIS_PORT", "6379")),
-    db=0,
-    decode_responses=True
+    host=os.getenv("REDIS_HOST", "redis"), port=int(os.getenv("REDIS_PORT", "6379")), db=0, decode_responses=True
 )
 
 

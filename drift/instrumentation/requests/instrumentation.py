@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import logging
 import time
-import traceback
-from typing import Any, Dict, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 from opentelemetry import context as otel_context
-from opentelemetry import trace
+from opentelemetry.trace import Span, Status, set_span_in_context
 from opentelemetry.trace import SpanKind as OTelSpanKind
-from opentelemetry.trace import Status, StatusCode as OTelStatusCode, set_span_in_context
+from opentelemetry.trace import StatusCode as OTelStatusCode
 
 
 class RequestDroppedByTransform(Exception):
@@ -35,21 +33,19 @@ class RequestDroppedByTransform(Exception):
         self.url = url
         super().__init__(message)
 
-from ..base import InstrumentationBase
-from ..http import HttpSpanData, HttpTransformEngine
-from ...core.communication.types import MockRequestInput
+
 from ...core.data_normalization import create_mock_input_value
 from ...core.drift_sdk import TuskDrift
-from ...core.json_schema_helper import JsonSchemaHelper, SchemaMerge, EncodingType, DecodedType
+from ...core.json_schema_helper import DecodedType, EncodingType, SchemaMerge
 from ...core.tracing import TdSpanAttributes
 from ...core.types import (
-    CleanSpanData,
     PackageType,
     SpanKind,
     SpanStatus,
     StatusCode,
-    replay_trace_id_context,
 )
+from ..base import InstrumentationBase
+from ..http import HttpSpanData, HttpTransformEngine
 
 logger = logging.getLogger(__name__)
 
@@ -67,10 +63,8 @@ class RequestsInstrumentation(InstrumentationBase):
     - Capture request/response data as CLIENT spans in RECORD mode
     """
 
-    def __init__(self, enabled: bool = True, transforms: Dict[str, Any] | None = None) -> None:
-        self._transform_engine = HttpTransformEngine(
-            self._resolve_http_transforms(transforms)
-        )
+    def __init__(self, enabled: bool = True, transforms: dict[str, Any] | None = None) -> None:
+        self._transform_engine = HttpTransformEngine(self._resolve_http_transforms(transforms))
         super().__init__(
             name="RequestsInstrumentation",
             module_name="requests",
@@ -79,8 +73,8 @@ class RequestsInstrumentation(InstrumentationBase):
         )
 
     def _resolve_http_transforms(
-        self, provided: Dict[str, Any] | list[Dict[str, Any]] | None
-    ) -> list[Dict[str, Any]] | None:
+        self, provided: dict[str, Any] | list[dict[str, Any]] | None
+    ) -> list[dict[str, Any]] | None:
         """Resolve HTTP transforms from provided config or SDK config."""
         if isinstance(provided, list):
             return provided
@@ -139,14 +133,12 @@ class RequestsInstrumentation(InstrumentationBase):
             try:
                 # Get span IDs for mock requests
                 span_context = span.get_span_context()
-                trace_id = format(span_context.trace_id, '032x')
-                span_id = format(span_context.span_id, '016x')
+                trace_id = format(span_context.trace_id, "032x")
+                span_id = format(span_context.span_id, "016x")
 
                 # REPLAY mode: Try to get mock
                 if sdk.mode == "REPLAY":
-                    mock_response = self._try_get_mock(
-                        sdk, method, url, trace_id, span_id, **kwargs
-                    )
+                    mock_response = self._try_get_mock(sdk, method, url, trace_id, span_id, **kwargs)
                     if mock_response is not None:
                         return mock_response
 
@@ -156,9 +148,14 @@ class RequestsInstrumentation(InstrumentationBase):
                     method.upper(), url, kwargs.get("headers", {})
                 ):
                     # Request should be dropped - mark span and raise exception
-                    span.set_attribute(TdSpanAttributes.OUTPUT_VALUE, json.dumps({
-                        "bodyProcessingError": "dropped",
-                    }))
+                    span.set_attribute(
+                        TdSpanAttributes.OUTPUT_VALUE,
+                        json.dumps(
+                            {
+                                "bodyProcessingError": "dropped",
+                            }
+                        ),
+                    )
                     span.set_status(Status(OTelStatusCode.ERROR, "Dropped by transform"))
                     span.end()
 
@@ -182,7 +179,7 @@ class RequestsInstrumentation(InstrumentationBase):
                     raise
                 finally:
                     # Finalize span with request/response data
-                    duration_ms = (time.time_ns() - start_time_ns) / 1_000_000
+                    (time.time_ns() - start_time_ns) / 1_000_000
                     self._finalize_span(
                         span,
                         method,
@@ -196,13 +193,13 @@ class RequestsInstrumentation(InstrumentationBase):
                 otel_context.detach(token)
                 logger.debug(f"[RequestsInstrumentation] Ending span for {method.upper()} {url}")
                 span.end()
-                logger.debug(f"[RequestsInstrumentation] Span ended")
+                logger.debug("[RequestsInstrumentation] Span ended")
 
         # Apply patch
         module.Session.request = patched_request
         logger.info("requests.Session.request instrumented")
 
-    def _encode_body_to_base64(self, body_data: Any) -> tuple[Optional[str], int]:
+    def _encode_body_to_base64(self, body_data: Any) -> tuple[str | None, int]:
         """Encode body data to base64 string.
 
         Args:
@@ -231,7 +228,7 @@ class RequestsInstrumentation(InstrumentationBase):
 
         return base64_body, len(body_bytes)
 
-    def _get_decoded_type_from_content_type(self, content_type: Optional[str]) -> Optional[DecodedType]:
+    def _get_decoded_type_from_content_type(self, content_type: str | None) -> DecodedType | None:
         """Determine decoded type from Content-Type header.
 
         Args:
@@ -259,7 +256,7 @@ class RequestsInstrumentation(InstrumentationBase):
 
         return CONTENT_TYPE_MAP.get(main_type)
 
-    def _get_content_type_header(self, headers: dict) -> Optional[str]:
+    def _get_content_type_header(self, headers: dict) -> str | None:
         """Get content-type header (case-insensitive lookup)."""
         for key, value in headers.items():
             if key.lower() == "content-type":
@@ -408,7 +405,7 @@ class RequestsInstrumentation(InstrumentationBase):
 
     def _finalize_span(
         self,
-        span: "Span",
+        span: Span,
         method: str,
         url: str,
         response: Any,
@@ -521,12 +518,11 @@ class RequestsInstrumentation(InstrumentationBase):
                 if should_block_content_type(decoded_type):
                     # Block PARENT trace for outbound requests with binary responses
                     span_context = span.get_span_context()
-                    trace_id = format(span_context.trace_id, '032x')
+                    trace_id = format(span_context.trace_id, "032x")
 
                     blocking_mgr = TraceBlockingManager.get_instance()
                     blocking_mgr.block_trace(
-                        trace_id,
-                        reason=f"outbound_binary:{decoded_type.name if decoded_type else 'unknown'}"
+                        trace_id, reason=f"outbound_binary:{decoded_type.name if decoded_type else 'unknown'}"
                     )
                     logger.warning(
                         f"Blocking trace {trace_id} - outbound request returned binary response: {response_content_type} "
