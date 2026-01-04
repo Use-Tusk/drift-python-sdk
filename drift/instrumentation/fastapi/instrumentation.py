@@ -35,9 +35,6 @@ HEADER_SCHEMA_MERGES = {
     "headers": SchemaMerge(match_importance=0.0),
 }
 
-MAX_BODY_SIZE = 10000  # 10KB limit
-
-
 class FastAPIInstrumentation(InstrumentationBase):
     def __init__(self, enabled: bool = True, transforms: dict[str, Any] | None = None):
         self._transform_engine = HttpTransformEngine(self._resolve_http_transforms(transforms))
@@ -197,26 +194,21 @@ async def _handle_replay_request(
         response_body_truncated = False
 
         # Wrap receive to capture request body
+        # No truncation at capture time - span-level 1MB blocking at export handles oversized spans
         async def wrapped_receive() -> dict[str, Any]:
-            nonlocal total_body_size, body_truncated
+            nonlocal total_body_size
             message = await receive()
             if message.get("type") == "http.request":
                 body_chunk = message.get("body", b"")
                 if body_chunk:
-                    if total_body_size >= MAX_BODY_SIZE:
-                        body_truncated = True
-                    else:
-                        remaining_space = MAX_BODY_SIZE - total_body_size
-                        if len(body_chunk) > remaining_space:
-                            body_chunk = body_chunk[:remaining_space]
-                            body_truncated = True
-                        request_body_parts.append(body_chunk)
-                        total_body_size += len(body_chunk)
+                    request_body_parts.append(body_chunk)
+                    total_body_size += len(body_chunk)
             return message
 
         # Wrap send to capture response status, headers, and body
+        # No truncation at capture time - span-level 1MB blocking at export handles oversized spans
         async def wrapped_send(message: dict[str, Any]) -> None:
-            nonlocal response_body_size, response_body_truncated
+            nonlocal response_body_size
             if message.get("type") == "http.response.start":
                 response_data["status_code"] = message.get("status", 200)
                 response_data["status_message"] = _get_status_message(message.get("status", 200))
@@ -232,15 +224,8 @@ async def _handle_replay_request(
             elif message.get("type") == "http.response.body":
                 body_chunk = message.get("body", b"")
                 if body_chunk:
-                    if response_body_size >= MAX_BODY_SIZE:
-                        response_body_truncated = True
-                    else:
-                        remaining_space = MAX_BODY_SIZE - response_body_size
-                        if len(body_chunk) > remaining_space:
-                            body_chunk = body_chunk[:remaining_space]
-                            response_body_truncated = True
-                        response_body_parts.append(body_chunk)
-                        response_body_size += len(body_chunk)
+                    response_body_parts.append(body_chunk)
+                    response_body_size += len(body_chunk)
             await send(message)
 
         await original_call(app, scope, wrapped_receive, wrapped_send)
@@ -336,28 +321,21 @@ async def _handle_request(
     response_body_truncated = False
 
     # Wrap receive to capture request body
+    # No truncation at capture time - span-level 1MB blocking at export handles oversized spans
     async def wrapped_receive() -> dict[str, Any]:
-        nonlocal total_body_size, body_truncated
+        nonlocal total_body_size
         message = await receive()
         if message.get("type") == "http.request":
             body_chunk = message.get("body", b"")
-            if body_chunk:  # Only process non-empty chunks
-                if total_body_size >= MAX_BODY_SIZE:
-                    # Already at limit, flag that we're dropping data
-                    body_truncated = True
-                else:
-                    # Calculate remaining space and truncate if necessary
-                    remaining_space = MAX_BODY_SIZE - total_body_size
-                    if len(body_chunk) > remaining_space:
-                        body_chunk = body_chunk[:remaining_space]
-                        body_truncated = True
-                    request_body_parts.append(body_chunk)
-                    total_body_size += len(body_chunk)
+            if body_chunk:
+                request_body_parts.append(body_chunk)
+                total_body_size += len(body_chunk)
         return message
 
     # Wrap send to capture response status, headers, and body
+    # No truncation at capture time - span-level 1MB blocking at export handles oversized spans
     async def wrapped_send(message: dict[str, Any]) -> None:
-        nonlocal response_body_size, response_body_truncated
+        nonlocal response_body_size
         if message.get("type") == "http.response.start":
             response_data["status_code"] = message.get("status", 200)
             # ASGI doesn't provide status message directly, derive from status code
@@ -373,15 +351,8 @@ async def _handle_request(
         elif message.get("type") == "http.response.body":
             body_chunk = message.get("body", b"")
             if body_chunk:
-                if response_body_size >= MAX_BODY_SIZE:
-                    response_body_truncated = True
-                else:
-                    remaining_space = MAX_BODY_SIZE - response_body_size
-                    if len(body_chunk) > remaining_space:
-                        body_chunk = body_chunk[:remaining_space]
-                        response_body_truncated = True
-                    response_body_parts.append(body_chunk)
-                    response_body_size += len(body_chunk)
+                response_body_parts.append(body_chunk)
+                response_body_size += len(body_chunk)
         await send(message)
 
     try:

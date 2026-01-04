@@ -133,18 +133,13 @@ class DriftMiddleware:
 
         # Capture request body
         # Django provides request.body which handles reading and caching
+        # No truncation at capture time - span-level 1MB blocking at export handles oversized spans
         request_body = None
         body_truncated = False
         if request.method in ("POST", "PUT", "PATCH"):
             try:
                 # Django's request.body automatically reads and caches the body
-                body = request.body
-                if body:
-                    if len(body) > 10000:
-                        request_body = body[:10000]
-                        body_truncated = True
-                    else:
-                        request_body = body
+                request_body = request.body
             except Exception:
                 pass
 
@@ -250,16 +245,13 @@ class DriftMiddleware:
         response_headers = dict(response.items()) if hasattr(response, "items") else {}
 
         # Capture response body if available
+        # No truncation at capture time - span-level 1MB blocking at export handles oversized spans
         response_body = None
         response_body_truncated = False
         if hasattr(response, "content"):
             content = response.content
             if isinstance(content, bytes) and len(content) > 0:
-                if len(content) > 10000:
-                    response_body = content[:10000]
-                    response_body_truncated = True
-                else:
-                    response_body = content
+                response_body = content
 
         output_value = build_output_value(
             status_code,

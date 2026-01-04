@@ -33,9 +33,17 @@ from tusk.drift.core.v1 import (
     GetMockResponse as ProtoGetMockResponse,
 )
 
-# Re-export protobuf types from tusk-drift-schemas
+# Re-export protobuf types from tusk-drift-schemas.
+# These are imported by other modules (e.g., communicator.py) from this file.
+# The linter may report them as unused, but they are intentionally re-exported.
 from tusk.drift.core.v1 import (
+    CliMessage,
+    InstrumentationVersionMismatchAlert,
     MessageType,
+    SdkMessage,
+    SendAlertRequest,
+    SendInboundSpanForReplayRequest,
+    UnpatchedDependencyAlert,
 )
 from tusk.drift.core.v1 import (
     Span as ProtoSpan,

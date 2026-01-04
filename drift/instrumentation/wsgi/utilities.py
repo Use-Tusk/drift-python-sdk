@@ -14,9 +14,6 @@ HEADER_SCHEMA_MERGES = {
     "headers": SchemaMerge(match_importance=0.0),
 }
 
-MAX_BODY_SIZE = 10000  # 10KB limit
-
-
 def build_url(environ: WSGIEnvironment) -> str:
     """Build full URL from WSGI environ.
 
@@ -58,15 +55,15 @@ def extract_headers(environ: WSGIEnvironment) -> dict[str, str]:
     return headers
 
 
-def capture_request_body(environ: WSGIEnvironment, max_size: int = MAX_BODY_SIZE) -> tuple[bytes | None, bool]:
+def capture_request_body(environ: WSGIEnvironment) -> tuple[bytes | None, bool]:
     """Capture request body from WSGI environ.
 
-    Captures body for POST/PUT/PATCH requests up to max_size bytes.
+    Captures body for POST/PUT/PATCH requests.
+    No truncation at capture time - span-level 1MB blocking at export handles oversized spans.
     Resets wsgi.input so the application can still read it.
 
     Args:
         environ: WSGI environ dictionary
-        max_size: Maximum body size to capture (default: 10KB)
 
     Returns:
         Tuple of (body_bytes, truncated_flag)
@@ -79,19 +76,15 @@ def capture_request_body(environ: WSGIEnvironment, max_size: int = MAX_BODY_SIZE
         if content_length > 0:
             wsgi_input = environ.get("wsgi.input")
             if wsgi_input:
-                # Determine if we need to truncate
-                truncated = content_length > max_size
-                read_size = min(content_length, max_size)
-
-                # Read body
-                body = wsgi_input.read(read_size)
+                # Read full body (no truncation - span-level blocking handles oversized spans)
+                body = wsgi_input.read(content_length)
 
                 # Reset input for app to read
                 from io import BytesIO
 
                 environ["wsgi.input"] = BytesIO(body)
 
-                return body, truncated
+                return body, False  # Never truncated
     except Exception:
         pass
 

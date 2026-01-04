@@ -34,7 +34,7 @@ class RequestDroppedByTransform(Exception):
         super().__init__(message)
 
 
-from ...core.data_normalization import create_mock_input_value
+from ...core.data_normalization import create_mock_input_value, remove_none_values
 from ...core.drift_sdk import TuskDrift
 from ...core.json_schema_helper import DecodedType, EncodingType, SchemaMerge
 from ...core.tracing import TdSpanAttributes
@@ -475,12 +475,8 @@ class RequestsInstrumentation(InstrumentationBase):
 
                 try:
                     # Get response content as bytes (respects encoding)
+                    # No truncation at capture time - span-level 1MB blocking at export handles oversized spans
                     response_bytes = response.content
-
-                    # Truncate if needed (10KB limit) - matches Node SDK behavior
-                    if len(response_bytes) > 10240:
-                        response_bytes = response_bytes[:10240]
-                        response_body_truncated = True
 
                     # Encode to base64
                     response_body_base64, response_body_size = self._encode_body_to_base64(response_bytes)
@@ -579,8 +575,11 @@ class RequestsInstrumentation(InstrumentationBase):
                 output_schema_merges["bodyProcessingError"] = SchemaMerge(match_importance=1.0)
 
             # ===== SET SPAN ATTRIBUTES =====
-            span.set_attribute(TdSpanAttributes.INPUT_VALUE, json.dumps(input_value))
-            span.set_attribute(TdSpanAttributes.OUTPUT_VALUE, json.dumps(output_value))
+            # Normalize values to remove None fields (matches REPLAY path behavior)
+            normalized_input = remove_none_values(input_value)
+            normalized_output = remove_none_values(output_value)
+            span.set_attribute(TdSpanAttributes.INPUT_VALUE, json.dumps(normalized_input))
+            span.set_attribute(TdSpanAttributes.OUTPUT_VALUE, json.dumps(normalized_output))
 
             # Set schema merges (schemas will be generated at export time)
             from ..wsgi.utilities import _schema_merges_to_dict

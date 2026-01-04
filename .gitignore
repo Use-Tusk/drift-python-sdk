@@ -216,3 +216,6 @@ __marimo__/
 
 .direnv
 .tusk/traces
+
+# macOS
+.DS_Store
