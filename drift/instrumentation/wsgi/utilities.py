@@ -14,9 +14,6 @@ HEADER_SCHEMA_MERGES = {
     "headers": SchemaMerge(match_importance=0.0),
 }
 
-MAX_BODY_SIZE = 10000  # 10KB limit
-
-
 def build_url(environ: WSGIEnvironment) -> str:
     """Build full URL from WSGI environ.
 
@@ -58,44 +55,40 @@ def extract_headers(environ: WSGIEnvironment) -> dict[str, str]:
     return headers
 
 
-def capture_request_body(environ: WSGIEnvironment, max_size: int = MAX_BODY_SIZE) -> tuple[bytes | None, bool]:
+def capture_request_body(environ: WSGIEnvironment) -> bytes | None:
     """Capture request body from WSGI environ.
 
-    Captures body for POST/PUT/PATCH requests up to max_size bytes.
+    Captures body for POST/PUT/PATCH requests.
+    No truncation at capture time - span-level 1MB blocking at export handles oversized spans.
     Resets wsgi.input so the application can still read it.
 
     Args:
         environ: WSGI environ dictionary
-        max_size: Maximum body size to capture (default: 10KB)
 
     Returns:
-        Tuple of (body_bytes, truncated_flag)
+        Request body bytes, or None if no body
     """
     if environ.get("REQUEST_METHOD") not in ("POST", "PUT", "PATCH"):
-        return None, False
+        return None
 
     try:
         content_length = int(environ.get("CONTENT_LENGTH", 0))
         if content_length > 0:
             wsgi_input = environ.get("wsgi.input")
             if wsgi_input:
-                # Determine if we need to truncate
-                truncated = content_length > max_size
-                read_size = min(content_length, max_size)
-
-                # Read body
-                body = wsgi_input.read(read_size)
+                # Read full body (no truncation - span-level blocking handles oversized spans)
+                body = wsgi_input.read(content_length)
 
                 # Reset input for app to read
                 from io import BytesIO
 
                 environ["wsgi.input"] = BytesIO(body)
 
-                return body, truncated
+                return body
     except Exception:
         pass
 
-    return None, False
+    return None
 
 
 def parse_status_line(status: str) -> tuple[int, str]:
@@ -116,14 +109,12 @@ def parse_status_line(status: str) -> tuple[int, str]:
 def build_input_value(
     environ: WSGIEnvironment,
     body: bytes | None = None,
-    body_truncated: bool = False,
 ) -> dict[str, Any]:
     """Build standardized input_value dict from WSGI environ.
 
     Args:
         environ: WSGI environ dictionary
         body: Optional request body bytes
-        body_truncated: Whether body was truncated
 
     Returns:
         Dictionary with HTTP request data (method, url, headers, body, etc.)
@@ -155,8 +146,6 @@ def build_input_value(
         # Store body as Base64 encoded string to match Node SDK behavior
         input_value["body"] = base64.b64encode(body).decode("ascii")
         input_value["bodySize"] = len(body)
-        if body_truncated:
-            input_value["bodyProcessingError"] = "truncated"
 
     return input_value
 
@@ -166,7 +155,6 @@ def build_output_value(
     status_message: str,
     headers: dict[str, str],
     body: bytes | None = None,
-    body_truncated: bool = False,
     error: str | None = None,
 ) -> dict[str, Any]:
     """Build standardized output_value dict from response data.
@@ -176,7 +164,6 @@ def build_output_value(
         status_message: HTTP status message (e.g., "OK", "Not Found")
         headers: Response headers dictionary
         body: Optional response body bytes
-        body_truncated: Whether body was truncated
         error: Optional error message
 
     Returns:
@@ -192,8 +179,6 @@ def build_output_value(
     if body:
         output_value["body"] = base64.b64encode(body).decode("ascii")
         output_value["bodySize"] = len(body)
-        if body_truncated:
-            output_value["bodyProcessingError"] = "truncated"
 
     if error:
         output_value["errorMessage"] = error  # Match Node SDK field name
@@ -201,7 +186,7 @@ def build_output_value(
     return output_value
 
 
-def build_input_schema_merges(input_value: dict[str, Any], body_truncated: bool = False) -> dict[str, Any]:
+def build_input_schema_merges(input_value: dict[str, Any]) -> dict[str, Any]:
     """Build schema merge hints for HTTP input_value.
 
     This function creates schema merge metadata that will be used by the exporter
@@ -209,7 +194,6 @@ def build_input_schema_merges(input_value: dict[str, Any], body_truncated: bool 
 
     Args:
         input_value: Input value dictionary
-        body_truncated: Whether body was truncated
 
     Returns:
         Dictionary of schema merge hints (serializable to JSON)
@@ -218,14 +202,12 @@ def build_input_schema_merges(input_value: dict[str, Any], body_truncated: bool 
     input_schema_merges = dict(HEADER_SCHEMA_MERGES)
     if "body" in input_value:
         input_schema_merges["body"] = SchemaMerge(encoding=EncodingType.BASE64)
-    if body_truncated and "bodyProcessingError" in input_value:
-        input_schema_merges["bodyProcessingError"] = SchemaMerge(match_importance=1.0)
 
     # Convert to serializable dict format
     return _schema_merges_to_dict(input_schema_merges)
 
 
-def build_output_schema_merges(output_value: dict[str, Any], body_truncated: bool = False) -> dict[str, Any]:
+def build_output_schema_merges(output_value: dict[str, Any]) -> dict[str, Any]:
     """Build schema merge hints for HTTP output_value.
 
     This function creates schema merge metadata that will be used by the exporter
@@ -233,12 +215,11 @@ def build_output_schema_merges(output_value: dict[str, Any], body_truncated: boo
 
     Args:
         output_value: Output value dictionary
-        body_truncated: Whether body was truncated
 
     Returns:
         Dictionary of schema merge hints (serializable to JSON)
     """
-    # Build schema merge hints including body encoding and truncation flags
+    # Build schema merge hints including body encoding
     output_schema_merges = dict(HEADER_SCHEMA_MERGES)
     if "body" in output_value:
         # Only set encoding, not decoded_type
@@ -246,9 +227,6 @@ def build_output_schema_merges(output_value: dict[str, Any], body_truncated: boo
         # creating a schema for the parsed object instead of the encoded string.
         # The CLI will decode based on Content-Type headers during comparison.
         output_schema_merges["body"] = SchemaMerge(encoding=EncodingType.BASE64)
-    # Add bodyProcessingError to schema merges if truncated (matches Node SDK)
-    if body_truncated and "bodyProcessingError" in output_value:
-        output_schema_merges["bodyProcessingError"] = SchemaMerge(match_importance=1.0)
 
     # Convert to serializable dict format
     return _schema_merges_to_dict(output_schema_merges)

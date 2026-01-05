@@ -116,9 +116,8 @@ def handle_wsgi_request(
     target = f"{path}?{query_string}" if query_string else path
 
     # Capture request body
-    request_body, body_truncated = capture_request_body(environ)
+    request_body = capture_request_body(environ)
     environ["_drift_request_body"] = request_body
-    environ["_drift_request_body_truncated"] = body_truncated
 
     # Check if request should be dropped
     request_headers = extract_headers(environ)
@@ -132,7 +131,7 @@ def handle_wsgi_request(
     span_name = f"{method} {path}"
 
     # Build input value before starting span
-    input_value = build_input_value(environ, request_body, body_truncated)
+    input_value = build_input_value(environ, request_body)
 
     # Store start time for duration calculation
     start_time_ns = time.time_ns()
@@ -224,7 +223,6 @@ def finalize_wsgi_span(
         status_message = response_data.get("status_message", "")
         response_headers = response_data.get("headers", {})
         response_body = response_data.get("body")
-        response_body_truncated = response_data.get("body_truncated", False)
         error = response_data.get("error")
 
         output_value = build_output_value(
@@ -232,7 +230,6 @@ def finalize_wsgi_span(
             status_message,
             response_headers,
             response_body,
-            response_body_truncated,
             error,
         )
 
@@ -263,7 +260,6 @@ def finalize_wsgi_span(
             return
 
         # Apply transforms if present
-        request_body_truncated = environ.get("_drift_request_body_truncated", False)
         input_value_dict = json.loads(span.attributes.get(TdSpanAttributes.INPUT_VALUE, "{}"))
 
         transform_metadata = None
@@ -285,8 +281,8 @@ def finalize_wsgi_span(
         span.set_attribute(TdSpanAttributes.OUTPUT_VALUE, json.dumps(output_value))
 
         # Build and set schema merge hints (schemas will be generated at export time)
-        input_schema_merges = build_input_schema_merges(input_value_dict, request_body_truncated)
-        output_schema_merges = build_output_schema_merges(output_value, response_body_truncated)
+        input_schema_merges = build_input_schema_merges(input_value_dict)
+        output_schema_merges = build_output_schema_merges(output_value)
 
         span.set_attribute(TdSpanAttributes.INPUT_SCHEMA_MERGES, json.dumps(input_schema_merges))
         span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA_MERGES, json.dumps(output_schema_merges))

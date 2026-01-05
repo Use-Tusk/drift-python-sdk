@@ -34,7 +34,7 @@ class RequestDroppedByTransform(Exception):
         super().__init__(message)
 
 
-from ...core.data_normalization import create_mock_input_value
+from ...core.data_normalization import create_mock_input_value, remove_none_values
 from ...core.drift_sdk import TuskDrift
 from ...core.json_schema_helper import DecodedType, EncodingType, SchemaMerge
 from ...core.tracing import TdSpanAttributes
@@ -460,7 +460,6 @@ class RequestsInstrumentation(InstrumentationBase):
             output_value = {}
             status = SpanStatus(code=StatusCode.OK, message="")
             response_body_base64 = None  # Initialize for later use in schema merges
-            response_body_truncated = False  # Track if response body was truncated
 
             if error:
                 output_value = {
@@ -475,12 +474,8 @@ class RequestsInstrumentation(InstrumentationBase):
 
                 try:
                     # Get response content as bytes (respects encoding)
+                    # No truncation at capture time - span-level 1MB blocking at export handles oversized spans
                     response_bytes = response.content
-
-                    # Truncate if needed (10KB limit) - matches Node SDK behavior
-                    if len(response_bytes) > 10240:
-                        response_bytes = response_bytes[:10240]
-                        response_body_truncated = True
 
                     # Encode to base64
                     response_body_base64, response_body_size = self._encode_body_to_base64(response_bytes)
@@ -498,9 +493,6 @@ class RequestsInstrumentation(InstrumentationBase):
                 if response_body_base64 is not None:
                     output_value["body"] = response_body_base64
                     output_value["bodySize"] = response_body_size
-                    # Flag truncated bodies (matches Node SDK httpBodyEncoder)
-                    if response_body_truncated:
-                        output_value["bodyProcessingError"] = "truncated"
 
                 if response.status_code >= 400:
                     status = SpanStatus(
@@ -574,13 +566,13 @@ class RequestsInstrumentation(InstrumentationBase):
                     encoding=EncodingType.BASE64,
                     decoded_type=self._get_decoded_type_from_content_type(response_content_type),
                 )
-            # Add bodyProcessingError to schema merges if truncated (matches Node SDK)
-            if response_body_truncated:
-                output_schema_merges["bodyProcessingError"] = SchemaMerge(match_importance=1.0)
 
             # ===== SET SPAN ATTRIBUTES =====
-            span.set_attribute(TdSpanAttributes.INPUT_VALUE, json.dumps(input_value))
-            span.set_attribute(TdSpanAttributes.OUTPUT_VALUE, json.dumps(output_value))
+            # Normalize values to remove None fields (matches REPLAY path behavior)
+            normalized_input = remove_none_values(input_value)
+            normalized_output = remove_none_values(output_value)
+            span.set_attribute(TdSpanAttributes.INPUT_VALUE, json.dumps(normalized_input))
+            span.set_attribute(TdSpanAttributes.OUTPUT_VALUE, json.dumps(normalized_output))
 
             # Set schema merges (schemas will be generated at export time)
             from ..wsgi.utilities import _schema_merges_to_dict

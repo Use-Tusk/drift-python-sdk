@@ -8,16 +8,16 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from _typeshed.wsgi import WSGIEnvironment
 
-MAX_BODY_SIZE = 10000  # 10KB limit
-
-
 class ResponseBodyCapture(Iterable[bytes]):
     """
     Wrapper for WSGI response iterable that captures the response body.
 
-    Captures body chunks up to MAX_BODY_SIZE and calls a callback function
-    when the response is complete. Uses a callback pattern to decouple
-    WSGI layer from span creation logic.
+    Captures all body chunks and calls a callback function when the response
+    is complete. Uses a callback pattern to decouple WSGI layer from span
+    creation logic.
+
+    No truncation at capture time - span-level 1MB blocking at export handles
+    oversized spans.
 
     Args:
         response: The original WSGI response iterable
@@ -25,7 +25,7 @@ class ResponseBodyCapture(Iterable[bytes]):
         response_data: Dictionary to store response metadata (status, headers)
         on_complete: Callback function called when response is done.
                      Receives (environ, response_data) where response_data
-                     includes 'body', 'body_size', and 'body_truncated'.
+                     includes 'body' and 'body_size'.
     """
 
     def __init__(
@@ -41,25 +41,15 @@ class ResponseBodyCapture(Iterable[bytes]):
         self._on_complete = on_complete
         self._body_parts: list[bytes] = []
         self._body_size = 0
-        self._body_truncated = False
         self._closed = False
 
     def __iter__(self) -> Iterator[bytes]:
         try:
             for chunk in self._response:
-                # Capture chunk for body
-                if chunk and not self._body_truncated:
-                    if self._body_size >= MAX_BODY_SIZE:
-                        self._body_truncated = True
-                    else:
-                        remaining = MAX_BODY_SIZE - self._body_size
-                        if len(chunk) > remaining:
-                            self._body_parts.append(chunk[:remaining])
-                            self._body_size += remaining
-                            self._body_truncated = True
-                        else:
-                            self._body_parts.append(chunk)
-                            self._body_size += len(chunk)
+                # Capture chunk for body (no truncation)
+                if chunk:
+                    self._body_parts.append(chunk)
+                    self._body_size += len(chunk)
                 yield chunk
         finally:
             self._finalize()
@@ -82,8 +72,6 @@ class ResponseBodyCapture(Iterable[bytes]):
             body = b"".join(self._body_parts)
             self._response_data["body"] = body
             self._response_data["body_size"] = len(body)
-            if self._body_truncated:
-                self._response_data["body_truncated"] = True
 
         # Call completion callback
         self._on_complete(self._environ, self._response_data)

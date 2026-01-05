@@ -35,9 +35,6 @@ HEADER_SCHEMA_MERGES = {
     "headers": SchemaMerge(match_importance=0.0),
 }
 
-MAX_BODY_SIZE = 10000  # 10KB limit
-
-
 class FastAPIInstrumentation(InstrumentationBase):
     def __init__(self, enabled: bool = True, transforms: dict[str, Any] | None = None):
         self._transform_engine = HttpTransformEngine(self._resolve_http_transforms(transforms))
@@ -191,32 +188,25 @@ async def _handle_replay_request(
         response_data: dict[str, Any] = {}
         request_body_parts: list[bytes] = []
         total_body_size = 0
-        body_truncated = False
         response_body_parts: list[bytes] = []
         response_body_size = 0
-        response_body_truncated = False
 
         # Wrap receive to capture request body
+        # No truncation at capture time - span-level 1MB blocking at export handles oversized spans
         async def wrapped_receive() -> dict[str, Any]:
-            nonlocal total_body_size, body_truncated
+            nonlocal total_body_size
             message = await receive()
             if message.get("type") == "http.request":
                 body_chunk = message.get("body", b"")
                 if body_chunk:
-                    if total_body_size >= MAX_BODY_SIZE:
-                        body_truncated = True
-                    else:
-                        remaining_space = MAX_BODY_SIZE - total_body_size
-                        if len(body_chunk) > remaining_space:
-                            body_chunk = body_chunk[:remaining_space]
-                            body_truncated = True
-                        request_body_parts.append(body_chunk)
-                        total_body_size += len(body_chunk)
+                    request_body_parts.append(body_chunk)
+                    total_body_size += len(body_chunk)
             return message
 
         # Wrap send to capture response status, headers, and body
+        # No truncation at capture time - span-level 1MB blocking at export handles oversized spans
         async def wrapped_send(message: dict[str, Any]) -> None:
-            nonlocal response_body_size, response_body_truncated
+            nonlocal response_body_size
             if message.get("type") == "http.response.start":
                 response_data["status_code"] = message.get("status", 200)
                 response_data["status_message"] = _get_status_message(message.get("status", 200))
@@ -232,15 +222,8 @@ async def _handle_replay_request(
             elif message.get("type") == "http.response.body":
                 body_chunk = message.get("body", b"")
                 if body_chunk:
-                    if response_body_size >= MAX_BODY_SIZE:
-                        response_body_truncated = True
-                    else:
-                        remaining_space = MAX_BODY_SIZE - response_body_size
-                        if len(body_chunk) > remaining_space:
-                            body_chunk = body_chunk[:remaining_space]
-                            response_body_truncated = True
-                        response_body_parts.append(body_chunk)
-                        response_body_size += len(body_chunk)
+                    response_body_parts.append(body_chunk)
+                    response_body_size += len(body_chunk)
             await send(message)
 
         await original_call(app, scope, wrapped_receive, wrapped_send)
@@ -251,9 +234,7 @@ async def _handle_replay_request(
             scope,
             response_data,
             request_body,
-            body_truncated,
             response_body,
-            response_body_truncated,
             start_time_ns,
             transform_engine,
         )
@@ -330,34 +311,25 @@ async def _handle_request(
     response_data: dict[str, Any] = {}
     request_body_parts: list[bytes] = []
     total_body_size = 0
-    body_truncated = False
     response_body_parts: list[bytes] = []
     response_body_size = 0
-    response_body_truncated = False
 
     # Wrap receive to capture request body
+    # No truncation at capture time - span-level 1MB blocking at export handles oversized spans
     async def wrapped_receive() -> dict[str, Any]:
-        nonlocal total_body_size, body_truncated
+        nonlocal total_body_size
         message = await receive()
         if message.get("type") == "http.request":
             body_chunk = message.get("body", b"")
-            if body_chunk:  # Only process non-empty chunks
-                if total_body_size >= MAX_BODY_SIZE:
-                    # Already at limit, flag that we're dropping data
-                    body_truncated = True
-                else:
-                    # Calculate remaining space and truncate if necessary
-                    remaining_space = MAX_BODY_SIZE - total_body_size
-                    if len(body_chunk) > remaining_space:
-                        body_chunk = body_chunk[:remaining_space]
-                        body_truncated = True
-                    request_body_parts.append(body_chunk)
-                    total_body_size += len(body_chunk)
+            if body_chunk:
+                request_body_parts.append(body_chunk)
+                total_body_size += len(body_chunk)
         return message
 
     # Wrap send to capture response status, headers, and body
+    # No truncation at capture time - span-level 1MB blocking at export handles oversized spans
     async def wrapped_send(message: dict[str, Any]) -> None:
-        nonlocal response_body_size, response_body_truncated
+        nonlocal response_body_size
         if message.get("type") == "http.response.start":
             response_data["status_code"] = message.get("status", 200)
             # ASGI doesn't provide status message directly, derive from status code
@@ -373,15 +345,8 @@ async def _handle_request(
         elif message.get("type") == "http.response.body":
             body_chunk = message.get("body", b"")
             if body_chunk:
-                if response_body_size >= MAX_BODY_SIZE:
-                    response_body_truncated = True
-                else:
-                    remaining_space = MAX_BODY_SIZE - response_body_size
-                    if len(body_chunk) > remaining_space:
-                        body_chunk = body_chunk[:remaining_space]
-                        response_body_truncated = True
-                    response_body_parts.append(body_chunk)
-                    response_body_size += len(body_chunk)
+                response_body_parts.append(body_chunk)
+                response_body_size += len(body_chunk)
         await send(message)
 
     try:
@@ -393,9 +358,7 @@ async def _handle_request(
             scope,
             response_data,
             request_body,
-            body_truncated,
             response_body,
-            response_body_truncated,
             start_time_ns,
             transform_engine,
         )
@@ -410,9 +373,7 @@ async def _handle_request(
             scope,
             response_data,
             request_body,
-            body_truncated,
             response_body,
-            response_body_truncated,
             start_time_ns,
             transform_engine,
         )
@@ -428,9 +389,7 @@ def _finalize_span(
     scope: Scope,
     response_data: dict[str, Any],
     request_body: bytes | None,
-    request_body_truncated: bool,
     response_body: bytes | None,
-    response_body_truncated: bool,
     start_time_ns: int,
     transform_engine: HttpTransformEngine | None,
 ) -> None:
@@ -470,8 +429,6 @@ def _finalize_span(
         # Store body as Base64 encoded string to match Node SDK behavior
         input_value["body"] = base64.b64encode(request_body).decode("ascii")
         input_value["bodySize"] = len(request_body)
-        if request_body_truncated:
-            input_value["bodyProcessingError"] = "truncated"  # Match Node SDK field name
 
     output_value: dict[str, Any] = {
         "statusCode": response_data.get("status_code", 200),  # camelCase to match Node SDK
@@ -483,8 +440,6 @@ def _finalize_span(
         # Store body as Base64 encoded string to match Node SDK behavior
         output_value["body"] = base64.b64encode(response_body).decode("ascii")
         output_value["bodySize"] = len(response_body)
-        if response_body_truncated:
-            output_value["bodyProcessingError"] = "truncated"  # Match Node SDK field name
 
     if "error" in response_data:
         output_value["errorMessage"] = response_data["error"]  # Match Node SDK field name
@@ -535,24 +490,18 @@ def _finalize_span(
     else:
         span.set_status(Status(OTelStatusCode.OK))
 
-    # Build schema merge hints including body encoding and truncation flags
+    # Build schema merge hints including body encoding
     input_schema_merges = dict(HEADER_SCHEMA_MERGES)
     if "body" in input_value:
         from ...core.json_schema_helper import EncodingType
 
         input_schema_merges["body"] = SchemaMerge(encoding=EncodingType.BASE64)
-    # Add bodyProcessingError to schema merges if truncated (matches Node SDK)
-    if request_body_truncated:
-        input_schema_merges["bodyProcessingError"] = SchemaMerge(match_importance=1.0)
 
     output_schema_merges = dict(HEADER_SCHEMA_MERGES)
     if "body" in output_value:
         from ...core.json_schema_helper import EncodingType
 
         output_schema_merges["body"] = SchemaMerge(encoding=EncodingType.BASE64)
-    # Add bodyProcessingError to schema merges if truncated (matches Node SDK)
-    if response_body_truncated:
-        output_schema_merges["bodyProcessingError"] = SchemaMerge(match_importance=1.0)
 
     input_schema_info = JsonSchemaHelper.generate_schema_and_hash(input_value, input_schema_merges)
     output_schema_info = JsonSchemaHelper.generate_schema_and_hash(output_value, output_schema_merges)
