@@ -100,13 +100,6 @@ class TransformMetadata:
 
 
 @dataclass
-class MetadataObject:
-    """Metadata attached to spans (e.g., environment variables)."""
-
-    ENV_VARS: dict[str, Any] | None = None
-
-
-@dataclass
 class CleanSpanData:
     """
     Clean span data structure matching Node.js SDK.
@@ -124,6 +117,7 @@ class CleanSpanData:
     instrumentation_name: str
     submodule_name: str
     package_type: PackageType | None = None
+    environment: str | None = None
     kind: SpanKind = SpanKind.INTERNAL
 
     # Data capture
@@ -150,7 +144,7 @@ class CleanSpanData:
     duration: Duration = field(default_factory=lambda: Duration())
 
     # Metadata
-    metadata: MetadataObject | None = None
+    metadata: dict[str, Any] | None = None
     transform_metadata: TransformMetadata | None = None
 
     # SDK-specific

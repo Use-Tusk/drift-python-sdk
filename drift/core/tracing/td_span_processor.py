@@ -47,6 +47,7 @@ class TdSpanProcessor(SpanProcessor):
         mode: DriftMode,
         sampling_rate: float = 1.0,
         app_ready: bool = False,
+        environment: str | None = None,
     ) -> None:
         """Initialize the TdSpanProcessor.
 
@@ -55,11 +56,13 @@ class TdSpanProcessor(SpanProcessor):
             mode: SDK mode (RECORD, REPLAY, DISABLED)
             sampling_rate: Sampling rate (0.0-1.0)
             app_ready: Whether the application is ready
+            environment: Environment name to include on spans
         """
         self._exporter = exporter
         self._mode = mode
         self._sampling_rate = sampling_rate
         self._app_ready = app_ready
+        self._environment = environment
 
         # We'll import and create batch processor lazily to avoid circular imports
         self._batch_processor: BatchSpanProcessor | None = None
@@ -113,7 +116,7 @@ class TdSpanProcessor(SpanProcessor):
         try:
             # Convert OTel span to CleanSpanData
             logger.debug(f"[TdSpanProcessor] Converting span '{span.name}' to CleanSpanData")
-            clean_span = otel_span_to_clean_span_data(span)
+            clean_span = otel_span_to_clean_span_data(span, self._environment)
             logger.debug(
                 f"[TdSpanProcessor] Converted span: {clean_span.name} (package: {clean_span.package_name}, kind: {clean_span.kind})"
             )

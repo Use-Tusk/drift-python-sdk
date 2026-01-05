@@ -95,6 +95,7 @@ def clean_span_to_proto(span: CleanSpanData) -> ProtoSpan:
         instrumentation_name=span.instrumentation_name,
         submodule_name=span.submodule_name,
         package_type=span.package_type.value if span.package_type else 0,
+        environment=span.environment or "",
         kind=span.kind.value if hasattr(span.kind, "value") else span.kind,
         input_value=_dict_to_struct(span.input_value),
         output_value=_dict_to_struct(span.output_value),

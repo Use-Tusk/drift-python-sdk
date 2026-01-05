@@ -21,12 +21,6 @@ from tusk.drift.core.v1 import (
     ConnectResponse as ProtoConnectResponse,
 )
 from tusk.drift.core.v1 import (
-    EnvVarRequest as ProtoEnvVarRequest,
-)
-from tusk.drift.core.v1 import (
-    EnvVarResponse as ProtoEnvVarResponse,
-)
-from tusk.drift.core.v1 import (
     GetMockRequest as ProtoGetMockRequest,
 )
 from tusk.drift.core.v1 import (
@@ -193,46 +187,6 @@ class GetMockResponse:
             matched_span_id=proto.matched_span_id or None,
             error=proto.error or None,
         )
-
-
-@dataclass
-class EnvVarRequest:
-    """Request for environment variables."""
-
-    request_id: str
-    """Unique identifier for this request."""
-
-    trace_test_server_span_id: str
-    """Trace test server span ID to get environment variables for."""
-
-    def to_proto(self) -> ProtoEnvVarRequest:
-        """Convert to protobuf message."""
-        return ProtoEnvVarRequest(
-            trace_test_server_span_id=self.trace_test_server_span_id,
-        )
-
-
-@dataclass
-class EnvVarResponse:
-    """Response containing environment variable values."""
-
-    request_id: str
-    """Matches the request_id from EnvVarRequest."""
-
-    env_vars: dict[str, str] = field(default_factory=dict)
-    """Map of variable name to value."""
-
-    error: str | None = None
-    """Error message if retrieval failed."""
-
-    @classmethod
-    def from_proto(cls, proto: ProtoEnvVarResponse, request_id: str = "") -> EnvVarResponse:
-        """Create from protobuf message."""
-        return cls(
-            request_id=request_id,
-            env_vars=dict(proto.env_vars) if proto.env_vars else {},
-        )
-
 
 @dataclass
 class MockRequestInput:
