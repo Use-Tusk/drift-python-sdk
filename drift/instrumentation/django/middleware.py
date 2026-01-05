@@ -135,7 +135,6 @@ class DriftMiddleware:
         # Django provides request.body which handles reading and caching
         # No truncation at capture time - span-level 1MB blocking at export handles oversized spans
         request_body = None
-        body_truncated = False
         if request.method in ("POST", "PUT", "PATCH"):
             try:
                 # Django's request.body automatically reads and caches the body
@@ -166,7 +165,6 @@ class DriftMiddleware:
         request._drift_token = token  # type: ignore
         request._drift_replay_token = replay_token  # type: ignore
         request._drift_request_body = request_body  # type: ignore
-        request._drift_request_body_truncated = body_truncated  # type: ignore
         request._drift_route_template = None  # Will be set in process_view  # type: ignore
 
         try:
@@ -234,8 +232,7 @@ class DriftMiddleware:
 
         # Build input_value using WSGI utilities
         request_body = getattr(request, "_drift_request_body", None)
-        request_body_truncated = getattr(request, "_drift_request_body_truncated", False)
-        input_value = build_input_value(request.META, request_body, request_body_truncated)
+        input_value = build_input_value(request.META, request_body)
 
         # Build output_value using WSGI utilities
         status_code = response.status_code
@@ -247,7 +244,6 @@ class DriftMiddleware:
         # Capture response body if available
         # No truncation at capture time - span-level 1MB blocking at export handles oversized spans
         response_body = None
-        response_body_truncated = False
         if hasattr(response, "content"):
             content = response.content
             if isinstance(content, bytes) and len(content) > 0:
@@ -258,7 +254,6 @@ class DriftMiddleware:
             status_message,
             response_headers,
             response_body,
-            response_body_truncated,
             None,
         )
 
@@ -302,8 +297,8 @@ class DriftMiddleware:
         # so we need to generate schemas here instead of in the converter
         from ...core.json_schema_helper import JsonSchemaHelper
 
-        input_schema_merges_dict = build_input_schema_merges(input_value, request_body_truncated)
-        output_schema_merges_dict = build_output_schema_merges(output_value, response_body_truncated)
+        input_schema_merges_dict = build_input_schema_merges(input_value)
+        output_schema_merges_dict = build_output_schema_merges(output_value)
 
         # Convert dict back to SchemaMerge objects for JsonSchemaHelper
         from ...core.json_schema_helper import DecodedType, EncodingType, SchemaMerge
@@ -417,8 +412,7 @@ class DriftMiddleware:
 
         # Build input_value
         request_body = getattr(request, "_drift_request_body", None)
-        request_body_truncated = getattr(request, "_drift_request_body_truncated", False)
-        input_value = build_input_value(request.META, request_body, request_body_truncated)
+        input_value = build_input_value(request.META, request_body)
 
         # Build error output_value
         output_value = build_output_value(
@@ -426,15 +420,14 @@ class DriftMiddleware:
             "Internal Server Error",
             {},
             None,
-            False,
             str(exception),
         )
 
         # Build schema merges and generate schemas
         from ...core.json_schema_helper import DecodedType, EncodingType, JsonSchemaHelper, SchemaMerge
 
-        input_schema_merges_dict = build_input_schema_merges(input_value, request_body_truncated)
-        output_schema_merges_dict = build_output_schema_merges(output_value, False)
+        input_schema_merges_dict = build_input_schema_merges(input_value)
+        output_schema_merges_dict = build_output_schema_merges(output_value)
 
         def dict_to_schema_merges(merges_dict):
             result = {}

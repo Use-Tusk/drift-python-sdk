@@ -460,7 +460,6 @@ class RequestsInstrumentation(InstrumentationBase):
             output_value = {}
             status = SpanStatus(code=StatusCode.OK, message="")
             response_body_base64 = None  # Initialize for later use in schema merges
-            response_body_truncated = False  # Track if response body was truncated
 
             if error:
                 output_value = {
@@ -494,9 +493,6 @@ class RequestsInstrumentation(InstrumentationBase):
                 if response_body_base64 is not None:
                     output_value["body"] = response_body_base64
                     output_value["bodySize"] = response_body_size
-                    # Flag truncated bodies (matches Node SDK httpBodyEncoder)
-                    if response_body_truncated:
-                        output_value["bodyProcessingError"] = "truncated"
 
                 if response.status_code >= 400:
                     status = SpanStatus(
@@ -570,9 +566,6 @@ class RequestsInstrumentation(InstrumentationBase):
                     encoding=EncodingType.BASE64,
                     decoded_type=self._get_decoded_type_from_content_type(response_content_type),
                 )
-            # Add bodyProcessingError to schema merges if truncated (matches Node SDK)
-            if response_body_truncated:
-                output_schema_merges["bodyProcessingError"] = SchemaMerge(match_importance=1.0)
 
             # ===== SET SPAN ATTRIBUTES =====
             # Normalize values to remove None fields (matches REPLAY path behavior)

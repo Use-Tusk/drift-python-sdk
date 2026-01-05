@@ -188,10 +188,8 @@ async def _handle_replay_request(
         response_data: dict[str, Any] = {}
         request_body_parts: list[bytes] = []
         total_body_size = 0
-        body_truncated = False
         response_body_parts: list[bytes] = []
         response_body_size = 0
-        response_body_truncated = False
 
         # Wrap receive to capture request body
         # No truncation at capture time - span-level 1MB blocking at export handles oversized spans
@@ -236,9 +234,7 @@ async def _handle_replay_request(
             scope,
             response_data,
             request_body,
-            body_truncated,
             response_body,
-            response_body_truncated,
             start_time_ns,
             transform_engine,
         )
@@ -315,10 +311,8 @@ async def _handle_request(
     response_data: dict[str, Any] = {}
     request_body_parts: list[bytes] = []
     total_body_size = 0
-    body_truncated = False
     response_body_parts: list[bytes] = []
     response_body_size = 0
-    response_body_truncated = False
 
     # Wrap receive to capture request body
     # No truncation at capture time - span-level 1MB blocking at export handles oversized spans
@@ -364,9 +358,7 @@ async def _handle_request(
             scope,
             response_data,
             request_body,
-            body_truncated,
             response_body,
-            response_body_truncated,
             start_time_ns,
             transform_engine,
         )
@@ -381,9 +373,7 @@ async def _handle_request(
             scope,
             response_data,
             request_body,
-            body_truncated,
             response_body,
-            response_body_truncated,
             start_time_ns,
             transform_engine,
         )
@@ -399,9 +389,7 @@ def _finalize_span(
     scope: Scope,
     response_data: dict[str, Any],
     request_body: bytes | None,
-    request_body_truncated: bool,
     response_body: bytes | None,
-    response_body_truncated: bool,
     start_time_ns: int,
     transform_engine: HttpTransformEngine | None,
 ) -> None:
@@ -441,8 +429,6 @@ def _finalize_span(
         # Store body as Base64 encoded string to match Node SDK behavior
         input_value["body"] = base64.b64encode(request_body).decode("ascii")
         input_value["bodySize"] = len(request_body)
-        if request_body_truncated:
-            input_value["bodyProcessingError"] = "truncated"  # Match Node SDK field name
 
     output_value: dict[str, Any] = {
         "statusCode": response_data.get("status_code", 200),  # camelCase to match Node SDK
@@ -454,8 +440,6 @@ def _finalize_span(
         # Store body as Base64 encoded string to match Node SDK behavior
         output_value["body"] = base64.b64encode(response_body).decode("ascii")
         output_value["bodySize"] = len(response_body)
-        if response_body_truncated:
-            output_value["bodyProcessingError"] = "truncated"  # Match Node SDK field name
 
     if "error" in response_data:
         output_value["errorMessage"] = response_data["error"]  # Match Node SDK field name
@@ -506,24 +490,18 @@ def _finalize_span(
     else:
         span.set_status(Status(OTelStatusCode.OK))
 
-    # Build schema merge hints including body encoding and truncation flags
+    # Build schema merge hints including body encoding
     input_schema_merges = dict(HEADER_SCHEMA_MERGES)
     if "body" in input_value:
         from ...core.json_schema_helper import EncodingType
 
         input_schema_merges["body"] = SchemaMerge(encoding=EncodingType.BASE64)
-    # Add bodyProcessingError to schema merges if truncated (matches Node SDK)
-    if request_body_truncated:
-        input_schema_merges["bodyProcessingError"] = SchemaMerge(match_importance=1.0)
 
     output_schema_merges = dict(HEADER_SCHEMA_MERGES)
     if "body" in output_value:
         from ...core.json_schema_helper import EncodingType
 
         output_schema_merges["body"] = SchemaMerge(encoding=EncodingType.BASE64)
-    # Add bodyProcessingError to schema merges if truncated (matches Node SDK)
-    if response_body_truncated:
-        output_schema_merges["bodyProcessingError"] = SchemaMerge(match_importance=1.0)
 
     input_schema_info = JsonSchemaHelper.generate_schema_and_hash(input_value, input_schema_merges)
     output_schema_info = JsonSchemaHelper.generate_schema_and_hash(output_value, output_schema_merges)
