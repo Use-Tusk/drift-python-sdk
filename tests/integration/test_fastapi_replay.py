@@ -128,24 +128,6 @@ class TestFastAPIReplayMode(unittest.TestCase):
         self.assertEqual(span.trace_id, "test-trace-123")
         self.assertIn("/user", span.name)
 
-    def test_request_with_env_vars_flag(self):
-        """Test that env vars flag is handled (even if CLI not connected)."""
-        response = requests.get(
-            f"{self.base_url}/health",
-            headers={
-                "x-td-trace-id": "trace-with-env-vars",
-                "x-td-fetch-env-vars": "true",
-            },
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.wait_for_spans()
-
-        # Request should succeed even if CLI connection fails
-        # (In real replay, CLI would be running)
-        spans = self.adapter.get_all_spans()
-        self.assertGreaterEqual(len(spans), 0)
-
     def test_post_request_with_trace_id(self):
         """Test that POST requests work in replay mode."""
         response = requests.post(

@@ -88,24 +88,6 @@ def handle_wsgi_request(
             # No trace context in REPLAY mode; proceed without span
             return original_wsgi_app(app, environ, start_response)
 
-        # Fetch env vars from CLI if requested
-        should_fetch_env_vars = headers_lower.get("x-td-fetch-env-vars") == "true"
-        if should_fetch_env_vars:
-            try:
-                env_vars = sdk.request_env_vars_sync(replay_trace_id)
-
-                # Store in tracker for env instrumentation to use
-                from ..env import EnvVarTracker
-
-                tracker = EnvVarTracker.get_instance()
-                tracker.set_env_vars(replay_trace_id, env_vars)
-
-                logger.debug(
-                    f"[{instrumentation_name}] Fetched {len(env_vars)} env vars from CLI for trace {replay_trace_id}"
-                )
-            except Exception as e:
-                logger.error(f"[{instrumentation_name}] Failed to fetch env vars from CLI: {e}")
-
         # Set replay trace context
         replay_token = replay_trace_id_context.set(replay_trace_id)
 
@@ -290,20 +272,6 @@ def finalize_wsgi_span(
         # Set transform metadata if present
         if transform_metadata:
             span.set_attribute(TdSpanAttributes.TRANSFORM_METADATA, json.dumps(transform_metadata))
-
-        # Attach env vars to metadata if present
-        from ...core.types import MetadataObject
-        from ..env import EnvVarTracker
-
-        tracker = EnvVarTracker.get_instance()
-        span_context = span.get_span_context()
-        trace_id = format(span_context.trace_id, "032x")
-        env_vars = tracker.get_env_vars(trace_id)
-        if env_vars:
-            metadata = MetadataObject(ENV_VARS=env_vars)
-            span.set_attribute(TdSpanAttributes.METADATA, json.dumps(metadata))
-            # Clear tracker after setting
-            tracker.clear_env_vars(trace_id)
 
         # Set status based on HTTP status code
         if status_code >= 400:

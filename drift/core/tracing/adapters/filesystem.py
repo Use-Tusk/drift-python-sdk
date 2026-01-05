@@ -165,6 +165,9 @@ class FilesystemSpanAdapter(SpanExportAdapter):
                 span.package_type.value if isinstance(span.package_type, PackageType) else span.package_type
             )
 
+        if span.environment is not None:
+            result["environment"] = span.environment
+
         if span.metadata is not None:
             result["metadata"] = (
                 asdict(span.metadata) if hasattr(span.metadata, "__dataclass_fields__") else span.metadata

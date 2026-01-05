@@ -6,7 +6,6 @@ from drift.core.json_schema_helper import JsonSchema, JsonSchemaHelper, JsonSche
 from drift.core.types import (
     CleanSpanData,
     Duration,
-    MetadataObject,
     PackageType,
     SpanKind,
     SpanStatus,
@@ -39,7 +38,7 @@ class SpanSerializationTests(unittest.TestCase):
             status=SpanStatus(code=StatusCode.OK, message=""),
             timestamp=Timestamp(seconds=1700000000, nanos=5),
             duration=Duration(seconds=0, nanos=1000),
-            metadata=MetadataObject(ENV_VARS={"APP_ENV": "test"}),
+            metadata=None,
             input_value_hash=input_schema_info.decoded_value_hash,
             output_value_hash=output_schema_info.decoded_value_hash,
             input_schema_hash=input_schema_info.decoded_schema_hash,
@@ -54,7 +53,6 @@ class SpanSerializationTests(unittest.TestCase):
         self.assertEqual(proto.status.code.value, StatusCode.OK.value)
         self.assertEqual(proto.input_value["method"], "GET")
         self.assertEqual(proto.output_value["status_code"], 200)
-        self.assertEqual(proto.metadata["ENV_VARS"]["APP_ENV"], "test")
         self.assertEqual(proto.timestamp.year, 2023)
         self.assertEqual(proto.duration.total_seconds(), 0.000001)
 

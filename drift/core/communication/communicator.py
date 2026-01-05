@@ -17,7 +17,6 @@ from ..types import CleanSpanData
 from .types import (
     CliMessage,
     ConnectRequest,
-    EnvVarRequest,
     GetMockRequest,
     InstrumentationVersionMismatchAlert,
     MessageType,
@@ -420,32 +419,6 @@ class ProtobufCommunicator:
 
         return self._execute_sync_request(sdk_message, self._handle_mock_response)
 
-    def request_env_vars_sync(self, trace_test_server_span_id: str) -> dict[str, str]:
-        """Request environment variables from CLI (synchronous).
-
-        Args:
-            trace_test_server_span_id: Span ID for trace context
-
-        Returns:
-            Dictionary of environment variable names to values
-        """
-        request_id = self._generate_request_id()
-
-        env_var_request = EnvVarRequest(
-            request_id=request_id,
-            trace_test_server_span_id=trace_test_server_span_id,
-        )
-
-        sdk_message = SdkMessage(
-            type=MessageType.ENV_VAR_REQUEST,
-            request_id=request_id,
-            env_var_request=env_var_request.to_proto(),
-        )
-
-        logger.debug(f"[ProtobufCommunicator] Requesting env vars (sync) for trace: {trace_test_server_span_id}")
-
-        return self._execute_sync_request(sdk_message, self._handle_env_var_response)
-
     async def send_inbound_span_for_replay(self, span: CleanSpanData) -> None:
         """Send an inbound span to CLI for replay validation.
 
@@ -682,14 +655,6 @@ class ProtobufCommunicator:
                 found=False,
                 error=mock_response.error or "Mock not found",
             )
-
-    def _handle_env_var_response(self, cli_message: CliMessage) -> dict[str, str]:
-        """Extract environment variables from CLI message."""
-        env_response = cli_message.env_var_response
-        if not env_response:
-            raise ValueError("No env var response in CLI message")
-
-        return dict(env_response.env_vars) if env_response.env_vars else {}
 
     def _extract_response_data(self, struct: Any) -> dict[str, Any]:
         """Extract response data from protobuf Struct."""

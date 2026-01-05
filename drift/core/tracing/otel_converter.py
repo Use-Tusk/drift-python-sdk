@@ -263,7 +263,10 @@ def parse_package_type(package_type_str: str) -> PackageType:
         return PackageType.UNSPECIFIED
 
 
-def otel_span_to_clean_span_data(otel_span: ReadableSpan) -> CleanSpanData:
+def otel_span_to_clean_span_data(
+    otel_span: ReadableSpan,
+    environment: str | None = None,
+) -> CleanSpanData:
     """Convert OpenTelemetry ReadableSpan to CleanSpanData.
 
     This function extracts all Drift-specific attributes from the OTel span
@@ -271,6 +274,7 @@ def otel_span_to_clean_span_data(otel_span: ReadableSpan) -> CleanSpanData:
 
     Args:
         otel_span: The OpenTelemetry ReadableSpan to convert
+        environment: Optional environment name to include on the span
 
     Returns:
         CleanSpanData instance with all fields populated from OTel span
@@ -355,6 +359,7 @@ def otel_span_to_clean_span_data(otel_span: ReadableSpan) -> CleanSpanData:
         instrumentation_name=instrumentation_name,
         submodule_name=submodule_name,
         package_type=package_type,
+        environment=environment,
         kind=kind,
         input_value=input_value,
         output_value=output_value,

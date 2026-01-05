@@ -128,24 +128,6 @@ async def _handle_replay_request(
 
     logger.debug(f"[FastAPIInstrumentation] Setting replay trace ID: {replay_trace_id}")
 
-    # Fetch env vars from CLI if requested
-    should_fetch_env_vars = headers_lower.get("x-td-fetch-env-vars") == "true"
-    if should_fetch_env_vars:
-        try:
-            env_vars = sdk.request_env_vars_sync(replay_trace_id)
-
-            # Store in tracker for env instrumentation to use
-            from ..env import EnvVarTracker
-
-            tracker = EnvVarTracker.get_instance()
-            tracker.set_env_vars(replay_trace_id, env_vars)
-
-            logger.debug(
-                f"[FastAPIInstrumentation] Fetched {len(env_vars)} env vars from CLI for trace {replay_trace_id}"
-            )
-        except Exception as e:
-            logger.error(f"[FastAPIInstrumentation] Failed to fetch env vars from CLI: {e}")
-
     # Remove accept-encoding header to prevent compression during replay
     # (responses are stored decompressed, compression would double-compress)
     if "accept-encoding" in headers_lower:
@@ -518,22 +500,6 @@ def _finalize_span(
 
     if transform_metadata:
         span.set_attribute(TdSpanAttributes.TRANSFORM_METADATA, json.dumps(transform_metadata))
-
-    # Attach env vars to metadata if present
-    from ..env import EnvVarTracker
-
-    span_context = span.get_span_context()
-    trace_id = format(span_context.trace_id, "032x")
-    tracker = EnvVarTracker.get_instance()
-    env_vars = tracker.get_env_vars(trace_id)
-    if env_vars:
-        from ...core.types import MetadataObject
-
-        metadata = MetadataObject(ENV_VARS=env_vars)
-        span.set_attribute(TdSpanAttributes.METADATA, json.dumps(metadata.__dict__))
-
-    # Clear tracker after span finalization
-    tracker.clear_env_vars(trace_id)
 
 
 def _build_url(scope: Scope) -> str:

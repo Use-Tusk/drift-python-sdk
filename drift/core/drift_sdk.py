@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import json
 import logging
 import os
 import random
@@ -13,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.trace import SpanKind as OTelSpanKind
 
 from ..instrumentation.registry import install_hooks
 from .communication.communicator import CommunicatorConfig, ProtobufCommunicator
@@ -21,14 +23,12 @@ from .config import TuskConfig, TuskFileConfig, load_tusk_config
 from .logger import LogLevel, configure_logger
 from .sampling import should_sample, validate_sampling_rate
 from .trace_blocking_manager import TraceBlockingManager, should_block_span
-from .tracing import TdSpanExporter, TdSpanExporterConfig
+from .tracing import TdSpanAttributes, TdSpanExporter, TdSpanExporterConfig
 from .tracing.td_span_processor import TdSpanProcessor
 from .types import CleanSpanData, DriftMode, SpanKind
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Tracer
-
-    from .batch_processor import BatchSpanProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,6 @@ class TuskDrift:
         self._init_params: dict[str, Any] = {}
 
         self.span_exporter: TdSpanExporter | None = None
-        self.batch_processor: BatchSpanProcessor | None = None
 
         # OpenTelemetry components
         self._tracer_provider: TracerProvider | None = None
@@ -221,6 +220,7 @@ class TuskDrift:
             mode=instance.mode,
             sampling_rate=instance._sampling_rate,
             app_ready=instance.app_ready,
+            environment=env,
         )
         instance._td_span_processor.start()
         instance._tracer_provider.add_span_processor(instance._td_span_processor)
@@ -229,15 +229,6 @@ class TuskDrift:
         trace.set_tracer_provider(instance._tracer_provider)
 
         logger.debug("OpenTelemetry TracerProvider initialized")
-
-        # Note: We keep the batch_processor for backward compatibility with collect_span()
-        from .batch_processor import BatchSpanProcessor, BatchSpanProcessorConfig
-
-        instance.batch_processor = BatchSpanProcessor(
-            exporter=instance.span_exporter,
-            config=BatchSpanProcessorConfig(),
-        )
-        instance.batch_processor.start()
 
         if instance.mode == "REPLAY":
             # Initialize communicator early for replay mode (matches Node SDK pattern)
@@ -253,6 +244,9 @@ class TuskDrift:
         install_hooks()
 
         instance._init_auto_instrumentations()
+
+        # Create env vars snapshot if enabled (matches Node SDK behavior)
+        instance.create_env_vars_snapshot()
 
         # Register shutdown handler for graceful cleanup
         atexit.register(instance.shutdown)
@@ -463,6 +457,39 @@ class TuskDrift:
             #     pass
             pass
 
+    def create_env_vars_snapshot(self) -> None:
+        """Create a span capturing all environment variables.
+
+        Only creates the snapshot in RECORD mode when enable_env_var_recording is True.
+        This matches the Node SDK behavior for capturing env vars at initialization.
+        """
+        if self.mode != "RECORD":
+            return
+
+        if not self.file_config or not self.file_config.recording:
+            return
+
+        if not self.file_config.recording.enable_env_var_recording:
+            return
+
+        # Get all environment variables
+        env_vars = dict(os.environ)
+
+        tracer = self.get_tracer()
+        span = tracer.start_span(
+            name="ENV_VARS_SNAPSHOT",
+            kind=OTelSpanKind.INTERNAL,
+            attributes={
+                TdSpanAttributes.NAME: "ENV_VARS_SNAPSHOT",
+                TdSpanAttributes.PACKAGE_NAME: "os.environ",
+                TdSpanAttributes.IS_PRE_APP_START: True,
+                TdSpanAttributes.INPUT_VALUE: "{}",
+                TdSpanAttributes.OUTPUT_VALUE: json.dumps({"ENV_VARS": env_vars}),
+            },
+        )
+        span.end()
+        logger.debug(f"Created ENV_VARS_SNAPSHOT span with {len(env_vars)} environment variables")
+
     def get_tracer(self, name: str = "drift", version: str = "") -> Tracer:
         """Get OpenTelemetry tracer.
 
@@ -539,8 +566,9 @@ class TuskDrift:
                 pass
 
         if self.mode == "RECORD":
-            if self.batch_processor:
-                self.batch_processor.add_span(span)
+            # Use TdSpanProcessor's internal batch processor
+            if self._td_span_processor and self._td_span_processor._batch_processor:
+                self._td_span_processor._batch_processor.add_span(span)
             elif self.span_exporter:
                 try:
                     loop = asyncio.get_event_loop()
@@ -607,30 +635,6 @@ class TuskDrift:
         except Exception as e:
             logger.error(f"Error sending protobuf request to CLI: {e}")
             return MockResponseOutput(found=False, error=f"Request failed: {e}")
-
-    def request_env_vars_sync(self, trace_test_server_span_id: str) -> dict[str, str]:
-        """Request environment variables from CLI (synchronous)."""
-        if self.mode != "REPLAY":
-            logger.debug("Cannot request env vars: not in replay mode")
-            return {}
-
-        if not self.communicator:
-            logger.debug("Cannot request env vars: communicator not initialized")
-            return {}
-
-        if not self._is_connected_with_cli:
-            logger.error("Requesting sync env vars but CLI is not ready yet")
-            raise RuntimeError("Requesting sync env vars but CLI is not ready yet")
-
-        try:
-            logger.debug(f"Requesting env vars (sync) for trace: {trace_test_server_span_id}")
-            env_vars = self.communicator.request_env_vars_sync(trace_test_server_span_id)
-            logger.debug(f"Received env vars from CLI, count: {len(env_vars)}")
-            logger.debug(f"First 10 env vars: {list(env_vars.keys())[:10]}")
-            return env_vars
-        except Exception as e:
-            logger.error(f"[TuskDrift] Error requesting env vars from CLI: {e}")
-            return {}
 
     async def send_inbound_span_for_replay(self, span: CleanSpanData) -> None:
         """Send an inbound span to CLI for replay validation."""
@@ -714,10 +718,6 @@ class TuskDrift:
 
         if self._tracer_provider is not None:
             self._tracer_provider.shutdown()
-
-        # Shutdown legacy batch processor (for backward compatibility)
-        if self.batch_processor is not None:
-            self.batch_processor.stop(timeout=30.0)
 
         if self.span_exporter is not None:
             asyncio.run(self.span_exporter.shutdown())

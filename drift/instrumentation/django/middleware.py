@@ -79,24 +79,6 @@ class DriftMiddleware:
                 logger.warning("[DJANGO_MIDDLEWARE] No replay_trace_id found in headers, proceeding without span")
                 return self.get_response(request)
 
-            # Fetch env vars from CLI if requested
-            should_fetch_env_vars = headers_lower.get("http_x_td_fetch_env_vars") == "true"
-            if should_fetch_env_vars:
-                try:
-                    env_vars = sdk.request_env_vars_sync(replay_trace_id)
-
-                    # Store in tracker for env instrumentation to use
-                    from ..env import EnvVarTracker
-
-                    tracker = EnvVarTracker.get_instance()
-                    tracker.set_env_vars(replay_trace_id, env_vars)
-
-                    logger.debug(
-                        f"[DjangoMiddleware] Fetched {len(env_vars)} env vars from CLI for trace {replay_trace_id}"
-                    )
-                except Exception as e:
-                    logger.error(f"[DjangoMiddleware] Failed to fetch env vars from CLI: {e}")
-
             # Set replay trace context
             replay_token = replay_trace_id_context.set(replay_trace_id)
 
@@ -344,16 +326,6 @@ class DriftMiddleware:
             # Fallback to literal path (e.g., for 404s)
             span_name = f"{method} {request.path}"
 
-        # Attach env vars to metadata if present
-        from ...core.types import MetadataObject
-        from ..env import EnvVarTracker
-
-        tracker = EnvVarTracker.get_instance()
-        env_vars = tracker.get_env_vars(trace_id)
-        metadata = None
-        if env_vars:
-            metadata = MetadataObject(ENV_VARS=env_vars)
-
         # Only create and collect span in RECORD mode
         # In REPLAY mode, we only set up context for child spans but don't record the root span
         if sdk.mode == "RECORD":
@@ -381,13 +353,10 @@ class DriftMiddleware:
                 timestamp=Timestamp(seconds=timestamp_seconds, nanos=timestamp_nanos),
                 duration=Duration(seconds=duration_seconds, nanos=duration_nanos),
                 transform_metadata=transform_metadata,
-                metadata=metadata,
+                metadata=None,
             )
 
             sdk.collect_span(span)
-
-        # Clear tracker after span collection
-        tracker.clear_env_vars(trace_id)
 
     def _capture_error_span(self, request: HttpRequest, exception: Exception) -> None:
         """Create and collect an error span.
@@ -458,16 +427,6 @@ class DriftMiddleware:
         route_template = getattr(request, "_drift_route_template", None)
         span_name = f"{method} {route_template}" if route_template else f"{method} {request.path}"
 
-        # Attach env vars to metadata if present
-        from ...core.types import MetadataObject
-        from ..env import EnvVarTracker
-
-        tracker = EnvVarTracker.get_instance()
-        env_vars = tracker.get_env_vars(trace_id)
-        metadata = None
-        if env_vars:
-            metadata = MetadataObject(ENV_VARS=env_vars)
-
         span = CleanSpanData(
             trace_id=trace_id,
             span_id=span_id,
@@ -492,10 +451,7 @@ class DriftMiddleware:
             timestamp=Timestamp(seconds=timestamp_seconds, nanos=timestamp_nanos),
             duration=Duration(seconds=duration_seconds, nanos=duration_nanos),
             transform_metadata=None,
-            metadata=metadata,
+            metadata=None,
         )
 
         sdk.collect_span(span)
-
-        # Clear tracker after span collection
-        tracker.clear_env_vars(trace_id)

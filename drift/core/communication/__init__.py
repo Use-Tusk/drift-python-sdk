@@ -10,8 +10,6 @@ from .types import (
     CLIMessageType,
     ConnectRequest,
     ConnectResponse,
-    EnvVarRequest,
-    EnvVarResponse,
     GetMockRequest,
     GetMockResponse,
     MessageType,
@@ -35,8 +33,6 @@ __all__ = [
     "ConnectResponse",
     "GetMockRequest",
     "GetMockResponse",
-    "EnvVarRequest",
-    "EnvVarResponse",
     "MockRequestInput",
     "MockResponseOutput",
     # Protobuf types
