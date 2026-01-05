@@ -25,6 +25,7 @@ from ...core.types import (
     StatusCode,
     Timestamp,
     replay_trace_id_context,
+    TuskDriftMode,
 )
 from ..base import InstrumentationBase
 
@@ -66,7 +67,7 @@ class RedisInstrumentation(InstrumentationBase):
                 """Patched execute_command method."""
                 sdk = TuskDrift.get_instance()
 
-                if sdk.mode == "DISABLED":
+                if sdk.mode == TuskDriftMode.DISABLED:
                     return original_method(redis_self, *args, **kwargs)
 
                 return instrumentation._traced_execute_command(
@@ -93,7 +94,7 @@ class RedisInstrumentation(InstrumentationBase):
                     """Patched Pipeline.execute method."""
                     sdk = TuskDrift.get_instance()
 
-                    if sdk.mode == "DISABLED":
+                    if sdk.mode == TuskDriftMode.DISABLED:
                         return original_pipeline_execute(pipeline_self, *args, **kwargs)
 
                     return instrumentation._traced_pipeline_execute(
@@ -122,7 +123,7 @@ class RedisInstrumentation(InstrumentationBase):
                     """Patched async execute_command method."""
                     sdk = TuskDrift.get_instance()
 
-                    if sdk.mode == "DISABLED":
+                    if sdk.mode == TuskDriftMode.DISABLED:
                         return await original_async_execute(redis_self, *args, **kwargs)
 
                     return await instrumentation._traced_async_execute_command(
@@ -142,7 +143,7 @@ class RedisInstrumentation(InstrumentationBase):
         self, redis_client: Any, original_execute: Any, sdk: TuskDrift, args: tuple, kwargs: dict
     ) -> Any:
         """Traced Redis execute_command method."""
-        if sdk.mode == "DISABLED":
+        if sdk.mode == TuskDriftMode.DISABLED:
             return original_execute(redis_client, *args, **kwargs)
 
         command_name = args[0] if args else "UNKNOWN"
@@ -184,7 +185,7 @@ class RedisInstrumentation(InstrumentationBase):
                 parent_ctx = parent_span.get_span_context()
                 parent_span_id = format(parent_ctx.span_id, "016x")
 
-            if sdk.mode == "REPLAY":
+            if sdk.mode == TuskDriftMode.REPLAY:
                 # Handle background requests (app ready + no parent span)
                 if sdk.app_ready and not parent_span_id:
                     return self._get_default_response(command_name)
@@ -212,7 +213,7 @@ class RedisInstrumentation(InstrumentationBase):
                 error = e
                 raise
             finally:
-                if sdk.mode == "RECORD":
+                if sdk.mode == TuskDriftMode.RECORD:
                     self._finalize_command_span(
                         span,
                         command_str,
@@ -229,11 +230,11 @@ class RedisInstrumentation(InstrumentationBase):
     ) -> Any:
         """Traced async Redis execute_command method."""
         # For REPLAY mode, use sync mocking
-        if sdk.mode == "REPLAY":
+        if sdk.mode == TuskDriftMode.REPLAY:
             return self._traced_execute_command(redis_client, lambda *a, **kw: None, sdk, args, kwargs)
 
         # For RECORD mode, actually execute async
-        if sdk.mode == "DISABLED":
+        if sdk.mode == TuskDriftMode.DISABLED:
             return await original_execute(redis_client, *args, **kwargs)
 
         command_name = args[0] if args else "UNKNOWN"
@@ -274,7 +275,7 @@ class RedisInstrumentation(InstrumentationBase):
                 error = e
                 raise
             finally:
-                if sdk.mode == "RECORD":
+                if sdk.mode == TuskDriftMode.RECORD:
                     self._finalize_command_span(
                         span,
                         command_str,
@@ -290,7 +291,7 @@ class RedisInstrumentation(InstrumentationBase):
         self, pipeline: Any, original_execute: Any, sdk: TuskDrift, args: tuple, kwargs: dict
     ) -> Any:
         """Traced Pipeline.execute method."""
-        if sdk.mode == "DISABLED":
+        if sdk.mode == TuskDriftMode.DISABLED:
             return original_execute(pipeline, *args, **kwargs)
 
         # Get commands from pipeline
@@ -333,7 +334,7 @@ class RedisInstrumentation(InstrumentationBase):
                 parent_ctx = parent_span.get_span_context()
                 parent_span_id = format(parent_ctx.span_id, "016x")
 
-            if sdk.mode == "REPLAY":
+            if sdk.mode == TuskDriftMode.REPLAY:
                 # Handle background requests
                 if sdk.app_ready and not parent_span_id:
                     return []
@@ -361,7 +362,7 @@ class RedisInstrumentation(InstrumentationBase):
                 error = e
                 raise
             finally:
-                if sdk.mode == "RECORD":
+                if sdk.mode == TuskDriftMode.RECORD:
                     self._finalize_pipeline_span(
                         span,
                         command_str,

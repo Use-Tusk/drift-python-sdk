@@ -16,12 +16,12 @@ from opentelemetry.trace import Span
 from ..sampling import should_sample
 from ..trace_blocking_manager import TraceBlockingManager, should_block_span
 from .otel_converter import otel_span_to_clean_span_data
+from ..types import TuskDriftMode
 
 if TYPE_CHECKING:
     from opentelemetry.context import Context
 
     from ..batch_processor import BatchSpanProcessor
-    from ..types import DriftMode
     from .span_exporter import TdSpanExporter
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ class TdSpanProcessor(SpanProcessor):
     def __init__(
         self,
         exporter: TdSpanExporter,
-        mode: DriftMode,
+        mode: TuskDriftMode,
         sampling_rate: float = 1.0,
         app_ready: bool = False,
         environment: str | None = None,
@@ -109,7 +109,7 @@ class TdSpanProcessor(SpanProcessor):
             logger.warning("TdSpanProcessor.on_end called but processor not started")
             return
 
-        if self._mode == "DISABLED":
+        if self._mode == TuskDriftMode.DISABLED:
             logger.debug(f"[TdSpanProcessor] Skipping span '{span.name}' - mode is DISABLED")
             return
 
@@ -147,19 +147,24 @@ class TdSpanProcessor(SpanProcessor):
                 return
 
             # Handle REPLAY mode inbound spans
-            if self._mode == "REPLAY" and clean_span.kind.value == 2:  # SERVER
-                # Import here to avoid circular dependency
+            if self._mode == TuskDriftMode.REPLAY and clean_span.kind.value == 2:  # SERVER
                 from ..drift_sdk import TuskDrift
 
                 sdk = TuskDrift.get_instance()
+                # Check for running loop BEFORE creating the coroutine to avoid
+                # "coroutine was never awaited" warnings. If we call the async
+                # function first and then fail to schedule it, the coroutine
+                # object is created but never executed.
                 try:
-                    asyncio.create_task(sdk.send_inbound_span_for_replay(clean_span))
+                    loop = asyncio.get_running_loop()
                 except RuntimeError:
-                    # No event loop running - skip sending inbound span
-                    pass
+                    loop = None
+
+                if loop is not None:
+                    loop.create_task(sdk.send_inbound_span_for_replay(clean_span))
 
             # Export span via batch processor (RECORD mode)
-            if self._mode == "RECORD":
+            if self._mode == TuskDriftMode.RECORD:
                 logger.debug(f"[TdSpanProcessor] Exporting span '{clean_span.name}' in RECORD mode")
                 if self._batch_processor:
                     self._batch_processor.add_span(clean_span)

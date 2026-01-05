@@ -25,13 +25,12 @@ from .sampling import should_sample, validate_sampling_rate
 from .trace_blocking_manager import TraceBlockingManager, should_block_span
 from .tracing import TdSpanAttributes, TdSpanExporter, TdSpanExporterConfig
 from .tracing.td_span_processor import TdSpanProcessor
-from .types import CleanSpanData, DriftMode, SpanKind
+from .types import CleanSpanData, TuskDriftMode, SpanKind
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Tracer
 
 logger = logging.getLogger(__name__)
-
 
 class TuskDrift:
     """Main SDK singleton managing the Drift SDK lifecycle."""
@@ -40,7 +39,7 @@ class TuskDrift:
     _initialized = False
 
     def __init__(self) -> None:
-        self.mode: DriftMode = self._detect_mode()
+        self.mode: TuskDriftMode = self._detect_mode()
         self.config = TuskConfig()
         self.file_config: TuskFileConfig | None = None
         self.app_ready = False
@@ -62,7 +61,7 @@ class TuskDrift:
         self.file_config = load_tusk_config()
 
         # Disable Sentry in replay mode
-        if self.mode == "REPLAY" and "SENTRY_DSN" in os.environ:
+        if self.mode == TuskDriftMode.REPLAY and "SENTRY_DSN" in os.environ:
             del os.environ["SENTRY_DSN"]
 
     @classmethod
@@ -129,7 +128,7 @@ class TuskDrift:
         file_config = instance.file_config
 
         if (
-            instance.mode == "RECORD"
+            instance.mode == TuskDriftMode.RECORD
             and file_config
             and file_config.recording
             and file_config.recording.export_spans
@@ -152,7 +151,7 @@ class TuskDrift:
             )
             return instance
 
-        if instance.mode == "DISABLED":
+        if instance.mode == TuskDriftMode.DISABLED:
             logger.debug("SDK disabled via environment variable")
             return instance
 
@@ -230,7 +229,7 @@ class TuskDrift:
 
         logger.debug("OpenTelemetry TracerProvider initialized")
 
-        if instance.mode == "REPLAY":
+        if instance.mode == TuskDriftMode.REPLAY:
             # Initialize communicator early for replay mode (matches Node SDK pattern)
             try:
                 instance._init_communicator_for_replay()
@@ -289,19 +288,19 @@ class TuskDrift:
         logger.debug("Using default sampling rate: 1.0")
         return 1.0
 
-    def _detect_mode(self) -> DriftMode:
+    def _detect_mode(self) -> TuskDriftMode:
         """Detect the SDK mode from environment variable."""
         mode_env = os.environ.get("TUSK_DRIFT_MODE", "").upper()
 
         if mode_env == "RECORD":
-            return "RECORD"
+            return TuskDriftMode.RECORD
         elif mode_env == "REPLAY":
-            return "REPLAY"
+            return TuskDriftMode.REPLAY
         elif mode_env in ("DISABLED", "DISABLE"):
-            return "DISABLED"
+            return TuskDriftMode.DISABLED
         else:
             # Default to DISABLED if no mode specified (matches Node SDK)
-            return "DISABLED"
+            return TuskDriftMode.DISABLED
 
     def _init_communicator_for_replay(self) -> None:
         """Initialize CLI communicator for REPLAY mode."""
@@ -447,15 +446,15 @@ class TuskDrift:
         except ImportError:
             pass
 
-        if self.file_config and self.file_config.recording and self.file_config.recording.enable_env_var_recording:
-            # try:
-            #     from ..instrumentation.env import EnvInstrumentation
+        # Socket instrumentation for detecting unpatched dependencies (REPLAY mode only)
+        if self.mode == TuskDriftMode.REPLAY:
+            try:
+                from ..instrumentation.socket import SocketInstrumentation
 
-            #     _ = EnvInstrumentation(enabled=True)
-            #     logger.debug("Env instrumentation initialized")
-            # except Exception:
-            #     pass
-            pass
+                _ = SocketInstrumentation(mode=self.mode)
+                logger.debug("Socket instrumentation initialized (REPLAY mode - unpatched dependency detection)")
+            except Exception as e:
+                logger.debug(f"Socket instrumentation initialization failed: {e}")
 
     def create_env_vars_snapshot(self) -> None:
         """Create a span capturing all environment variables.
@@ -463,7 +462,7 @@ class TuskDrift:
         Only creates the snapshot in RECORD mode when enable_env_var_recording is True.
         This matches the Node SDK behavior for capturing env vars at initialization.
         """
-        if self.mode != "RECORD":
+        if self.mode != TuskDriftMode.RECORD:
             return
 
         if not self.file_config or not self.file_config.recording:
@@ -514,7 +513,7 @@ class TuskDrift:
     def mark_app_as_ready(self) -> None:
         """Mark the application as ready (started listening)."""
         if not self._initialized:
-            if self.mode != "DISABLED":
+            if self.mode != TuskDriftMode.DISABLED:
                 logger.error("mark_app_as_ready() called before initialize(). Call initialize() first.")
             return
 
@@ -526,9 +525,9 @@ class TuskDrift:
 
         logger.debug("Application marked as ready")
 
-        if self.mode == "REPLAY":
+        if self.mode == TuskDriftMode.REPLAY:
             logger.debug("Replay mode active - ready to serve mocked responses")
-        elif self.mode == "RECORD":
+        elif self.mode == TuskDriftMode.RECORD:
             logger.debug("Record mode active - capturing inbound requests and responses")
 
     def collect_span(self, span: CleanSpanData) -> None:
@@ -537,7 +536,7 @@ class TuskDrift:
         This method is deprecated and maintained for backward compatibility only.
         New instrumentations should use OpenTelemetry spans via SpanUtils instead.
         """
-        if self.mode == "DISABLED":
+        if self.mode == TuskDriftMode.DISABLED:
             return
 
         trace_blocking_manager = TraceBlockingManager.get_instance()
@@ -559,13 +558,13 @@ class TuskDrift:
             logger.error(f"Failed to serialize span to protobuf: {e}")
             return
 
-        if self.mode == "REPLAY" and span.kind == SpanKind.SERVER:
+        if self.mode == TuskDriftMode.REPLAY and span.kind == SpanKind.SERVER:
             try:
                 asyncio.create_task(self.send_inbound_span_for_replay(span))
             except RuntimeError:
                 pass
 
-        if self.mode == "RECORD":
+        if self.mode == TuskDriftMode.RECORD:
             # Use TdSpanProcessor's internal batch processor
             if self._td_span_processor and self._td_span_processor._batch_processor:
                 self._td_span_processor._batch_processor.add_span(span)
@@ -581,7 +580,7 @@ class TuskDrift:
 
     async def request_mock_async(self, mock_request: MockRequestInput) -> MockResponseOutput:
         """Request mocked response data from CLI (async)."""
-        if self.mode != "REPLAY":
+        if self.mode != TuskDriftMode.REPLAY:
             logger.error("Cannot request mock: not in replay mode")
             return MockResponseOutput(found=False, error="Not in replay mode")
 
@@ -611,7 +610,7 @@ class TuskDrift:
 
     def request_mock_sync(self, mock_request: MockRequestInput) -> MockResponseOutput:
         """Request mocked response data from CLI (synchronous)."""
-        if self.mode != "REPLAY":
+        if self.mode != TuskDriftMode.REPLAY:
             logger.error("Cannot request mock: not in replay mode")
             return MockResponseOutput(found=False, error="Not in replay mode")
 
@@ -638,7 +637,7 @@ class TuskDrift:
 
     async def send_inbound_span_for_replay(self, span: CleanSpanData) -> None:
         """Send an inbound span to CLI for replay validation."""
-        if self.mode != "REPLAY" or not self.communicator:
+        if self.mode != TuskDriftMode.REPLAY or not self.communicator:
             return
 
         if not self._is_connected_with_cli:
@@ -684,7 +683,7 @@ class TuskDrift:
         """Get the current sampling rate."""
         return self._sampling_rate
 
-    def get_mode(self) -> DriftMode:
+    def get_mode(self) -> TuskDriftMode:
         """Get the current mode."""
         return self.mode
 

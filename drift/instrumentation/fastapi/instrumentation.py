@@ -27,6 +27,7 @@ from ...core.tracing import TdSpanAttributes
 from ...core.types import (
     PackageType,
     SpanKind,
+    TuskDriftMode,
 )
 from ..base import InstrumentationBase
 from ..http import HttpSpanData, HttpTransformEngine
@@ -256,7 +257,7 @@ async def _handle_request(
         return await original_call(app, scope, receive, send)
 
     # Handle REPLAY mode
-    if sdk.mode == "REPLAY":
+    if sdk.mode == TuskDriftMode.REPLAY:
         return await _handle_replay_request(
             app, scope, receive, send, original_call, transform_engine, method, raw_path, target_for_drop
         )

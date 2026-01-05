@@ -13,7 +13,7 @@ from typing import Any
 from tusk.drift.core.v1 import GetMockRequest as ProtoGetMockRequest
 
 from ...version import MIN_CLI_VERSION, SDK_VERSION
-from ..types import CleanSpanData
+from ..types import CleanSpanData, calling_library_context
 from .types import (
     CliMessage,
     ConnectRequest,
@@ -138,6 +138,9 @@ class ProtobufCommunicator:
         else:
             address = self._get_socket_address()
 
+        # Set calling_library_context to prevent socket instrumentation from flagging
+        # our own socket operations as unpatched dependencies
+        context_token = calling_library_context.set("ProtobufCommunicator")
         try:
             # Create appropriate socket type
             if isinstance(address, str):
@@ -166,6 +169,8 @@ class ProtobufCommunicator:
         except OSError as e:
             self._cleanup()
             raise ConnectionError(f"Socket error: {e}") from e
+        finally:
+            calling_library_context.reset(context_token)
 
     async def _send_connect_message(self, service_id: str) -> None:
         """Send the initial connection message to CLI and wait for acknowledgement."""
@@ -252,6 +257,9 @@ class ProtobufCommunicator:
         else:
             address = self._get_socket_address()
 
+        # Set calling_library_context to prevent socket instrumentation from flagging
+        # our own socket operations as unpatched dependencies
+        context_token = calling_library_context.set("ProtobufCommunicator")
         try:
             # Create appropriate socket type
             if isinstance(address, str):
@@ -324,6 +332,8 @@ class ProtobufCommunicator:
         except OSError as e:
             self._cleanup()
             raise ConnectionError(f"Socket error: {e}") from e
+        finally:
+            calling_library_context.reset(context_token)
 
         logger.info(f"[CONNECT_SYNC] Exiting connect_sync(). Socket still open: {self._socket is not None}")
 
@@ -515,8 +525,14 @@ class ProtobufCommunicator:
         # Send length prefix + message
         full_message = length_prefix + message_bytes
 
-        # Send synchronously (socket is blocking for sends)
-        self._socket.sendall(full_message)
+        # Set calling_library_context to prevent socket instrumentation from flagging
+        # our own socket operations as unpatched dependencies
+        context_token = calling_library_context.set("ProtobufCommunicator")
+        try:
+            # Send synchronously (socket is blocking for sends)
+            self._socket.sendall(full_message)
+        finally:
+            calling_library_context.reset(context_token)
 
     async def _receive_response(self, request_id: str) -> MockResponseOutput:
         """Receive and parse a response for a specific request ID."""
@@ -582,48 +598,54 @@ class ProtobufCommunicator:
         # This avoids reading buffered messages from the async connection
         address = self._get_socket_address()
 
-        if isinstance(address, str):
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        else:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-        sock.settimeout(SYNC_REQUEST_TIMEOUT)
-        sock.connect(address)
-
+        # Set calling_library_context to prevent socket instrumentation from flagging
+        # our own socket operations as unpatched dependencies
+        context_token = calling_library_context.set("ProtobufCommunicator")
         try:
-            # Serialize and send
-            message_bytes = bytes(sdk_message)
-            length_prefix = struct.pack(">I", len(message_bytes))
-            sock.sendall(length_prefix + message_bytes)
+            if isinstance(address, str):
+                sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            else:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-            # Receive response
             sock.settimeout(SYNC_REQUEST_TIMEOUT)
+            sock.connect(address)
 
-            # Read length prefix
-            length_data = b""
-            while len(length_data) < 4:
-                chunk = sock.recv(4 - len(length_data))
-                if not chunk:
-                    raise ConnectionError("Connection closed")
-                length_data += chunk
+            try:
+                # Serialize and send
+                message_bytes = bytes(sdk_message)
+                length_prefix = struct.pack(">I", len(message_bytes))
+                sock.sendall(length_prefix + message_bytes)
 
-            length = struct.unpack(">I", length_data)[0]
+                # Receive response
+                sock.settimeout(SYNC_REQUEST_TIMEOUT)
 
-            # Read message
-            message_data = b""
-            while len(message_data) < length:
-                chunk = sock.recv(length - len(message_data))
-                if not chunk:
-                    raise ConnectionError("Connection closed")
-                message_data += chunk
+                # Read length prefix
+                length_data = b""
+                while len(length_data) < 4:
+                    chunk = sock.recv(4 - len(length_data))
+                    if not chunk:
+                        raise ConnectionError("Connection closed")
+                    length_data += chunk
 
-            # Parse and handle
-            cli_message = CliMessage().parse(message_data)
-            return response_handler(cli_message)
+                length = struct.unpack(">I", length_data)[0]
 
+                # Read message
+                message_data = b""
+                while len(message_data) < length:
+                    chunk = sock.recv(length - len(message_data))
+                    if not chunk:
+                        raise ConnectionError("Connection closed")
+                    message_data += chunk
+
+                # Parse and handle
+                cli_message = CliMessage().parse(message_data)
+                return response_handler(cli_message)
+
+            finally:
+                # Always close the sync socket
+                sock.close()
         finally:
-            # Always close the sync socket
-            sock.close()
+            calling_library_context.reset(context_token)
 
     def _handle_cli_message(self, message: CliMessage) -> MockResponseOutput:
         """Handle a CLI message and extract mock response."""

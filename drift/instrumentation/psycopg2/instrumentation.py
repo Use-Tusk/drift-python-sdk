@@ -33,6 +33,7 @@ from ...core.types import (
     StatusCode,
     Timestamp,
     replay_trace_id_context,
+    TuskDriftMode,
 )
 from ..base import InstrumentationBase
 
@@ -249,7 +250,7 @@ class Psycopg2Instrumentation(InstrumentationBase):
         from ...core.drift_sdk import TuskDrift
 
         sdk = TuskDrift.get_instance()
-        if sdk.mode == "REPLAY":
+        if sdk.mode == TuskDriftMode.REPLAY:
             try:
                 import psycopg2.extensions
                 import psycopg2.extras
@@ -279,7 +280,7 @@ class Psycopg2Instrumentation(InstrumentationBase):
             logger.debug(f"[PATCHED_CONNECT]   args: {args[:2] if args else 'none'}")
 
             # Pass through if SDK is disabled or original connect is missing
-            if sdk.mode == "DISABLED" or original_connect is None:
+            if sdk.mode == TuskDriftMode.DISABLED or original_connect is None:
                 if original_connect is None:
                     raise RuntimeError("Original psycopg2.connect not found")
                 logger.debug("[PATCHED_CONNECT] SDK disabled, passing through")
@@ -293,7 +294,7 @@ class Psycopg2Instrumentation(InstrumentationBase):
             cursor_factory = instrumentation._create_cursor_factory(sdk, user_cursor_factory)
 
             # In REPLAY mode, try to connect but fall back to mock connection if DB is unavailable
-            if sdk.mode == "REPLAY":
+            if sdk.mode == TuskDriftMode.REPLAY:
                 try:
                     kwargs["cursor_factory"] = cursor_factory
                     logger.debug("[PATCHED_CONNECT] REPLAY mode: Attempting real DB connection...")
@@ -369,7 +370,7 @@ class Psycopg2Instrumentation(InstrumentationBase):
         query_str = _query_to_str(query)
 
         # Pass through if SDK is disabled
-        if sdk.mode == "DISABLED":
+        if sdk.mode == TuskDriftMode.DISABLED:
             logger.debug("[PSYCOPG2] _traced_execute: SDK disabled, passing through")
             return original_execute(query, params)
 
@@ -412,7 +413,7 @@ class Psycopg2Instrumentation(InstrumentationBase):
                 parent_span_id = format(parent_ctx.span_id, "016x")
 
             # REPLAY mode: Mock ALL queries (including pre-app-start)
-            if sdk.mode == "REPLAY":
+            if sdk.mode == TuskDriftMode.REPLAY:
                 logger.info("[PSYCOPG2_REPLAY] execute() entering REPLAY mode")
                 logger.info(f"[PSYCOPG2_REPLAY]   query: {query_str[:100]}")
                 logger.info(f"[PSYCOPG2_REPLAY]   parent_span_id: {parent_span_id}")
@@ -493,7 +494,7 @@ class Psycopg2Instrumentation(InstrumentationBase):
                 raise
             finally:
                 # Always finalize span in RECORD mode (including pre-app-start queries)
-                if sdk.mode == "RECORD":
+                if sdk.mode == TuskDriftMode.RECORD:
                     logger.info("[PSYCOPG2_RECORD] Finalizing span for query")
                     self._finalize_query_span(
                         span,
@@ -520,7 +521,7 @@ class Psycopg2Instrumentation(InstrumentationBase):
         query_str = _query_to_str(query)
 
         # Pass through if SDK is disabled
-        if sdk.mode == "DISABLED":
+        if sdk.mode == TuskDriftMode.DISABLED:
             return original_executemany(query, params_list)
 
         # Create OpenTelemetry span
@@ -558,7 +559,7 @@ class Psycopg2Instrumentation(InstrumentationBase):
 
             # For executemany, we'll treat each parameter set as a batch
             # REPLAY mode: Mock ALL queries (including pre-app-start)
-            if sdk.mode == "REPLAY":
+            if sdk.mode == TuskDriftMode.REPLAY:
                 # Handle background requests: App is ready + no parent span
                 # These are background jobs/health checks that run AFTER app startup
                 # They were never recorded, so return empty result
@@ -616,7 +617,7 @@ class Psycopg2Instrumentation(InstrumentationBase):
                 raise
             finally:
                 # Always finalize span in RECORD mode (including pre-app-start queries)
-                if sdk.mode == "RECORD":
+                if sdk.mode == TuskDriftMode.RECORD:
                     self._finalize_query_span(
                         span,
                         cursor,

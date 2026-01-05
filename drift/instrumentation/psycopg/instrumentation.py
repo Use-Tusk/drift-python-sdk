@@ -24,6 +24,7 @@ from ...core.types import (
     SpanStatus,
     StatusCode,
     Timestamp,
+    TuskDriftMode,
     replay_trace_id_context,
 )
 from ..base import InstrumentationBase
@@ -242,7 +243,7 @@ class PsycopgInstrumentation(InstrumentationBase):
             """Patched psycopg.connect method."""
             sdk = TuskDrift.get_instance()
 
-            if sdk.mode == "DISABLED" or original_connect is None:
+            if sdk.mode == TuskDriftMode.DISABLED or original_connect is None:
                 if original_connect is None:
                     raise RuntimeError("Original psycopg.connect not found")
                 return original_connect(*args, **kwargs)
@@ -251,7 +252,7 @@ class PsycopgInstrumentation(InstrumentationBase):
             cursor_factory = instrumentation._create_cursor_factory(sdk, user_cursor_factory)
 
             # In REPLAY mode, try to connect but fall back to mock connection if DB is unavailable
-            if sdk.mode == "REPLAY":
+            if sdk.mode == TuskDriftMode.REPLAY:
                 try:
                     kwargs["cursor_factory"] = cursor_factory
                     connection = original_connect(*args, **kwargs)
@@ -304,7 +305,7 @@ class PsycopgInstrumentation(InstrumentationBase):
         self, cursor: Any, original_execute: Any, sdk: TuskDrift, query: str, params=None, **kwargs
     ) -> Any:
         """Traced cursor.execute method."""
-        if sdk.mode == "DISABLED":
+        if sdk.mode == TuskDriftMode.DISABLED:
             return original_execute(query, params, **kwargs)
 
         query_str = self._query_to_string(query, cursor)
@@ -339,7 +340,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                 parent_ctx = parent_span.get_span_context()
                 parent_span_id = format(parent_ctx.span_id, "016x")
 
-            if sdk.mode == "REPLAY":
+            if sdk.mode == TuskDriftMode.REPLAY:
                 # Handle background requests (app ready + no parent span)
                 if sdk.app_ready and not parent_span_id:
                     cursor._mock_rows = []  # pyright: ignore
@@ -370,7 +371,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                 error = e
                 raise
             finally:
-                if sdk.mode == "RECORD":
+                if sdk.mode == TuskDriftMode.RECORD:
                     self._finalize_query_span(
                         span,
                         cursor,
@@ -387,7 +388,7 @@ class PsycopgInstrumentation(InstrumentationBase):
     ) -> Any:
         """Traced cursor.executemany method."""
         # Pass through if SDK is disabled
-        if sdk.mode == "DISABLED":
+        if sdk.mode == TuskDriftMode.DISABLED:
             return original_executemany(query, params_seq, **kwargs)
 
         # Convert query to string if it's a Composed SQL object
@@ -425,7 +426,7 @@ class PsycopgInstrumentation(InstrumentationBase):
 
             # For executemany, we'll treat each parameter set as a batch
             # REPLAY mode: Mock ALL queries (including pre-app-start)
-            if sdk.mode == "REPLAY":
+            if sdk.mode == TuskDriftMode.REPLAY:
                 # Handle background requests: App is ready + no parent span
                 # These are background jobs/health checks that run AFTER app startup
                 # They were never recorded, so return empty result
@@ -476,7 +477,7 @@ class PsycopgInstrumentation(InstrumentationBase):
             finally:
                 # Always create span in RECORD mode (including pre-app-start queries)
                 # Pre-app-start queries are marked with is_pre_app_start=true flag
-                if sdk.mode == "RECORD":
+                if sdk.mode == TuskDriftMode.RECORD:
                     params_list = list(params_seq)
                     self._finalize_query_span(
                         span,

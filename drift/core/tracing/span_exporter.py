@@ -4,9 +4,10 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
+from ..types import TuskDriftMode
 
 if TYPE_CHECKING:
-    from ..types import CleanSpanData, DriftMode
+    from ..types import CleanSpanData
     from .adapters.base import SpanExportAdapter
 
 logger = logging.getLogger(__name__)
@@ -17,7 +18,7 @@ class TdSpanExporterConfig:
     """Configuration for span exporter."""
 
     base_directory: Path
-    mode: DriftMode
+    mode: TuskDriftMode
     observable_service_id: str | None = None
     use_remote_export: bool = False
     api_key: str | None = None
@@ -81,12 +82,15 @@ class TdSpanExporter:
         self.adapters = []
         logger.debug("All adapters cleared")
 
-    def set_mode(self, mode: DriftMode) -> None:
+    def set_mode(self, mode: TuskDriftMode) -> None:
         """Set the mode for determining which adapters to run."""
         self.mode = mode
 
     async def export_spans(self, spans: list[CleanSpanData]) -> None:
         """Export spans using all active adapters."""
+        if self.mode != TuskDriftMode.RECORD:
+            return
+
         logger.debug(f"TdSpanExporter.export_spans() called with {len(spans)} span(s)")
 
         if len(self.adapters) == 0:
@@ -107,7 +111,7 @@ class TdSpanExporter:
 
     def _get_active_adapters(self) -> list[SpanExportAdapter]:
         """Get active adapters based on mode."""
-        if self.mode != "RECORD":
+        if self.mode != TuskDriftMode.RECORD:
             return [adapter for adapter in self.adapters if adapter.name in ("in-memory", "callback")]
 
         return self.adapters

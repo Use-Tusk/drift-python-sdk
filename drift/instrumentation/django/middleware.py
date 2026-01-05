@@ -25,6 +25,7 @@ from ...core.types import (
     StatusCode,
     Timestamp,
     replay_trace_id_context,
+    TuskDriftMode,
 )
 from ..http import HttpSpanData, HttpTransformEngine
 from ..wsgi import (
@@ -65,7 +66,7 @@ class DriftMiddleware:
         # Check if we're in REPLAY mode and handle trace ID extraction
         replay_trace_id = None
         replay_token = None
-        if sdk.mode == "REPLAY":
+        if sdk.mode == TuskDriftMode.REPLAY:
             # Extract trace ID from headers (case-insensitive lookup)
             # Django stores headers in request.META
             headers_lower = {k.lower(): v for k, v in request.META.items() if k.startswith("HTTP_")}
@@ -328,7 +329,7 @@ class DriftMiddleware:
 
         # Only create and collect span in RECORD mode
         # In REPLAY mode, we only set up context for child spans but don't record the root span
-        if sdk.mode == "RECORD":
+        if sdk.mode == TuskDriftMode.RECORD:
             span = CleanSpanData(
                 trace_id=trace_id,
                 span_id=span_id,
