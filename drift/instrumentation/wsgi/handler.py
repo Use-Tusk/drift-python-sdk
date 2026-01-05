@@ -29,7 +29,6 @@ from ...core.tracing import TdSpanAttributes
 from ...core.types import (
     PackageType,
     SpanKind,
-    is_pre_app_start_context,
     replay_trace_id_context,
 )
 from ..http import HttpSpanData, HttpTransformEngine
@@ -119,10 +118,6 @@ def handle_wsgi_request(
     # Store start time for duration calculation
     start_time_ns = time.time_ns()
 
-    # Determine isPreAppStart at request start and set in context for child spans
-    is_pre_app_start = not sdk.app_ready
-    is_pre_app_start_token = is_pre_app_start_context.set(is_pre_app_start)
-
     # Start the span and make it current
     # Note: We manually manage context because span needs to stay open across WSGI response iterator
     span = tracer.start_span(
@@ -134,7 +129,7 @@ def handle_wsgi_request(
             TdSpanAttributes.INSTRUMENTATION_NAME: instrumentation_name,
             TdSpanAttributes.SUBMODULE_NAME: method,
             TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
-            TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+            TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
             TdSpanAttributes.IS_ROOT_SPAN: True,
             TdSpanAttributes.INPUT_VALUE: json.dumps(input_value),
         },
@@ -163,7 +158,6 @@ def handle_wsgi_request(
     environ["_drift_span"] = span
     environ["_drift_context_token"] = token
     environ["_drift_replay_token"] = replay_token
-    environ["_drift_is_pre_app_start_token"] = is_pre_app_start_token
     environ["_drift_start_time_ns"] = start_time_ns
 
     def on_response_complete(env: WSGIEnvironment, resp_data: dict[str, Any]) -> None:
@@ -196,7 +190,6 @@ def finalize_wsgi_span(
     span: Span | None = environ.get("_drift_span")
     token = environ.get("_drift_context_token")
     replay_token = environ.get("_drift_replay_token")
-    is_pre_app_start_token = environ.get("_drift_is_pre_app_start_token")
     start_time_ns = environ.get("_drift_start_time_ns", 0)
 
     if not span:
@@ -300,7 +293,3 @@ def finalize_wsgi_span(
         # Reset replay context
         if replay_token:
             replay_trace_id_context.reset(replay_token)
-
-        # Reset isPreAppStart context
-        if is_pre_app_start_token:
-            is_pre_app_start_context.reset(is_pre_app_start_token)

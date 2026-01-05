@@ -181,7 +181,6 @@ class MockRequestData:
 # Python's contextvars is the equivalent of OpenTelemetry's Context API
 replay_trace_id_context: ContextVar[str | None] = ContextVar("replay_trace_id", default=None)
 span_kind_context: ContextVar[SpanKind | None] = ContextVar("span_kind", default=None)
-is_pre_app_start_context: ContextVar[bool] = ContextVar("is_pre_app_start", default=False)
 stop_recording_child_spans_context: ContextVar[bool] = ContextVar("stop_recording_child_spans", default=False)
 calling_library_context: ContextVar[str | None] = ContextVar("calling_library", default=None)
 

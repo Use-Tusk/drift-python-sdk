@@ -24,7 +24,6 @@ from ...core.types import (
     SpanStatus,
     StatusCode,
     Timestamp,
-    is_pre_app_start_context,
     replay_trace_id_context,
 )
 from ..http import HttpSpanData, HttpTransformEngine
@@ -138,7 +137,6 @@ class DriftMiddleware:
             # Reset context before early return
             if replay_token:
                 replay_trace_id_context.reset(replay_token)
-            is_pre_app_start_context.reset(is_pre_app_start_token)
             otel_context.detach(token)
             span.end()
             return self.get_response(request)
@@ -148,7 +146,6 @@ class DriftMiddleware:
         request._drift_span = span  # type: ignore
         request._drift_token = token  # type: ignore
         request._drift_replay_token = replay_token  # type: ignore
-        request._drift_is_pre_app_start_token = is_pre_app_start_token  # type: ignore
         request._drift_request_body = request_body  # type: ignore
         request._drift_route_template = None  # Will be set in process_view  # type: ignore
 
@@ -168,7 +165,6 @@ class DriftMiddleware:
             # Reset context
             if replay_token:
                 replay_trace_id_context.reset(replay_token)
-            is_pre_app_start_context.reset(is_pre_app_start_token)
             otel_context.detach(token)
             span.end()
 

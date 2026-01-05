@@ -27,7 +27,6 @@ from ...core.tracing import TdSpanAttributes
 from ...core.types import (
     PackageType,
     SpanKind,
-    is_pre_app_start_context,
 )
 from ..base import InstrumentationBase
 from ..http import HttpSpanData, HttpTransformEngine
@@ -148,10 +147,6 @@ async def _handle_replay_request(
         route_path = getattr(route, "path", None) if route else None
         span_name = f"{method} {route_path or raw_path}"
 
-        # Determine isPreAppStart at request start and set in context for child spans
-        is_pre_app_start = not sdk.app_ready
-        is_pre_app_start_token = is_pre_app_start_context.set(is_pre_app_start)
-
         tracer = sdk.get_tracer()
         span = tracer.start_span(
             name=span_name,
@@ -162,7 +157,7 @@ async def _handle_replay_request(
                 TdSpanAttributes.INSTRUMENTATION_NAME: "FastAPIInstrumentation",
                 TdSpanAttributes.SUBMODULE_NAME: method,
                 TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
-                TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+                TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
                 TdSpanAttributes.IS_ROOT_SPAN: True,
             },
         )
@@ -228,7 +223,6 @@ async def _handle_replay_request(
     finally:
         # Reset context
         replay_trace_id_context.reset(replay_token)
-        is_pre_app_start_context.reset(is_pre_app_start_token)
         otel_context.detach(token)
         span.end()
 
@@ -275,10 +269,6 @@ async def _handle_request(
     route_path = getattr(route, "path", None) if route else None
     span_name = f"{method} {route_path or raw_path}"
 
-    # Determine isPreAppStart at request start and set in context for child spans
-    is_pre_app_start = not sdk.app_ready
-    is_pre_app_start_token = is_pre_app_start_context.set(is_pre_app_start)
-
     # Create OpenTelemetry span
     tracer = sdk.get_tracer()
     span = tracer.start_span(
@@ -290,7 +280,7 @@ async def _handle_request(
             TdSpanAttributes.INSTRUMENTATION_NAME: "FastAPIInstrumentation",
             TdSpanAttributes.SUBMODULE_NAME: method,
             TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
-            TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+            TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
             TdSpanAttributes.IS_ROOT_SPAN: True,
         },
     )
@@ -372,7 +362,6 @@ async def _handle_request(
         raise
     finally:
         # Reset trace context
-        is_pre_app_start_context.reset(is_pre_app_start_token)
         otel_context.detach(token)
         span.end()
 
