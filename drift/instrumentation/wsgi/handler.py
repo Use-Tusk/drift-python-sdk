@@ -281,7 +281,8 @@ def finalize_wsgi_span(
             span.set_attribute(TdSpanAttributes.TRANSFORM_METADATA, json.dumps(transform_metadata))
 
         # Set status based on HTTP status code
-        if status_code >= 400:
+        # Match Node SDK: >= 300 is considered an error (redirects, client errors, server errors)
+        if status_code >= 300:
             span.set_status(Status(OTelStatusCode.ERROR, f"HTTP {status_code}"))
         else:
             span.set_status(Status(OTelStatusCode.OK))

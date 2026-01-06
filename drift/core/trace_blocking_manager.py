@@ -11,6 +11,8 @@ import threading
 import time
 from typing import Any
 
+from .types import CleanSpanData
+
 logger = logging.getLogger(__name__)
 
 # Size limits (matching Node SDK)
@@ -197,11 +199,14 @@ def estimate_span_size(span: Any) -> int:
     return total_size
 
 
-def should_block_span(span: Any) -> bool:
-    """Check if a span should be blocked due to size.
+def should_block_span(span: CleanSpanData) -> bool:
+    """Check if a span should be blocked due to size or server error status.
 
-    If the span exceeds the maximum size, blocks the entire trace
-    and returns True.
+    Blocks the trace if:
+    1. The span is a SERVER span with ERROR status (e.g., HTTP >= 300)
+    2. The span exceeds the maximum size limit (1MB)
+
+    This matches Node SDK behavior in TdSpanExporter.ts.
 
     Args:
         span: CleanSpanData object
@@ -209,19 +214,27 @@ def should_block_span(span: Any) -> bool:
     Returns:
         True if the span should be blocked, False otherwise
     """
+    from .types import SpanKind, StatusCode
+
+    trace_id = span.trace_id
+    span_name = span.name
+    blocking_manager = TraceBlockingManager.get_instance()
+
+    # Check 1: Block SERVER spans with ERROR status (e.g., HTTP >= 300)
+    if span.kind == SpanKind.SERVER and span.status.code == StatusCode.ERROR:
+        logger.debug(f"Blocking trace {trace_id} - server span '{span_name}' has error status")
+        blocking_manager.block_trace(trace_id, reason="server_error")
+        return True
+
+    # Check 2: Block spans exceeding size limit
     size = estimate_span_size(span)
-
     if size > MAX_SPAN_SIZE_BYTES:
-        trace_id = getattr(span, "trace_id", "unknown")
-        span_name = getattr(span, "name", "unknown")
         size_mb = size / (1024 * 1024)
-
-        logger.warning(
+        logger.debug(
             f"Blocking trace {trace_id} - span '{span_name}' "
             f"has estimated size of {size_mb:.2f} MB, exceeding limit of {MAX_SPAN_SIZE_MB} MB"
         )
-
-        TraceBlockingManager.get_instance().block_trace(trace_id, reason=f"size_limit:{size_mb:.2f}MB")
+        blocking_manager.block_trace(trace_id, reason=f"size_limit:{size_mb:.2f}MB")
         return True
 
     return False
