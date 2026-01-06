@@ -547,9 +547,6 @@ class TuskDrift:
             return
 
         if should_block_span(span):
-            logger.warning(
-                f"Blocking trace {span.trace_id} - span '{span.name}' exceeds size limit. Future spans for this trace will be prevented."
-            )
             return
 
         if not should_sample(self._sampling_rate, self.app_ready):
