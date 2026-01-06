@@ -715,17 +715,24 @@ class ProtobufCommunicator:
             if "response" in data:
                 mock_interaction = data["response"]
 
+                # Extract timestamp from MockInteraction (for time travel during replay)
+                timestamp = None
+                if isinstance(mock_interaction, dict):
+                    timestamp = mock_interaction.get("timestamp")
+
                 if isinstance(mock_interaction, dict) and "response" in mock_interaction:
                     response_obj = mock_interaction["response"]
                     if isinstance(response_obj, dict) and "body" in response_obj:
-                        return response_obj["body"] or {}
+                        result = response_obj["body"] or {}
                     elif isinstance(response_obj, dict):
-                        return response_obj
+                        result = response_obj.copy()
+                    else:
+                        result = {}
 
-                if isinstance(mock_interaction, dict) and "Response" in mock_interaction:
-                    response_obj = mock_interaction["Response"]
-                    if isinstance(response_obj, dict) and "Body" in response_obj:
-                        return response_obj["Body"] or {}
+                    # Include timestamp in result for time travel
+                    if timestamp and isinstance(result, dict):
+                        result["timestamp"] = timestamp
+                    return result
 
                 return mock_interaction
 
