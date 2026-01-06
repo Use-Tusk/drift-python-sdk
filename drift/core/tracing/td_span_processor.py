@@ -16,7 +16,7 @@ from opentelemetry.trace import Span
 from ..sampling import should_sample
 from ..trace_blocking_manager import TraceBlockingManager, should_block_span
 from .otel_converter import otel_span_to_clean_span_data
-from ..types import TuskDriftMode
+from ..types import TuskDriftMode, TD_INSTRUMENTATION_LIBRARY_NAME
 
 if TYPE_CHECKING:
     from opentelemetry.context import Context
@@ -113,6 +113,15 @@ class TdSpanProcessor(SpanProcessor):
             logger.debug(f"[TdSpanProcessor] Skipping span '{span.name}' - mode is DISABLED")
             return
 
+        # Only process spans created by this SDK
+        instrumentation_scope = getattr(span, "instrumentation_scope", None)
+        if instrumentation_scope is None or instrumentation_scope.name != TD_INSTRUMENTATION_LIBRARY_NAME:
+            logger.debug(
+                f"[TdSpanProcessor] Skipping span '{span.name}' - not from Drift SDK "
+                f"(scope: {instrumentation_scope.name if instrumentation_scope else 'None'})"
+            )
+            return
+
         try:
             # Convert OTel span to CleanSpanData
             logger.debug(f"[TdSpanProcessor] Converting span '{span.name}' to CleanSpanData")
@@ -127,12 +136,8 @@ class TdSpanProcessor(SpanProcessor):
                 logger.debug(f"Skipping span '{clean_span.name}' - trace {clean_span.trace_id} is blocked")
                 return
 
-            # Check if this span should block the trace
+            # Check if this span should block the trace (size limit or server error)
             if should_block_span(clean_span):
-                logger.warning(
-                    f"Blocking trace {clean_span.trace_id} - span '{clean_span.name}' exceeds size limit. "
-                    f"Future spans for this trace will be prevented."
-                )
                 return
 
             # Apply sampling logic

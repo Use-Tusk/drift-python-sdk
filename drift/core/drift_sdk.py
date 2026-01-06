@@ -25,7 +25,7 @@ from .sampling import should_sample, validate_sampling_rate
 from .trace_blocking_manager import TraceBlockingManager, should_block_span
 from .tracing import TdSpanAttributes, TdSpanExporter, TdSpanExporterConfig
 from .tracing.td_span_processor import TdSpanProcessor
-from .types import CleanSpanData, TuskDriftMode, SpanKind
+from .types import CleanSpanData, TuskDriftMode, SpanKind, TD_INSTRUMENTATION_LIBRARY_NAME
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Tracer
@@ -489,16 +489,19 @@ class TuskDrift:
         span.end()
         logger.debug(f"Created ENV_VARS_SNAPSHOT span with {len(env_vars)} environment variables")
 
-    def get_tracer(self, name: str = "drift", version: str = "") -> Tracer:
+    def get_tracer(self, name: str | None = None, version: str = "") -> Tracer:
         """Get OpenTelemetry tracer.
 
         Args:
-            name: Tracer name (default: "drift")
+            name: Tracer name (default: TD_INSTRUMENTATION_LIBRARY_NAME)
             version: Tracer version (default: SDK version)
 
         Returns:
             OpenTelemetry Tracer instance
         """
+        if name is None:
+            name = TD_INSTRUMENTATION_LIBRARY_NAME
+
         if not version:
             from ..version import SDK_VERSION
 
@@ -544,9 +547,6 @@ class TuskDrift:
             return
 
         if should_block_span(span):
-            logger.warning(
-                f"Blocking trace {span.trace_id} - span '{span.name}' exceeds size limit. Future spans for this trace will be prevented."
-            )
             return
 
         if not should_sample(self._sampling_rate, self.app_ready):
