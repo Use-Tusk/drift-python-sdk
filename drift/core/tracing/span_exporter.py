@@ -97,24 +97,11 @@ class TdSpanExporter:
             logger.debug("No adapters configured")
             return
 
-        active_adapters = self._get_active_adapters()
-
-        if len(active_adapters) == 0:
-            logger.debug(f"No active adapters for mode: {self.mode}")
-            return
-
-        for adapter in active_adapters:
+        for adapter in self.adapters:
             try:
                 await adapter.export_spans(spans)
             except Exception as e:
                 logger.error(f"Failed to export spans to {adapter.name}: {e}")
-
-    def _get_active_adapters(self) -> list[SpanExportAdapter]:
-        """Get active adapters based on mode."""
-        if self.mode != TuskDriftMode.RECORD:
-            return [adapter for adapter in self.adapters if adapter.name in ("in-memory", "callback")]
-
-        return self.adapters
 
     async def shutdown(self) -> None:
         """Shutdown all adapters."""

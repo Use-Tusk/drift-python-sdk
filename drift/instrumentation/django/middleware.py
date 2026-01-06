@@ -25,6 +25,7 @@ from ...core.types import (
     StatusCode,
     Timestamp,
     replay_trace_id_context,
+    span_kind_context,
     TuskDriftMode,
 )
 from ..http import HttpSpanData, HttpTransformEngine
@@ -114,6 +115,9 @@ class DriftMiddleware:
         ctx_with_span = set_span_in_context(span, ctx)
         token = otel_context.attach(ctx_with_span)
 
+        # Set span_kind_context for child spans and socket instrumentation to detect SERVER context
+        span_kind_token = span_kind_context.set(SpanKind.SERVER)
+
         # Capture request body
         # Django provides request.body which handles reading and caching
         # No truncation at capture time - span-level 1MB blocking at export handles oversized spans
@@ -136,6 +140,7 @@ class DriftMiddleware:
 
         if self.transform_engine and self.transform_engine.should_drop_inbound_request(method, target, request_headers):
             # Reset context before early return
+            span_kind_context.reset(span_kind_token)
             if replay_token:
                 replay_trace_id_context.reset(replay_token)
             otel_context.detach(token)
@@ -147,6 +152,7 @@ class DriftMiddleware:
         request._drift_span = span  # type: ignore
         request._drift_token = token  # type: ignore
         request._drift_replay_token = replay_token  # type: ignore
+        request._drift_span_kind_token = span_kind_token  # type: ignore
         request._drift_request_body = request_body  # type: ignore
         request._drift_route_template = None  # Will be set in process_view  # type: ignore
 
@@ -164,6 +170,7 @@ class DriftMiddleware:
             raise
         finally:
             # Reset context
+            span_kind_context.reset(span_kind_token)
             if replay_token:
                 replay_trace_id_context.reset(replay_token)
             otel_context.detach(token)

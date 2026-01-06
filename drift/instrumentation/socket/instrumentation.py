@@ -208,8 +208,22 @@ class SocketInstrumentation(InstrumentationBase):
                 )
             except RuntimeError:
                 # No running loop - we're in sync context
-                # Just log, don't block to send alert
-                logger.debug("[SocketInstrumentation] No async loop available for alert")
+                # Fire-and-forget using a daemon thread
+                import threading
+
+                def _send_in_thread() -> None:
+                    try:
+                        asyncio.run(
+                            sdk.communicator.send_unpatched_dependency_alert(
+                                stack_trace=stack_trace,
+                                trace_test_server_span_id=trace_test_server_span_id,
+                            )
+                        )
+                    except Exception:
+                        pass  # Fire-and-forget, ignore errors
+
+                thread = threading.Thread(target=_send_in_thread, daemon=True)
+                thread.start()
 
         except Exception as e:
             # Alerts are non-critical, don't fail on errors
