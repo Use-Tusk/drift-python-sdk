@@ -186,6 +186,10 @@ def find_mock_response_sync(
             return None
 
         logger.debug(f"Found mock response for {trace_id}")
+
+        # Update time travel to match mock's recorded timestamp
+        _update_time_travel(mock_response, replay_trace_id)
+
         return mock_response
 
     except Exception as e:
@@ -252,8 +256,45 @@ async def find_mock_response_async(
             return None
 
         logger.debug(f"Found mock response for {trace_id}")
+
+        # Update time travel to match mock's recorded timestamp
+        _update_time_travel(mock_response, replay_trace_id)
+
         return mock_response
 
     except Exception as e:
         logger.error(f"Error finding mock response for {trace_id}: {e}")
         return None
+
+
+def _update_time_travel(
+    mock_response: MockResponseOutput,
+    replay_trace_id: str | None,
+) -> None:
+    """Update time travel to match the mock response's recorded timestamp.
+
+    Sets the clock to the timestamp from each mock response, keeping time
+    in sync with when the original requests were made during recording.
+
+    Args:
+        mock_response: The mock response containing the timestamp
+        replay_trace_id: The replay trace ID for this session
+    """
+    if not replay_trace_id:
+        return
+
+    try:
+        from drift.instrumentation.datetime import start_time_travel
+
+        response_data = mock_response.response
+
+        # Timestamp is extracted from MockInteraction and added to response by communicator
+        timestamp = response_data.get("timestamp") if isinstance(response_data, dict) else None
+
+        if timestamp:
+            logger.debug(f"Setting time travel to timestamp: {timestamp}")
+            start_time_travel(timestamp, trace_id=replay_trace_id)
+        else:
+            logger.debug("No timestamp in mock response, skipping time travel")
+    except Exception as e:
+        logger.debug(f"Failed to start time travel: {e}")
