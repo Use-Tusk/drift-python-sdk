@@ -734,14 +734,6 @@ class ProtobufCommunicator:
                         result["timestamp"] = timestamp
                     return result
 
-                if isinstance(mock_interaction, dict) and "Response" in mock_interaction:
-                    response_obj = mock_interaction["Response"]
-                    if isinstance(response_obj, dict) and "Body" in response_obj:
-                        result = response_obj["Body"] or {}
-                        if timestamp and isinstance(result, dict):
-                            result["timestamp"] = timestamp
-                        return result
-
                 return mock_interaction
 
             return data
