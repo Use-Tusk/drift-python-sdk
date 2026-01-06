@@ -3,7 +3,7 @@
 from .core import (
     BatchSpanProcessorConfig,
     CleanSpanData,
-    DriftMode,
+    TuskDriftMode,
     PackageType,
     RecordingConfig,
     ServiceConfig,
@@ -42,7 +42,7 @@ __all__ = [
     "PackageType",
     "SpanKind",
     "StatusCode",
-    "DriftMode",
+    "TuskDriftMode",
     "BatchSpanProcessorConfig",
     # Config
     "TuskConfig",

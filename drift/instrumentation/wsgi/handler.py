@@ -30,6 +30,8 @@ from ...core.types import (
     PackageType,
     SpanKind,
     replay_trace_id_context,
+    span_kind_context,
+    TuskDriftMode,
 )
 from ..http import HttpSpanData, HttpTransformEngine
 from .response_capture import ResponseBodyCapture
@@ -78,7 +80,7 @@ def handle_wsgi_request(
     # Check if we're in REPLAY mode and handle trace ID extraction
     replay_trace_id = None
     replay_token = None
-    if sdk.mode == "REPLAY":
+    if sdk.mode == TuskDriftMode.REPLAY:
         # Extract trace ID from headers (case-insensitive lookup)
         request_headers = extract_headers(environ)
         headers_lower = {k.lower(): v for k, v in request_headers.items()}
@@ -140,6 +142,9 @@ def handle_wsgi_request(
     ctx_with_span = set_span_in_context(span, ctx)
     token = otel_context.attach(ctx_with_span)
 
+    # Set span_kind_context for child spans and socket instrumentation to detect SERVER context
+    span_kind_token = span_kind_context.set(SpanKind.SERVER)
+
     response_data: dict[str, Any] = {}
 
     def wrapped_start_response(
@@ -158,6 +163,7 @@ def handle_wsgi_request(
     environ["_drift_span"] = span
     environ["_drift_context_token"] = token
     environ["_drift_replay_token"] = replay_token
+    environ["_drift_span_kind_token"] = span_kind_token
     environ["_drift_start_time_ns"] = start_time_ns
 
     def on_response_complete(env: WSGIEnvironment, resp_data: dict[str, Any]) -> None:
@@ -190,6 +196,7 @@ def finalize_wsgi_span(
     span: Span | None = environ.get("_drift_span")
     token = environ.get("_drift_context_token")
     replay_token = environ.get("_drift_replay_token")
+    span_kind_token = environ.get("_drift_span_kind_token")
     start_time_ns = environ.get("_drift_start_time_ns", 0)
 
     if not span:
@@ -289,6 +296,10 @@ def finalize_wsgi_span(
         # Detach context
         if token:
             otel_context.detach(token)
+
+        # Reset span kind context
+        if span_kind_token:
+            span_kind_context.reset(span_kind_token)
 
         # Reset replay context
         if replay_token:

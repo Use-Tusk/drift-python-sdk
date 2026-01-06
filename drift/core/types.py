@@ -207,4 +207,7 @@ class TdSpanAttributes(str, Enum):
     TRANSFORM_METADATA = "td.transformMetadata"
 
 
-DriftMode = Literal["RECORD", "REPLAY", "DISABLED"]
+class TuskDriftMode(str, Enum):
+    RECORD = "RECORD"
+    REPLAY = "REPLAY"
+    DISABLED = "DISABLED"

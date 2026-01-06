@@ -43,6 +43,7 @@ from ...core.types import (
     SpanKind,
     SpanStatus,
     StatusCode,
+    TuskDriftMode,
 )
 from ..base import InstrumentationBase
 from ..http import HttpSpanData, HttpTransformEngine
@@ -101,7 +102,7 @@ class RequestsInstrumentation(InstrumentationBase):
             sdk = TuskDrift.get_instance()
 
             # Pass through if SDK is disabled
-            if sdk.mode == "DISABLED":
+            if sdk.mode == TuskDriftMode.DISABLED:
                 return original_request(session_self, method, url, **kwargs)
 
             # Get tracer and parse URL for span name
@@ -137,7 +138,7 @@ class RequestsInstrumentation(InstrumentationBase):
                 span_id = format(span_context.span_id, "016x")
 
                 # REPLAY mode: Try to get mock
-                if sdk.mode == "REPLAY":
+                if sdk.mode == TuskDriftMode.REPLAY:
                     mock_response = self._try_get_mock(sdk, method, url, trace_id, span_id, **kwargs)
                     if mock_response is not None:
                         return mock_response

@@ -27,6 +27,8 @@ from ...core.tracing import TdSpanAttributes
 from ...core.types import (
     PackageType,
     SpanKind,
+    TuskDriftMode,
+    span_kind_context,
 )
 from ..base import InstrumentationBase
 from ..http import HttpSpanData, HttpTransformEngine
@@ -167,6 +169,9 @@ async def _handle_replay_request(
         ctx_with_span = set_span_in_context(span, ctx)
         token = otel_context.attach(ctx_with_span)
 
+        # Set span_kind_context for child spans and socket instrumentation to detect SERVER context
+        span_kind_token = span_kind_context.set(SpanKind.SERVER)
+
         response_data: dict[str, Any] = {}
         request_body_parts: list[bytes] = []
         total_body_size = 0
@@ -222,6 +227,7 @@ async def _handle_replay_request(
         )
     finally:
         # Reset context
+        span_kind_context.reset(span_kind_token)
         replay_trace_id_context.reset(replay_token)
         otel_context.detach(token)
         span.end()
@@ -256,7 +262,7 @@ async def _handle_request(
         return await original_call(app, scope, receive, send)
 
     # Handle REPLAY mode
-    if sdk.mode == "REPLAY":
+    if sdk.mode == TuskDriftMode.REPLAY:
         return await _handle_replay_request(
             app, scope, receive, send, original_call, transform_engine, method, raw_path, target_for_drop
         )
@@ -289,6 +295,9 @@ async def _handle_request(
     ctx = otel_context.get_current()
     ctx_with_span = set_span_in_context(span, ctx)
     token = otel_context.attach(ctx_with_span)
+
+    # Set span_kind_context for child spans and socket instrumentation to detect SERVER context
+    span_kind_token = span_kind_context.set(SpanKind.SERVER)
 
     response_data: dict[str, Any] = {}
     request_body_parts: list[bytes] = []
@@ -362,6 +371,7 @@ async def _handle_request(
         raise
     finally:
         # Reset trace context
+        span_kind_context.reset(span_kind_token)
         otel_context.detach(token)
         span.end()
 

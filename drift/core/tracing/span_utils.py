@@ -20,6 +20,7 @@ from opentelemetry.trace import SpanKind as OTelSpanKind
 from opentelemetry.trace import Status, StatusCode
 
 from .td_attributes import TdSpanAttributes
+from ..types import TuskDriftMode
 
 if TYPE_CHECKING:
     from opentelemetry.context import Context
@@ -211,7 +212,7 @@ class SpanUtils:
 
     @staticmethod
     def create_and_execute_span(
-        mode: str,
+        mode: TuskDriftMode,
         original_function_call: Callable[[], T],
         options: SpanExecutorOptions,
         fn: Callable[[SpanInfo], T],
@@ -289,7 +290,7 @@ class SpanUtils:
             span_info = None
 
         if not span_info:
-            if mode == "REPLAY":
+            if mode == TuskDriftMode.REPLAY:
                 # Safe to throw error since we're in replay mode
                 raise RuntimeError("Error creating span in replay mode")
             else:
