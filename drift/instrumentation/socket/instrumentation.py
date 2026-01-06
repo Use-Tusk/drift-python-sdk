@@ -18,6 +18,7 @@ from typing import Any
 
 from ..base import InstrumentationBase
 from ...core.types import TuskDriftMode
+from ...core.tracing.span_utils import SpanUtils
 
 logger = logging.getLogger(__name__)
 
@@ -146,10 +147,10 @@ class SocketInstrumentation(InstrumentationBase):
             method_name: Name of the socket method that was called
             socket_self: The socket instance
         """
-        from ...core.types import current_span_id_context, replay_trace_id_context
+        from ...core.types import replay_trace_id_context
 
         # Get span ID for deduplication
-        span_id = current_span_id_context.get() or ""
+        span_id = SpanUtils.get_current_span_id()
         span_key = f"{span_id}-{method_name}"
 
         # Deduplicate: only log once per span+method combination
@@ -172,7 +173,7 @@ class SocketInstrumentation(InstrumentationBase):
         # Log warning
         logger.warning(
             f"[SocketInstrumentation] TCP {method_name}() called from inbound request context, "
-            f"likely unpatched dependency. spanId={span_id}"
+            f"likely unpatched dependency. spanId={span_id}, traceId={trace_test_server_span_id}"
         )
         logger.warning(f"[SocketInstrumentation] Stack trace:\n{stack_trace}")
 
