@@ -19,8 +19,8 @@ from opentelemetry import trace
 from opentelemetry.trace import SpanKind as OTelSpanKind
 from opentelemetry.trace import Status, StatusCode
 
-from .td_attributes import TdSpanAttributes
 from ..types import TuskDriftMode
+from .td_attributes import TdSpanAttributes
 
 if TYPE_CHECKING:
     from opentelemetry.context import Context

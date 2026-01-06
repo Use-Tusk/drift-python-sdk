@@ -24,9 +24,9 @@ from ...core.types import (
     SpanStatus,
     StatusCode,
     Timestamp,
+    TuskDriftMode,
     replay_trace_id_context,
     span_kind_context,
-    TuskDriftMode,
 )
 from ..http import HttpSpanData, HttpTransformEngine
 from ..wsgi import (

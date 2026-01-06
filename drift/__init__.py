@@ -3,7 +3,6 @@
 from .core import (
     BatchSpanProcessorConfig,
     CleanSpanData,
-    TuskDriftMode,
     PackageType,
     RecordingConfig,
     ServiceConfig,
@@ -14,6 +13,7 @@ from .core import (
     # Config
     TuskConfig,
     TuskDrift,
+    TuskDriftMode,
     TuskFileConfig,
     find_project_root,
     load_tusk_config,

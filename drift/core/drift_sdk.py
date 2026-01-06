@@ -25,7 +25,7 @@ from .sampling import should_sample, validate_sampling_rate
 from .trace_blocking_manager import TraceBlockingManager, should_block_span
 from .tracing import TdSpanAttributes, TdSpanExporter, TdSpanExporterConfig
 from .tracing.td_span_processor import TdSpanProcessor
-from .types import CleanSpanData, TuskDriftMode, SpanKind, TD_INSTRUMENTATION_LIBRARY_NAME
+from .types import TD_INSTRUMENTATION_LIBRARY_NAME, CleanSpanData, SpanKind, TuskDriftMode
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Tracer

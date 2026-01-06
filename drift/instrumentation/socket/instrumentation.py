@@ -16,9 +16,9 @@ import weakref
 from types import ModuleType
 from typing import Any
 
-from ..base import InstrumentationBase
-from ...core.types import TuskDriftMode
 from ...core.tracing.span_utils import SpanUtils
+from ...core.types import TuskDriftMode
+from ..base import InstrumentationBase
 
 logger = logging.getLogger(__name__)
 

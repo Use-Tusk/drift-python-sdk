@@ -4,6 +4,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
+
 from ..types import TuskDriftMode
 
 if TYPE_CHECKING:

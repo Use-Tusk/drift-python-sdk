@@ -26,7 +26,7 @@ from .trace_blocking_manager import (
     estimate_span_size,
     should_block_span,
 )
-from .types import CleanSpanData, TuskDriftMode, PackageType, SpanKind, StatusCode
+from .types import CleanSpanData, PackageType, SpanKind, StatusCode, TuskDriftMode
 
 __all__ = [
     # Main SDK

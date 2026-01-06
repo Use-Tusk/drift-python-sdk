@@ -32,8 +32,8 @@ from ...core.types import (
     SpanStatus,
     StatusCode,
     Timestamp,
-    replay_trace_id_context,
     TuskDriftMode,
+    replay_trace_id_context,
 )
 from ..base import InstrumentationBase
 

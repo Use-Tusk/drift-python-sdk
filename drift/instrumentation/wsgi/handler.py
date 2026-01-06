@@ -29,9 +29,9 @@ from ...core.tracing import TdSpanAttributes
 from ...core.types import (
     PackageType,
     SpanKind,
+    TuskDriftMode,
     replay_trace_id_context,
     span_kind_context,
-    TuskDriftMode,
 )
 from ..http import HttpSpanData, HttpTransformEngine
 from .response_capture import ResponseBodyCapture

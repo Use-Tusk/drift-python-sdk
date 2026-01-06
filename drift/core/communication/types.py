@@ -11,9 +11,43 @@ The protocol uses:
 
 from __future__ import annotations
 
+__all__ = [
+    # Re-exported protobuf types
+    "CliMessage",
+    "InstrumentationVersionMismatchAlert",
+    "MessageType",
+    "SdkMessage",
+    "SendAlertRequest",
+    "SendInboundSpanForReplayRequest",
+    "UnpatchedDependencyAlert",
+    # Aliases
+    "SDKMessageType",
+    "CLIMessageType",
+    # Dataclasses
+    "ConnectRequest",
+    "ConnectResponse",
+    "GetMockRequest",
+    "GetMockResponse",
+    "MockRequestInput",
+    "MockResponseOutput",
+    # Utility functions
+    "dict_to_span",
+    "span_to_proto",
+    "extract_response_data",
+]
+
 from dataclasses import dataclass, field
 from typing import Any
 
+from tusk.drift.core.v1 import (
+    CliMessage,
+    InstrumentationVersionMismatchAlert,
+    MessageType,
+    SdkMessage,
+    SendAlertRequest,
+    SendInboundSpanForReplayRequest,
+    UnpatchedDependencyAlert,
+)
 from tusk.drift.core.v1 import (
     ConnectRequest as ProtoConnectRequest,
 )
@@ -25,19 +59,6 @@ from tusk.drift.core.v1 import (
 )
 from tusk.drift.core.v1 import (
     GetMockResponse as ProtoGetMockResponse,
-)
-
-# Re-export protobuf types from tusk-drift-schemas.
-# These are imported by other modules (e.g., communicator.py) from this file.
-# The linter may report them as unused, but they are intentionally re-exported.
-from tusk.drift.core.v1 import (
-    CliMessage,
-    InstrumentationVersionMismatchAlert,
-    MessageType,
-    SdkMessage,
-    SendAlertRequest,
-    SendInboundSpanForReplayRequest,
-    UnpatchedDependencyAlert,
 )
 from tusk.drift.core.v1 import (
     Span as ProtoSpan,
@@ -52,7 +73,6 @@ from tusk.drift.core.v1 import (
     StatusCode as ProtoStatusCode,
 )
 
-# Re-export MessageType for convenience
 SDKMessageType = MessageType
 CLIMessageType = MessageType
 
