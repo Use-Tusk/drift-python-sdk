@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from tusk.drift.core.v1 import GetMockRequest as ProtoGetMockRequest
-
+from ..span_serialization import clean_span_to_proto
 from ...version import MIN_CLI_VERSION, SDK_VERSION
 from ..types import CleanSpanData, calling_library_context
 from .types import (
@@ -438,7 +438,7 @@ class ProtobufCommunicator:
         if not self._socket:
             return
 
-        proto_span = span_to_proto(span)
+        proto_span = clean_span_to_proto(span)
 
         request = SendInboundSpanForReplayRequest(span=proto_span)
 

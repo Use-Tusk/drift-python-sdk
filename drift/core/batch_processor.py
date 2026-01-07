@@ -165,8 +165,6 @@ class BatchSpanProcessor:
                 else:
                     adapter.export_spans(batch)  # type: ignore
 
-                logger.debug(f"Exported {len(batch)} spans via {adapter.name}")
-
             except Exception as e:
                 logger.error(f"Failed to export batch via {adapter.name}: {e}")
 

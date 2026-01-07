@@ -15,7 +15,7 @@ from opentelemetry.trace import Span
 
 from ..sampling import should_sample
 from ..trace_blocking_manager import TraceBlockingManager, should_block_span
-from ..types import TD_INSTRUMENTATION_LIBRARY_NAME, TuskDriftMode
+from ..types import TD_INSTRUMENTATION_LIBRARY_NAME, TuskDriftMode, SpanKind as TdSpanKind, replay_trace_id_context
 from .otel_converter import otel_span_to_clean_span_data
 
 if TYPE_CHECKING:
@@ -152,8 +152,16 @@ class TdSpanProcessor(SpanProcessor):
                 return
 
             # Handle REPLAY mode inbound spans
-            if self._mode == TuskDriftMode.REPLAY and clean_span.kind.value == 2:  # SERVER
+            if self._mode == TuskDriftMode.REPLAY and clean_span.kind == TdSpanKind.SERVER:
                 from ..drift_sdk import TuskDrift
+
+                # Set the trace ID to the replay trace ID, CLI will use this to match the trace test with the result
+                replay_trace_id = replay_trace_id_context.get()
+                if replay_trace_id:
+                    clean_span.trace_id = replay_trace_id
+                else:
+                    logger.error("No replay trace ID found, cannot send inbound span for replay")
+                    return
 
                 sdk = TuskDrift.get_instance()
                 # Check for running loop BEFORE creating the coroutine to avoid
@@ -167,6 +175,13 @@ class TdSpanProcessor(SpanProcessor):
 
                 if loop is not None:
                     loop.create_task(sdk.send_inbound_span_for_replay(clean_span))
+                else:
+                     # No running loop - run synchronously
+                    try:
+                        asyncio.run(sdk.send_inbound_span_for_replay(clean_span))
+                    except RuntimeError:
+                        logger.error("No running loop, cannot send inbound span for replay")
+                        pass
 
             # Export span via batch processor (RECORD mode)
             if self._mode == TuskDriftMode.RECORD:
