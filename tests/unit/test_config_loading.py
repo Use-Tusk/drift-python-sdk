@@ -6,12 +6,9 @@ import unittest
 from pathlib import Path
 
 from drift.core.config import (
+    TuskFileConfig,
     find_project_root,
     load_tusk_config,
-    TuskFileConfig,
-    ServiceConfig,
-    RecordingConfig,
-    TracesConfig,
 )
 
 
@@ -33,6 +30,7 @@ class TestFindProjectRoot(unittest.TestCase):
             try:
                 os.chdir(subdir)
                 found_root = find_project_root()
+                assert found_root is not None
                 self.assertEqual(found_root.resolve(), project_root.resolve())
             finally:
                 os.chdir(original_cwd)
@@ -52,6 +50,7 @@ class TestFindProjectRoot(unittest.TestCase):
             try:
                 os.chdir(subdir)
                 found_root = find_project_root()
+                assert found_root is not None
                 self.assertEqual(found_root.resolve(), project_root.resolve())
             finally:
                 os.chdir(original_cwd)
@@ -117,31 +116,37 @@ transforms:
                 config = load_tusk_config()
 
                 self.assertIsNotNone(config)
+                assert config is not None
                 self.assertIsInstance(config, TuskFileConfig)
 
                 # Check service config
                 self.assertIsNotNone(config.service)
-                self.assertEqual(config.service.id, 'test-service-123')
-                self.assertEqual(config.service.name, 'test-service')
+                assert config.service is not None
+                self.assertEqual(config.service.id, "test-service-123")
+                self.assertEqual(config.service.name, "test-service")
                 self.assertEqual(config.service.port, 3000)
 
                 # Check traces config
                 self.assertIsNotNone(config.traces)
-                self.assertEqual(config.traces.dir, '.tusk/traces')
+                assert config.traces is not None
+                self.assertEqual(config.traces.dir, ".tusk/traces")
 
                 # Check recording config
                 self.assertIsNotNone(config.recording)
+                assert config.recording is not None
                 self.assertEqual(config.recording.sampling_rate, 0.5)
                 self.assertEqual(config.recording.export_spans, False)
                 self.assertEqual(config.recording.enable_env_var_recording, True)
 
                 # Check tusk_api config
                 self.assertIsNotNone(config.tusk_api)
-                self.assertEqual(config.tusk_api.url, 'https://api.example.com')
+                assert config.tusk_api is not None
+                self.assertEqual(config.tusk_api.url, "https://api.example.com")
 
                 # Check transforms
                 self.assertIsNotNone(config.transforms)
-                self.assertIn('http', config.transforms)
+                assert config.transforms is not None
+                self.assertIn("http", config.transforms)
 
             finally:
                 os.chdir(original_cwd)
@@ -177,6 +182,7 @@ transforms:
                 config = load_tusk_config()
 
                 self.assertIsNotNone(config)
+                assert config is not None
                 self.assertIsInstance(config, TuskFileConfig)
 
                 # All fields should be None
@@ -214,12 +220,15 @@ traces:
                 config = load_tusk_config()
 
                 self.assertIsNotNone(config)
+                assert config is not None
 
                 # Only specified sections should be present
                 self.assertIsNone(config.service)
                 self.assertIsNotNone(config.traces)
-                self.assertEqual(config.traces.dir, './my-traces')
+                assert config.traces is not None
+                self.assertEqual(config.traces.dir, "./my-traces")
                 self.assertIsNotNone(config.recording)
+                assert config.recording is not None
                 self.assertEqual(config.recording.sampling_rate, 0.8)
                 self.assertIsNone(config.tusk_api)
 

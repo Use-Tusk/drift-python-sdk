@@ -145,7 +145,7 @@ class SpanUtils:
 
             # Check if we should block span creation for this trace
             # (This matches the trace blocking check in Node.js SDK)
-            active_span = trace.get_span(parent_context)
+            active_span = trace.get_current_span(parent_context)
             if active_span and active_span.is_recording():
                 from ..trace_blocking_manager import TraceBlockingManager
 
@@ -172,7 +172,7 @@ class SpanUtils:
             span_id = format_span_id(span_context.span_id)
 
             # Create new context with span active
-            new_context = trace.set_span(parent_context, span)
+            new_context = trace.set_span_in_context(span, parent_context)
 
             # Store is_pre_app_start in context (matches Node.js SDK pattern)
             # We'll use span attributes for this instead of context variables

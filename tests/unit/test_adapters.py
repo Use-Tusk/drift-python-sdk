@@ -5,9 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
-from drift.core.types import SpanKind
 from drift.core.tracing.adapters import (
     ApiSpanAdapter,
     ApiSpanAdapterConfig,
@@ -16,6 +14,7 @@ from drift.core.tracing.adapters import (
     FilesystemSpanAdapter,
     InMemorySpanAdapter,
 )
+from drift.core.types import SpanKind
 from tests.utils import create_test_span
 
 
@@ -155,6 +154,7 @@ class TestInMemorySpanAdapter(unittest.TestCase):
 
     def test_concurrent_exports(self):
         """Test concurrent exports don't cause issues."""
+
         async def export_multiple():
             tasks = []
             for i in range(10):
@@ -175,6 +175,7 @@ class TestFilesystemSpanAdapter(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_name(self):
@@ -186,7 +187,7 @@ class TestFilesystemSpanAdapter(unittest.TestCase):
 
     def test_creates_directory(self):
         new_dir = Path(self.temp_dir) / "nested" / "spans"
-        adapter = FilesystemSpanAdapter(new_dir)
+        FilesystemSpanAdapter(new_dir)  # Creates directory on init
         self.assertTrue(new_dir.exists())
 
     def test_exports_span_to_jsonl(self):
@@ -329,14 +330,14 @@ class TestApiSpanAdapter(unittest.TestCase):
         self.assertIsNotNone(result.output_value)
         # Check timestamp and duration are datetime/timedelta
         from datetime import datetime, timedelta
+
         self.assertIsInstance(result.timestamp, datetime)
         self.assertIsInstance(result.duration, timedelta)
 
     def test_base_url_construction(self):
         """Test that the API URL is constructed correctly."""
         self.assertEqual(
-            self.adapter._base_url,
-            "https://api.test.com/api/drift/tusk.drift.backend.v1.SpanExportService/ExportSpans"
+            self.adapter._base_url, "https://api.test.com/api/drift/tusk.drift.backend.v1.SpanExportService/ExportSpans"
         )
 
     def test_aiohttp_not_installed(self):

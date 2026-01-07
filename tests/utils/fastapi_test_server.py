@@ -35,7 +35,7 @@ class FastAPITestServer:
 
     def __init__(
         self,
-        app: "FastAPI" | None = None,
+        app: FastAPI | None = None,
         host: str = "127.0.0.1",
         port: int | None = None,
     ) -> None:
@@ -47,14 +47,15 @@ class FastAPITestServer:
         self._loop: asyncio.AbstractEventLoop | None = None
 
     @property
-    def app(self) -> "FastAPI":
+    def app(self) -> FastAPI:
         if self._app is None:
             from fastapi import FastAPI
+
             self._app = FastAPI()
         return self._app
 
     @app.setter
-    def app(self, value: "FastAPI") -> None:
+    def app(self, value: FastAPI) -> None:
         self._app = value
 
     @property
@@ -91,7 +92,7 @@ class FastAPITestServer:
         self._server = None
         self._loop = None
 
-    def __enter__(self) -> "FastAPITestServer":
+    def __enter__(self) -> FastAPITestServer:
         self.start()
         return self
 

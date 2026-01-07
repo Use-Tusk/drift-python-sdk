@@ -11,8 +11,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from tusk.drift.core.v1 import GetMockRequest as ProtoGetMockRequest
-from ..span_serialization import clean_span_to_proto
+
 from ...version import MIN_CLI_VERSION, SDK_VERSION
+from ..span_serialization import clean_span_to_proto
 from ..types import CleanSpanData, calling_library_context
 from .types import (
     CliMessage,
@@ -566,7 +567,7 @@ class ProtobufCommunicator:
                     response = cli_message.connect_response
                     if response.success:
                         logger.debug("CLI acknowledged connection")
-                        self._session_id = response.session_id
+                        # Note: session_id is not in the protobuf schema
                     else:
                         logger.error(f"CLI rejected connection: {response.error}")
                     continue
@@ -576,6 +577,8 @@ class ProtobufCommunicator:
 
     def _recv_exact(self, n: int) -> bytes | None:
         """Receive exactly n bytes from socket."""
+        if self._socket is None:
+            return None
         data = bytearray()
         while len(data) < n:
             chunk = self._socket.recv(n - len(data))
@@ -655,7 +658,8 @@ class ProtobufCommunicator:
         if message.connect_response:
             response = message.connect_response
             if response.success:
-                self._session_id = response.session_id
+                logger.debug("CLI acknowledged connection")
+                # Note: session_id is not in the protobuf schema
             return MockResponseOutput(found=False, error="Unexpected connect response")
 
         return MockResponseOutput(found=False, error="Unknown message type")

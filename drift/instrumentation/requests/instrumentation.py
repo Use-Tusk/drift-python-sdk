@@ -348,6 +348,9 @@ class RequestsInstrumentation(InstrumentationBase):
                 return None
 
             # Create mocked response object
+            if mock_response_output.response is None:
+                logger.debug(f"Mock found but response data is None for {method} {url}")
+                return None
             return self._create_mock_response(mock_response_output.response, url)
 
         except Exception as e:

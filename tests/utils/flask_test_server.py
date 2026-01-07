@@ -34,7 +34,7 @@ class FlaskTestServer:
 
     def __init__(
         self,
-        app: "Flask" | None = None,
+        app: Flask | None = None,
         host: str = "127.0.0.1",
         port: int | None = None,
     ) -> None:
@@ -45,14 +45,15 @@ class FlaskTestServer:
         self._server: Any = None
 
     @property
-    def app(self) -> "Flask":
+    def app(self) -> Flask:
         if self._app is None:
             from flask import Flask
+
             self._app = Flask(__name__)
         return self._app
 
     @app.setter
-    def app(self, value: "Flask") -> None:
+    def app(self, value: Flask) -> None:
         self._app = value
 
     @property
@@ -75,7 +76,7 @@ class FlaskTestServer:
             self._thread.join(timeout=5.0)
             self._thread = None
 
-    def __enter__(self) -> "FlaskTestServer":
+    def __enter__(self) -> FlaskTestServer:
         self.start()
         return self
 

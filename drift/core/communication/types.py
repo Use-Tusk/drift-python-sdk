@@ -77,6 +77,43 @@ SDKMessageType = MessageType
 CLIMessageType = MessageType
 
 
+def _python_to_value(value: Any) -> Any:
+    """Convert Python value to protobuf Value."""
+    from betterproto.lib.google.protobuf import ListValue, Value
+
+    if value is None:
+        from betterproto.lib.google.protobuf import NullValue
+
+        return Value(null_value=NullValue.NULL_VALUE)  # type: ignore[arg-type]
+    elif isinstance(value, bool):
+        return Value(bool_value=value)
+    elif isinstance(value, (int, float)):
+        return Value(number_value=float(value))
+    elif isinstance(value, str):
+        return Value(string_value=value)
+    elif isinstance(value, dict):
+        from betterproto.lib.google.protobuf import Struct
+
+        struct = Struct()
+        struct.fields = {k: _python_to_value(v) for k, v in value.items()}
+        return Value(struct_value=struct)
+    elif isinstance(value, (list, tuple)):
+        list_val = ListValue(values=[_python_to_value(item) for item in value])
+        return Value(list_value=list_val)
+    else:
+        return Value(string_value=str(value))
+
+
+def _dict_to_struct(data: dict[str, Any]) -> Any:
+    """Convert Python dict to protobuf Struct."""
+    from betterproto.lib.google.protobuf import Struct
+
+    struct = Struct()
+    if data:
+        struct.fields = {k: _python_to_value(v) for k, v in data.items()}
+    return struct
+
+
 @dataclass
 class ConnectRequest:
     """Initial connection request from SDK to CLI.
@@ -102,11 +139,18 @@ class ConnectRequest:
 
     def to_proto(self) -> ProtoConnectRequest:
         """Convert to protobuf message."""
+        from betterproto.lib.google.protobuf import Struct
+
+        # Convert metadata dict to protobuf Struct
+        metadata_struct = Struct()
+        if self.metadata:
+            metadata_struct.fields = {k: _python_to_value(v) for k, v in self.metadata.items()}
+
         return ProtoConnectRequest(
             service_id=self.service_id,
             sdk_version=self.sdk_version,
             min_cli_version=self.min_cli_version,
-            metadata=self.metadata,
+            metadata=metadata_struct,
         )
 
 
@@ -129,10 +173,12 @@ class ConnectResponse:
     @classmethod
     def from_proto(cls, proto: ProtoConnectResponse) -> ConnectResponse:
         """Create from protobuf message."""
+        # Note: ProtoConnectResponse only has success and error fields
+        # cli_version and session_id are SDK-only extensions not in the protobuf schema
         return cls(
             success=proto.success,
-            cli_version=proto.cli_version or None,
-            session_id=proto.session_id or None,
+            cli_version=None,
+            session_id=None,
             error=proto.error or None,
         )
 
@@ -164,7 +210,7 @@ class GetMockRequest:
 
     def to_proto(self) -> ProtoGetMockRequest:
         """Convert to protobuf message."""
-        span = dict_to_span(self.outbound_span) if self.outbound_span else None
+        span = dict_to_span(self.outbound_span) if self.outbound_span else ProtoSpan()
         return ProtoGetMockRequest(
             request_id=self.request_id,
             test_id=self.test_id,
@@ -253,7 +299,8 @@ def dict_to_span(data: dict[str, Any]) -> ProtoSpan:
             message=status_data.get("message", ""),
         )
     else:
-        status = ProtoSpanStatus(code=ProtoStatusCode.UNSET)
+        # UNSET is not a valid StatusCode in the proto - use UNSPECIFIED (0)
+        status = ProtoSpanStatus(code=ProtoStatusCode.UNSPECIFIED)
 
     return ProtoSpan(
         trace_id=data.get("trace_id", data.get("traceId", "")),
@@ -263,8 +310,8 @@ def dict_to_span(data: dict[str, Any]) -> ProtoSpan:
         package_name=data.get("package_name", data.get("packageName", "")),
         instrumentation_name=data.get("instrumentation_name", data.get("instrumentationName", "")),
         submodule_name=data.get("submodule_name", data.get("submoduleName", "")),
-        input_value=data.get("input_value", data.get("inputValue", {})),
-        output_value=data.get("output_value", data.get("outputValue", {})),
+        input_value=_dict_to_struct(data.get("input_value", data.get("inputValue", {}))),
+        output_value=_dict_to_struct(data.get("output_value", data.get("outputValue", {}))),
         input_schema_hash=data.get("input_schema_hash", data.get("inputSchemaHash", "")),
         output_schema_hash=data.get("output_schema_hash", data.get("outputSchemaHash", "")),
         input_value_hash=data.get("input_value_hash", data.get("inputValueHash", "")),
@@ -306,8 +353,8 @@ def span_to_proto(span: Any) -> ProtoSpan:
         package_name=span.package_name or "",
         instrumentation_name=span.instrumentation_name or "",
         submodule_name=span.submodule_name or "",
-        input_value=span.input_value or {},
-        output_value=span.output_value or {},
+        input_value=_dict_to_struct(span.input_value or {}),
+        output_value=_dict_to_struct(span.output_value or {}),
         input_schema_hash=span.input_schema_hash or "",
         output_schema_hash=span.output_schema_hash or "",
         input_value_hash=span.input_value_hash or "",

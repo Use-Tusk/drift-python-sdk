@@ -126,12 +126,19 @@ class WsgiInstrumentation(InstrumentationBase):
         framework_name = self._framework_name
         instrumentation_name = self.name
 
+        # Create a wrapper that matches the WsgiAppMethod signature (app, environ, start_response)
+        # This allows handle_wsgi_request to work with both Flask-like unbound methods
+        # and plain WSGI apps
+        def wsgi_app_method(app, environ, start_response):  # type: ignore[no-untyped-def]
+            # Ignore the app parameter and call the original WSGI app directly
+            return wsgi_app(environ, start_response)
+
         def instrumented_wsgi_app(environ, start_response):
             return handle_wsgi_request(
                 wsgi_app,
                 environ,
                 start_response,
-                wsgi_app,
+                wsgi_app_method,
                 framework_name=framework_name,
                 instrumentation_name=instrumentation_name,
                 transform_engine=transform_engine,

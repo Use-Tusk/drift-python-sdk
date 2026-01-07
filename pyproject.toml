@@ -110,3 +110,20 @@ line-ending = "auto"
 
 [tool.ty.environment]
 python-version = "3.12"
+
+[tool.ty.src]
+# Exclude e2e-tests directories from type checking
+exclude = ["**/e2e-tests/**"]
+
+[[tool.ty.overrides]]
+# Disable unresolved-import errors for instrumentation files with optional dependencies
+include = [
+    "drift/instrumentation/django/**",
+    "drift/instrumentation/psycopg/**",
+    "drift/instrumentation/psycopg2/**",
+    "drift/instrumentation/redis/**",
+    "drift/instrumentation/http/transform_engine.py",
+]
+
+[tool.ty.overrides.rules]
+"unresolved-import" = "ignore"

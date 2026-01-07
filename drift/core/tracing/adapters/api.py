@@ -136,21 +136,19 @@ class ApiSpanAdapter(SpanExportAdapter):
             microseconds=clean_span.duration.nanos // 1000,
         )
 
-        metadata_struct = None
+        metadata_struct = _dict_to_struct({})
         if clean_span.metadata is not None:
-            if hasattr(clean_span.metadata, "__dataclass_fields__"):
-                from dataclasses import asdict
-
-                metadata_dict = asdict(clean_span.metadata)
-            else:
-                metadata_dict = clean_span.metadata if isinstance(clean_span.metadata, dict) else {}
+            metadata_dict = clean_span.metadata if isinstance(clean_span.metadata, dict) else {}
             metadata_struct = _dict_to_struct(metadata_dict)
 
-        package_type_value = (
-            clean_span.package_type.value
-            if hasattr(clean_span.package_type, "value")
-            else (clean_span.package_type or 0)
-        )
+        from tusk.drift.core.v1 import PackageType as ProtoPackageType
+
+        from ...types import PackageType as SDKPackageType
+
+        if clean_span.package_type and hasattr(clean_span.package_type, "value"):
+            package_type_value = ProtoPackageType(clean_span.package_type.value)
+        else:
+            package_type_value = ProtoPackageType(SDKPackageType.UNSPECIFIED.value)
 
         from tusk.drift.core.v1 import SpanStatus as ProtoSpanStatus
 
@@ -187,22 +185,20 @@ class ApiSpanAdapter(SpanExportAdapter):
 
             type_value = sdk_schema.type.value if hasattr(sdk_schema.type, "value") else sdk_schema.type
             encoding_value = (
-                sdk_schema.encoding.value
-                if sdk_schema.encoding and hasattr(sdk_schema.encoding, "value")
-                else (sdk_schema.encoding or 0)
+                sdk_schema.encoding.value if sdk_schema.encoding and hasattr(sdk_schema.encoding, "value") else None
             )
             decoded_type_value = (
                 sdk_schema.decoded_type.value
                 if sdk_schema.decoded_type and hasattr(sdk_schema.decoded_type, "value")
-                else (sdk_schema.decoded_type or 0)
+                else None
             )
 
             return ProtoJsonSchema(
                 type=type_value,
                 properties=proto_properties,
                 items=proto_items,
-                encoding=encoding_value,
-                decoded_type=decoded_type_value,
+                encoding=encoding_value,  # type: ignore[arg-type]
+                decoded_type=decoded_type_value,  # type: ignore[arg-type]
                 match_importance=sdk_schema.match_importance,
             )
 
@@ -232,7 +228,7 @@ class ApiSpanAdapter(SpanExportAdapter):
             timestamp=timestamp,
             duration=duration,
             is_root_span=clean_span.is_root_span,
-            metadata=metadata_struct,
+            metadata=metadata_struct,  # type: ignore[arg-type]
         )
 
 
@@ -243,7 +239,9 @@ def _dict_to_struct(data: dict[str, Any]) -> Struct:
     def value_to_proto(val: Any) -> Value:
         """Convert a Python value to protobuf Value."""
         if val is None:
-            return Value(null_value=0)
+            from betterproto.lib.google.protobuf import NullValue
+
+            return Value(null_value=NullValue.NULL_VALUE)  # type: ignore[arg-type]
         elif isinstance(val, bool):
             return Value(bool_value=val)
         elif isinstance(val, (int, float)):

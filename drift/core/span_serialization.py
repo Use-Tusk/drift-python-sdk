@@ -27,7 +27,7 @@ from tusk.drift.core.v1 import (
 )
 
 from .json_schema_helper import DecodedType, EncodingType, JsonSchema, JsonSchemaType
-from .types import CleanSpanData
+from .types import CleanSpanData, PackageType
 
 
 def _value_to_proto(value: Any) -> ProtoValue:
@@ -37,7 +37,9 @@ def _value_to_proto(value: Any) -> ProtoValue:
     proto_value = ProtoValue()
 
     if value is None:
-        proto_value.null_value = 0
+        from betterproto.lib.google.protobuf import NullValue
+
+        proto_value.null_value = NullValue.NULL_VALUE  # type: ignore[assignment]
     elif isinstance(value, bool):
         proto_value.bool_value = value
     elif isinstance(value, (int, float)):
@@ -94,7 +96,7 @@ def clean_span_to_proto(span: CleanSpanData) -> ProtoSpan:
         package_name=span.package_name,
         instrumentation_name=span.instrumentation_name,
         submodule_name=span.submodule_name,
-        package_type=span.package_type.value if span.package_type else 0,
+        package_type=span.package_type.value if span.package_type else PackageType.UNSPECIFIED.value,  # type: ignore[arg-type]
         environment=span.environment,
         kind=span.kind.value if hasattr(span.kind, "value") else span.kind,
         input_value=_dict_to_struct(span.input_value),
@@ -119,7 +121,7 @@ def clean_span_to_proto(span: CleanSpanData) -> ProtoSpan:
             seconds=span.duration.seconds,
             microseconds=span.duration.nanos // 1000,
         ),
-        metadata=_metadata_to_dict(span.metadata),
+        metadata=_dict_to_struct(_metadata_to_dict(span.metadata)),
     )
 
 

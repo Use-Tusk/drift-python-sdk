@@ -169,9 +169,8 @@ class FilesystemSpanAdapter(SpanExportAdapter):
             result["environment"] = span.environment
 
         if span.metadata is not None:
-            result["metadata"] = (
-                asdict(span.metadata) if hasattr(span.metadata, "__dataclass_fields__") else span.metadata
-            )
+            # metadata is dict[str, Any], so just use it directly
+            result["metadata"] = span.metadata
 
         if span.transform_metadata is not None:
             result["transformMetadata"] = asdict(span.transform_metadata)

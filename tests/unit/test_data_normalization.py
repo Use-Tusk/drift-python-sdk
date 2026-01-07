@@ -34,12 +34,15 @@ class TestRemoveNoneValues(unittest.TestCase):
 
         result = remove_none_values(input_data)
 
-        self.assertEqual(result, {
-            "a": "value",
-            "d": 0,
-            "e": False,
-            "f": "",
-        })
+        self.assertEqual(
+            result,
+            {
+                "a": "value",
+                "d": 0,
+                "e": False,
+                "f": "",
+            },
+        )
         self.assertNotIn("b", result)
         self.assertNotIn("c", result)
 
@@ -83,10 +86,13 @@ class TestRemoveNoneValues(unittest.TestCase):
         result = remove_none_values(input_data)
 
         # In arrays, None is preserved (like JS null)
-        self.assertEqual(result, {
-            "items": ["a", None, "b", None, "c"],
-            "numbers": [1, None, 2, 0],
-        })
+        self.assertEqual(
+            result,
+            {
+                "items": ["a", None, "b", None, "c"],
+                "numbers": [1, None, 2, 0],
+            },
+        )
 
     def test_should_handle_circular_references_safely(self):
         """Circular references should be replaced with '[Circular]'."""
@@ -98,11 +104,14 @@ class TestRemoveNoneValues(unittest.TestCase):
 
         result = remove_none_values(input_data)
 
-        self.assertEqual(result, {
-            "name": "test",
-            "value": 123,
-            "self": "[Circular]",
-        })
+        self.assertEqual(
+            result,
+            {
+                "name": "test",
+                "value": 123,
+                "self": "[Circular]",
+            },
+        )
 
     def test_should_handle_empty_objects(self):
         """Empty objects should remain empty."""
@@ -122,11 +131,14 @@ class TestRemoveNoneValues(unittest.TestCase):
 
         result = remove_none_values(input_data)
 
-        self.assertEqual(result, {
-            "string": "test",
-            "number": 42,
-            "boolean": True,
-        })
+        self.assertEqual(
+            result,
+            {
+                "string": "test",
+                "number": 42,
+                "boolean": True,
+            },
+        )
 
     def test_should_preserve_date_objects_as_iso_strings(self):
         """Date objects should be converted to ISO strings."""
@@ -138,9 +150,12 @@ class TestRemoveNoneValues(unittest.TestCase):
 
         result = remove_none_values(input_data)
 
-        self.assertEqual(result, {
-            "timestamp": date.isoformat(),
-        })
+        self.assertEqual(
+            result,
+            {
+                "timestamp": date.isoformat(),
+            },
+        )
 
     def test_should_handle_complex_nested_structures(self):
         """Test complex nested structures with various types."""
@@ -185,10 +200,13 @@ class TestCreateSpanInputValue(unittest.TestCase):
         result = create_span_input_value(input_data)
 
         self.assertIsInstance(result, str)
-        self.assertEqual(json.loads(result), {
-            "user": "john",
-            "active": True,
-        })
+        self.assertEqual(
+            json.loads(result),
+            {
+                "user": "john",
+                "active": True,
+            },
+        )
 
     def test_should_handle_circular_references_in_span_values(self):
         """Circular references should be handled in JSON output."""
@@ -200,10 +218,13 @@ class TestCreateSpanInputValue(unittest.TestCase):
         result = create_span_input_value(input_data)
 
         self.assertIsInstance(result, str)
-        self.assertEqual(json.loads(result), {
-            "name": "test",
-            "circular": "[Circular]",
-        })
+        self.assertEqual(
+            json.loads(result),
+            {
+                "name": "test",
+                "circular": "[Circular]",
+            },
+        )
 
     def test_should_produce_consistent_output_for_identical_normalized_data(self):
         """Same normalized data should produce same JSON output."""
@@ -229,10 +250,13 @@ class TestCreateMockInputValue(unittest.TestCase):
 
         result = create_mock_input_value(input_data)
 
-        self.assertEqual(result, {
-            "user": "john",
-            "active": True,
-        })
+        self.assertEqual(
+            result,
+            {
+                "user": "john",
+                "active": True,
+            },
+        )
         self.assertNotIn("age", result)
 
     def test_should_handle_circular_references_in_mock_values(self):
@@ -244,10 +268,13 @@ class TestCreateMockInputValue(unittest.TestCase):
 
         result = create_mock_input_value(input_data)
 
-        self.assertEqual(result, {
-            "name": "test",
-            "circular": "[Circular]",
-        })
+        self.assertEqual(
+            result,
+            {
+                "name": "test",
+                "circular": "[Circular]",
+            },
+        )
 
     def test_should_produce_consistent_output_for_identical_normalized_data(self):
         """Same normalized data should produce same output."""
@@ -269,10 +296,13 @@ class TestCreateMockInputValue(unittest.TestCase):
 
         result = create_mock_input_value(input_data)
 
-        self.assertEqual(result, {
-            "id": 1,
-            "name": "test",
-        })
+        self.assertEqual(
+            result,
+            {
+                "id": 1,
+                "name": "test",
+            },
+        )
 
 
 class TestConsistencyBetweenFunctions(unittest.TestCase):
@@ -321,32 +351,17 @@ class TestEdgeCases(unittest.TestCase):
 
     def test_deeply_nested_circular_reference(self):
         """Test deeply nested circular references."""
-        input_data = {
-            "level1": {
-                "level2": {
-                    "level3": {}
-                }
-            }
-        }
+        input_data = {"level1": {"level2": {"level3": {}}}}
         input_data["level1"]["level2"]["level3"]["back_to_root"] = input_data
 
         result = remove_none_values(input_data)
 
-        self.assertEqual(
-            result["level1"]["level2"]["level3"]["back_to_root"],
-            "[Circular]"
-        )
+        self.assertEqual(result["level1"]["level2"]["level3"]["back_to_root"], "[Circular]")
 
     def test_multiple_circular_references(self):
         """Test multiple circular references to same object."""
         shared = {"name": "shared"}
-        input_data = {
-            "ref1": shared,
-            "ref2": shared,
-            "nested": {
-                "ref3": shared
-            }
-        }
+        input_data = {"ref1": shared, "ref2": shared, "nested": {"ref3": shared}}
 
         result = remove_none_values(input_data)
 

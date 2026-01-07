@@ -15,7 +15,8 @@ from opentelemetry.trace import Span
 
 from ..sampling import should_sample
 from ..trace_blocking_manager import TraceBlockingManager, should_block_span
-from ..types import TD_INSTRUMENTATION_LIBRARY_NAME, TuskDriftMode, SpanKind as TdSpanKind, replay_trace_id_context
+from ..types import TD_INSTRUMENTATION_LIBRARY_NAME, TuskDriftMode, replay_trace_id_context
+from ..types import SpanKind as TdSpanKind
 from .otel_converter import otel_span_to_clean_span_data
 
 if TYPE_CHECKING:

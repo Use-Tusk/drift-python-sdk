@@ -60,10 +60,12 @@ class TestFlaskBasicSpanCapture(unittest.TestCase):
         @cls.app.route("/headers")
         def headers():
             # Echo back some headers for testing
-            return jsonify({
-                "user_agent": request.headers.get("User-Agent"),
-                "custom_header": request.headers.get("X-Custom-Header"),
-            })
+            return jsonify(
+                {
+                    "user_agent": request.headers.get("User-Agent"),
+                    "custom_header": request.headers.get("X-Custom-Header"),
+                }
+            )
 
         cls.sdk.mark_app_as_ready()
 

@@ -24,6 +24,8 @@ from ..types import (
     SpanStatus,
     StatusCode,
     Timestamp,
+    TransformAction,
+    TransformMetadata,
 )
 from .td_attributes import TdSpanAttributes
 
@@ -31,6 +33,30 @@ if TYPE_CHECKING:
     from opentelemetry.sdk.trace import ReadableSpan
 
 logger = logging.getLogger(__name__)
+
+
+def _dict_to_transform_metadata(data: dict | None) -> TransformMetadata | None:
+    """Convert a dictionary to TransformMetadata."""
+    if data is None:
+        return None
+
+    actions = []
+    if "actions" in data and isinstance(data["actions"], list):
+        for action_dict in data["actions"]:
+            if isinstance(action_dict, dict):
+                actions.append(
+                    TransformAction(
+                        type=action_dict.get("type", "redact"),  # type: ignore[arg-type]
+                        field=action_dict.get("field", ""),
+                        reason=action_dict.get("reason", ""),
+                        description=action_dict.get("description"),
+                    )
+                )
+
+    return TransformMetadata(
+        transformed=data.get("transformed", False),
+        actions=actions,
+    )
 
 
 def format_trace_id(trace_id: int) -> str:
@@ -331,12 +357,15 @@ def otel_span_to_clean_span_data(
 
     # Extract metadata
     metadata = get_attribute_as_dict(attributes, TdSpanAttributes.METADATA)
-    transform_metadata = get_attribute_as_dict(attributes, TdSpanAttributes.TRANSFORM_METADATA)
+    transform_metadata_dict = get_attribute_as_dict(attributes, TdSpanAttributes.TRANSFORM_METADATA)
+    transform_metadata = _dict_to_transform_metadata(transform_metadata_dict)
     stack_trace = get_attribute_as_str(attributes, TdSpanAttributes.STACK_TRACE)
 
     # Convert timing
-    timestamp = ns_to_timestamp(otel_span.start_time)
-    duration_ns = otel_span.end_time - otel_span.start_time if otel_span.end_time else 0
+    start_time = otel_span.start_time or 0
+    timestamp = ns_to_timestamp(start_time)
+    end_time = otel_span.end_time or 0
+    duration_ns = end_time - start_time if end_time else 0
     duration = ns_to_duration(duration_ns)
 
     # Convert status
