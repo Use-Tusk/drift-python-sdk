@@ -128,7 +128,8 @@ View traces after a test:
 
 ```bash
 cd drift/instrumentation/flask/e2e-tests
-cat .tusk/traces/*.jsonl | python -m json.tool
+# JSONL files contain one JSON object per line, use jq to format them
+cat .tusk/traces/*.jsonl | jq .
 ```
 
 View service logs:

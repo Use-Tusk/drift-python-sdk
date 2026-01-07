@@ -7,7 +7,7 @@ service:
   start:
     command: "python src/app.py"
   readiness_check:
-    command: "curl http://localhost:8000/health"
+    command: "curl -f http://localhost:8000/health"
     timeout: 45s
     interval: 5s
 

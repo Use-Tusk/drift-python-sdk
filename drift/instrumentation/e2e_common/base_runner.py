@@ -249,7 +249,8 @@ class E2ETestRunnerBase:
                         obj, end_idx = decoder.raw_decode(output, idx)
                         if isinstance(obj, dict) and "test_id" in obj:
                             results.append(obj)
-                        idx += end_idx
+                        # raw_decode returns absolute index, not relative offset
+                        idx = end_idx
                     except json.JSONDecodeError:
                         idx += 1
                 else:

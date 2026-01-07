@@ -12,6 +12,8 @@ def make_request(method, endpoint, **kwargs):
     url = f"{BASE_URL}{endpoint}"
     print(f"→ {method} {endpoint}")
 
+    # Set default timeout if not provided
+    kwargs.setdefault("timeout", 30)
     response = requests.request(method, url, **kwargs)
     print(f"  Status: {response.status_code}")
     time.sleep(0.5)  # Small delay between requests

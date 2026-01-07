@@ -44,10 +44,11 @@ echo -e "${BLUE}Starting test...${NC}"
 echo ""
 
 # Run container and capture exit code (always use port 8000 inside container)
+# Disable set -e temporarily to capture exit code
+set +e
 docker compose -p "$PROJECT_NAME" run --rm app
-
-# Capture exit code from docker compose
 EXIT_CODE=$?
+set -e
 
 echo ""
 if [ $EXIT_CODE -eq 0 ]; then

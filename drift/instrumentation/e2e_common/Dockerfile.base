@@ -28,8 +28,15 @@ RUN set -ex && \
     fi && \
     # Remove 'v' prefix if present for the filename
     VERSION_NUM=$(echo "$VERSION" | sed 's/^v//') && \
+    # Detect architecture (x86_64 or arm64)
+    ARCH=$(uname -m) && \
+    case "$ARCH" in \
+      x86_64) ARCH_NAME="x86_64" ;; \
+      aarch64|arm64) ARCH_NAME="arm64" ;; \
+      *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+    esac && \
     # Construct download URL (archives are named like tusk-drift-cli_0.1.35_Linux_x86_64.tar.gz)
-    DOWNLOAD_URL="https://github.com/Use-Tusk/tusk-drift-cli/releases/download/${VERSION}/tusk-drift-cli_${VERSION_NUM}_Linux_x86_64.tar.gz" && \
+    DOWNLOAD_URL="https://github.com/Use-Tusk/tusk-drift-cli/releases/download/${VERSION}/tusk-drift-cli_${VERSION_NUM}_Linux_${ARCH_NAME}.tar.gz" && \
     echo "Downloading Tusk CLI from: $DOWNLOAD_URL" && \
     curl -fsSL "$DOWNLOAD_URL" -o /tmp/tusk.tar.gz && \
     tar -xzf /tmp/tusk.tar.gz -C /tmp && \
