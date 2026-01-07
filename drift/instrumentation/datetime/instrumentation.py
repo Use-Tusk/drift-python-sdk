@@ -17,6 +17,7 @@ _current_trace_id: str | None = None
 
 try:
     import time_machine
+
     HAS_TIME_MACHINE = True
 except ImportError:
     HAS_TIME_MACHINE = False

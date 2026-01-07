@@ -208,6 +208,7 @@ class GetMockResponse:
             error=proto.error or None,
         )
 
+
 @dataclass
 class MockRequestInput:
     """Input for mock request (matches Node.js interface)."""

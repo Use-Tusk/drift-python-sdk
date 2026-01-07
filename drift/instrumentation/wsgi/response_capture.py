@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from _typeshed.wsgi import WSGIEnvironment
 
+
 class ResponseBodyCapture(Iterable[bytes]):
     """
     Wrapper for WSGI response iterable that captures the response body.

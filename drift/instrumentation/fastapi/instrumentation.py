@@ -37,6 +37,7 @@ HEADER_SCHEMA_MERGES = {
     "headers": SchemaMerge(match_importance=0.0),
 }
 
+
 class FastAPIInstrumentation(InstrumentationBase):
     def __init__(self, enabled: bool = True, transforms: dict[str, Any] | None = None):
         self._transform_engine = HttpTransformEngine(self._resolve_http_transforms(transforms))

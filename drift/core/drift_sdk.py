@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
 class TuskDrift:
     """Main SDK singleton managing the Drift SDK lifecycle."""
 

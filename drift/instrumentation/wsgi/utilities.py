@@ -14,6 +14,7 @@ HEADER_SCHEMA_MERGES = {
     "headers": SchemaMerge(match_importance=0.0),
 }
 
+
 def build_url(environ: WSGIEnvironment) -> str:
     """Build full URL from WSGI environ.
 
