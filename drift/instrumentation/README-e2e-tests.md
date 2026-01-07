@@ -199,7 +199,11 @@ The e2e tests follow a **Docker entrypoint-driven architecture** where the Pytho
 │   - Execute `tusk run` CLI              │
 │   - Parse JSON test results             │
 │                                         │
-│  Phase 4: Cleanup                       │
+│  Phase 4: Check Instrumentation Warnings│
+│   - Check logs for unpatched deps       │
+│   - Verify trace files exist            │
+│                                         │
+│  Phase 5: Cleanup                       │
 │   - Stop processes                      │
 │   - Return exit code                    │
 └─────────────────────────────────────────┘
@@ -533,6 +537,34 @@ The psycopg and psycopg2 e2e tests have partial pass rates due to the complexity
 - psycopg: ⚠️ ~50% pass rate (execute works, executemany partial)
 - psycopg2: ⚠️ Similar to psycopg
 
+### Unpatched Dependency Detection
+
+The e2e tests automatically check for **unpatched dependencies** - libraries that make network calls without proper instrumentation. This helps catch cases where:
+
+1. A new dependency is added that makes HTTP/database calls but isn't instrumented
+2. An instrumented library bypasses the patched code path
+3. TCP connections are made from within a server span without going through instrumented code
+
+**How it works:**
+
+The Python SDK's socket instrumentation (`drift/instrumentation/socket/`) monitors low-level TCP operations during REPLAY mode. When a TCP call is made from within a SERVER span context (i.e., while handling an incoming request) without going through instrumented code, it logs a warning:
+
+```
+[SocketInstrumentation] TCP connect() called from inbound request context, likely unpatched dependency
+```
+
+The e2e test runner checks for these warnings after running tests. If found, the test fails with an error indicating which unpatched dependency was detected.
+
+**If you see this error:**
+
+1. Check the log output for the full warning message and stack trace
+2. Identify which library is making the unpatched TCP call
+3. Either:
+   - Add instrumentation for that library
+   - Exclude it from monitoring if it's expected behavior (e.g., health checks)
+
+This is equivalent to the Node.js SDK's `check_tcp_instrumentation_warning` check.
+
 ---
 
 ## Comparison with Node.js E2E Tests
@@ -544,7 +576,8 @@ The psycopg and psycopg2 e2e tests have partial pass rates due to the complexity
 | **External script** | Complex (9-step pipeline) | Simple (just starts containers) |
 | **Exit codes** | Complex pipe handling | Native Docker propagation |
 | **Setup location** | External script | Inside container (entrypoint) |
-| **Shared utilities** | e2e-helpers.sh | Reusable entrypoint.py |
+| **Shared utilities** | e2e-helpers.sh | base_runner.py |
+| **Unpatched dep check** | `check_tcp_instrumentation_warning()` | `check_socket_instrumentation_warnings()` |
 
 Both approaches achieve the same goal, but Python's entrypoint-driven design is simpler and more maintainable.
 
@@ -599,6 +632,7 @@ All tests should:
 - ✅ Exit with code 0 on success
 - ✅ Record traces to `.tusk/traces/*.jsonl`
 - ✅ Pass all Tusk CLI tests
+- ✅ No unpatched dependency warnings in logs
 - ✅ Complete in < 2 minutes
 - ✅ Clean up containers on exit
 - ✅ Work in both local and CI environments

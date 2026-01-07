@@ -281,10 +281,64 @@ class E2ETestRunnerBase:
             self.log(f"Raw output:\n{output}", Colors.YELLOW)
             self.exit_code = 1
 
-    def cleanup(self):
-        """Phase 4: Cleanup resources."""
+    def check_socket_instrumentation_warnings(self):
+        """
+        Check for socket instrumentation warnings in logs.
+
+        This detects unpatched dependencies - libraries making TCP calls
+        from within a SERVER span context without proper instrumentation.
+        Similar to Node SDK's check_tcp_instrumentation_warning.
+        """
         self.log("=" * 50, Colors.BLUE)
-        self.log("Phase 4: Cleanup", Colors.BLUE)
+        self.log("Checking for Instrumentation Warnings", Colors.BLUE)
+        self.log("=" * 50, Colors.BLUE)
+
+        logs_dir = Path(".tusk/logs")
+        traces_dir = Path(".tusk/traces")
+
+        log_files = list(logs_dir.glob("*")) if logs_dir.exists() else []
+        if not log_files:
+            self.log("✗ ERROR: No log files found!", Colors.RED)
+            self.exit_code = 1
+            return
+
+        # Check for TCP instrumentation warning in logs
+        warning_pattern = "[SocketInstrumentation] TCP"
+        warning_suffix = "called from inbound request context, likely unpatched dependency"
+
+        found_warning = False
+        for log_file in log_files:
+            try:
+                content = log_file.read_text()
+                if warning_pattern in content and warning_suffix in content:
+                    found_warning = True
+                    self.log(f"✗ ERROR: Found socket instrumentation warning in {log_file.name}!", Colors.RED)
+                    self.log("  This indicates an unpatched dependency is making TCP calls.", Colors.RED)
+
+                    for line in content.split("\n"):
+                        if warning_pattern in line:
+                            self.log(f"  {line.strip()}", Colors.YELLOW)
+                    break
+            except Exception as e:
+                self.log(f"Warning: Could not read log file {log_file}: {e}", Colors.YELLOW)
+
+        if found_warning:
+            self.exit_code = 1
+        else:
+            self.log("✓ No socket instrumentation warnings found.", Colors.GREEN)
+
+        # Verify trace files exist (double-check after tusk run)
+        trace_files = list(traces_dir.glob("*.jsonl")) if traces_dir.exists() else []
+        if trace_files:
+            self.log(f"✓ Found {len(trace_files)} trace file(s).", Colors.GREEN)
+        else:
+            self.log("✗ ERROR: No trace files found!", Colors.RED)
+            self.exit_code = 1
+
+    def cleanup(self):
+        """Phase 5: Cleanup resources."""
+        self.log("=" * 50, Colors.BLUE)
+        self.log("Phase 5: Cleanup", Colors.BLUE)
         self.log("=" * 50, Colors.BLUE)
 
         # Stop app process if still running
@@ -297,7 +351,7 @@ class E2ETestRunnerBase:
                 self.app_process.kill()
                 self.app_process.wait()
 
-        # Traces are kept in volume for inspection
+        # Traces are kept in container for inspection
         self.log("Cleanup complete", Colors.GREEN)
 
     def run(self) -> int:
@@ -309,6 +363,8 @@ class E2ETestRunnerBase:
                 return 1
 
             self.run_tests()
+
+            self.check_socket_instrumentation_warnings()
 
             return self.exit_code
 
