@@ -549,7 +549,7 @@ The e2e tests automatically check for **unpatched dependencies** - libraries tha
 
 The Python SDK's socket instrumentation (`drift/instrumentation/socket/`) monitors low-level TCP operations during REPLAY mode. When a TCP call is made from within a SERVER span context (i.e., while handling an incoming request) without going through instrumented code, it logs a warning:
 
-```
+```text
 [SocketInstrumentation] TCP connect() called from inbound request context, likely unpatched dependency
 ```
 
