@@ -150,3 +150,10 @@ python src/test_requests.py
 ```
 
 For more details, see `drift/instrumentation/README-e2e-tests.md`.
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| `docs/context-propagation.md` | Context propagation behavior, edge cases, and patterns |
+| `drift/instrumentation/README-e2e-tests.md` | E2E test architecture and debugging |
