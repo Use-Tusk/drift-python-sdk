@@ -56,7 +56,7 @@ def verify_stack_traces():
                         if stack_trace:
                             spans_with_stack_traces += 1
                             print(f"\n  Span: {span.get('name', 'unknown')}")
-                            print(f"    Parent: {span.get('parentSpanId', 'none')[:8]}...")
+                            print(f"    Parent: {(span.get('parentSpanId') or 'none')[:8]}...")
                             print(f"    Stack trace lines: {len(stack_trace.split(chr(10)))}")
                             # Print first 3 lines of stack trace
                             lines = stack_trace.split("\n")[:3]
