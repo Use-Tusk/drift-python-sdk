@@ -1,0 +1,5 @@
+-e /sdk  # Mount point for drift SDK
+Django>=5.0
+requests>=2.32.5
+gunicorn>=22.0.0
+

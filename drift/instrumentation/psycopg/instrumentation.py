@@ -175,12 +175,16 @@ class MockCursor:
     def __init__(self, connection):
         self.connection = connection
         self.rowcount = -1
-        self.description = None
+        self._tusk_description = None  # Store mock description
         self.arraysize = 1
         self._mock_rows = []
         self._mock_index = 0
         self.adapters = MockAdapters()  # Django needs this
         logger.debug("[MOCK_CURSOR] Created fallback mock cursor (psycopg3)")
+
+    @property
+    def description(self):
+        return self._tusk_description
 
     def execute(self, query, params=None, **kwargs):
         """Will be replaced by instrumentation."""
@@ -293,6 +297,15 @@ class PsycopgInstrumentation(InstrumentationBase):
         base = base_factory or BaseCursor
 
         class InstrumentedCursor(base):  # type: ignore
+            _tusk_description = None  # Store mock description for replay mode
+
+            @property
+            def description(self):
+                # In replay mode, return mock description if set; otherwise use base
+                if self._tusk_description is not None:
+                    return self._tusk_description
+                return super().description
+
             def execute(self, query, params=None, **kwargs):
                 return instrumentation._traced_execute(self, super().execute, sdk, query, params, **kwargs)
 
@@ -586,20 +599,31 @@ class PsycopgInstrumentation(InstrumentationBase):
 
     def _mock_execute_with_data(self, cursor: Any, mock_data: dict[str, Any]) -> None:
         """Mock cursor execute by setting internal state."""
-        try:
-            cursor._rowcount = mock_data.get("rowcount", -1)
-        except AttributeError:
-            object.__setattr__(cursor, "rowcount", mock_data.get("rowcount", -1))
+        # The SDK communicator already extracts response.body from the CLI's MockInteraction structure
+        # So mock_data should already contain: {"rowcount": ..., "description": [...], "rows": [...]}
+        actual_data = mock_data
+        logger.debug(f"[MOCK_DATA] mock_data: {mock_data}")
 
-        description_data = mock_data.get("description")
+        try:
+            cursor._rowcount = actual_data.get("rowcount", -1)
+        except AttributeError:
+            object.__setattr__(cursor, "rowcount", actual_data.get("rowcount", -1))
+
+        description_data = actual_data.get("description")
         if description_data:
             desc = [(col["name"], col.get("type_code"), None, None, None, None, None) for col in description_data]
+            # Set mock description - InstrumentedCursor has _tusk_description property
+            # MockCursor uses regular description attribute
             try:
-                cursor._description = desc
+                cursor._tusk_description = desc
             except AttributeError:
-                object.__setattr__(cursor, "description", desc)
+                # For MockCursor, set description directly
+                try:
+                    cursor.description = desc
+                except AttributeError:
+                    pass
 
-        mock_rows = mock_data.get("rows", [])
+        mock_rows = actual_data.get("rows", [])
         cursor._mock_rows = mock_rows  # pyright: ignore[reportAttributeAccessIssue]
         cursor._mock_index = 0  # pyright: ignore[reportAttributeAccessIssue]
 

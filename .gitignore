@@ -215,7 +215,10 @@ __marimo__/
 .streamlit/secrets.toml
 
 .direnv
-.tusk/traces
+
+# Tusk traces and logs (but keep config.yaml)
+**/.tusk/traces/
+**/.tusk/logs/
 
 # macOS
 .DS_Store

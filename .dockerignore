@@ -1,0 +1,77 @@
+# Exclude files from Docker build context
+# Reduces image size and build time for e2e tests
+
+# Version control
+.git/
+.gitignore
+.github/
+
+# Documentation (not needed for runtime)
+*.md
+docs/
+LICENSE
+
+# Python bytecode and caches
+__pycache__/
+*.py[codz]
+*$py.class
+*.so
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+eggs/
+develop-eggs/
+wheels/
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.pixi/
+
+# Testing artifacts
+.tox/
+.nox/
+.pytest_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+nosetests.xml
+
+# Type checking and linting caches
+.mypy_cache/
+.dmypy.json
+.pytype/
+.pyre/
+.ruff_cache/
+
+# IDE and editor settings
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Tusk test artifacts (traces/logs from previous runs)
+**/.tusk/traces/
+**/.tusk/logs/
+
+# macOS
+.DS_Store
+
+# Misc
+*.log
+*.pid
+*.rdb
+*.aof
+.env
+.direnv

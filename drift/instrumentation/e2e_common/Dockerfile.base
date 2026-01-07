@@ -1,0 +1,59 @@
+# Python E2E Test Base Image
+# 
+# This base image contains:
+# - Python 3.12
+# - Tusk CLI (for running replay tests)
+# - System utilities (curl, postgresql-client)
+#
+# Build this image before running e2e tests:
+#   docker build -t python-e2e-base:latest -f drift/instrumentation/e2e-common/Dockerfile.base .
+
+FROM python:3.12-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Tusk CLI
+# The CLI is downloaded from GitHub releases (tar.gz archives)
+ARG TUSK_CLI_VERSION=latest
+RUN set -ex && \
+    if [ "$TUSK_CLI_VERSION" = "latest" ]; then \
+      # Get the latest version tag
+      VERSION=$(curl -s https://api.github.com/repos/Use-Tusk/tusk-drift-cli/releases/latest | grep '"tag_name"' | cut -d '"' -f 4); \
+    else \
+      VERSION="${TUSK_CLI_VERSION}"; \
+    fi && \
+    # Remove 'v' prefix if present for the filename
+    VERSION_NUM=$(echo "$VERSION" | sed 's/^v//') && \
+    # Detect architecture (x86_64 or arm64)
+    ARCH=$(uname -m) && \
+    case "$ARCH" in \
+      x86_64) ARCH_NAME="x86_64" ;; \
+      aarch64|arm64) ARCH_NAME="arm64" ;; \
+      *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+    esac && \
+    # Construct download URL (archives are named like tusk-drift-cli_0.1.35_Linux_x86_64.tar.gz)
+    DOWNLOAD_URL="https://github.com/Use-Tusk/tusk-drift-cli/releases/download/${VERSION}/tusk-drift-cli_${VERSION_NUM}_Linux_${ARCH_NAME}.tar.gz" && \
+    echo "Downloading Tusk CLI from: $DOWNLOAD_URL" && \
+    curl -fsSL "$DOWNLOAD_URL" -o /tmp/tusk.tar.gz && \
+    tar -xzf /tmp/tusk.tar.gz -C /tmp && \
+    mv /tmp/tusk /usr/local/bin/tusk && \
+    chmod +x /usr/local/bin/tusk && \
+    rm -rf /tmp/tusk.tar.gz /tmp/LICENSE /tmp/README.md && \
+    tusk --version
+
+# Upgrade pip
+RUN pip install --upgrade pip
+
+# Create working directory
+WORKDIR /app
+
+# Create .tusk directories for traces and logs
+RUN mkdir -p /app/.tusk/traces /app/.tusk/logs
+
+# Default command
+CMD ["python", "entrypoint.py"]
+

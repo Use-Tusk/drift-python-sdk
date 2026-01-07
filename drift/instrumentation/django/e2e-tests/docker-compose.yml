@@ -2,11 +2,13 @@ services:
   app:
     build:
       context: ../../../..
-      dockerfile: drift/instrumentation/flask/e2e-tests/Dockerfile
+      dockerfile: drift/instrumentation/django/e2e-tests/Dockerfile
       args:
         - TUSK_CLI_VERSION=${TUSK_CLI_VERSION:-latest}
     environment:
       - PORT=8000
       - TUSK_ANALYTICS_DISABLED=1
       - PYTHONUNBUFFERED=1
+      - DJANGO_SETTINGS_MODULE=settings
     working_dir: /app
+

@@ -2,7 +2,7 @@ services:
   app:
     build:
       context: ../../../..
-      dockerfile: drift/instrumentation/flask/e2e-tests/Dockerfile
+      dockerfile: drift/instrumentation/fastapi/e2e-tests/Dockerfile
       args:
         - TUSK_CLI_VERSION=${TUSK_CLI_VERSION:-latest}
     environment:
@@ -10,3 +10,4 @@ services:
       - TUSK_ANALYTICS_DISABLED=1
       - PYTHONUNBUFFERED=1
     working_dir: /app
+

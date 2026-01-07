@@ -1,13 +1,15 @@
-"""Execute test requests against the Flask app."""
+"""Execute test requests against the Django app."""
 
+import os
 import time
 
 import requests
 
-BASE_URL = "http://localhost:8000"
+PORT = os.getenv("PORT", "8000")
+BASE_URL = f"http://localhost:{PORT}"
 
 
-def make_request(method, endpoint, **kwargs):
+def make_request(method: str, endpoint: str, **kwargs):
     """Make HTTP request and log result."""
     url = f"{BASE_URL}{endpoint}"
     print(f"→ {method} {endpoint}")
@@ -21,15 +23,20 @@ def make_request(method, endpoint, **kwargs):
 
 
 if __name__ == "__main__":
-    print("Starting test request sequence...\n")
+    print("Starting Django test request sequence...\n")
 
     # Execute test sequence
     make_request("GET", "/health")
-    make_request("GET", "/api/weather-activity")
+    make_request("GET", "/api/weather")
     make_request("GET", "/api/user/test123")
-    make_request("POST", "/api/user")
+    make_request("GET", "/api/activity")
     make_request("GET", "/api/post/1")
-    make_request("POST", "/api/post", json={"title": "Test Post", "body": "This is a test post", "userId": 1})
-    make_request("DELETE", "/api/post/1")
+    make_request("POST", "/api/post", json={
+        "title": "Test Post",
+        "body": "This is a test post body",
+        "userId": 1,
+    })
+    make_request("DELETE", "/api/post/1/delete")
 
     print("\nAll requests completed successfully")
+
