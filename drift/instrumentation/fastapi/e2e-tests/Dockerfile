@@ -4,7 +4,7 @@ FROM python-e2e-base:latest
 COPY . /sdk
 
 # Copy test files
-COPY drift/instrumentation/redis/e2e-tests /app
+COPY drift/instrumentation/fastapi/e2e-tests /app
 
 WORKDIR /app
 
@@ -19,3 +19,4 @@ RUN mkdir -p /app/.tusk/traces /app/.tusk/logs
 
 # Run entrypoint
 ENTRYPOINT ["python", "entrypoint.py"]
+

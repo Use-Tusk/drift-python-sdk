@@ -1,22 +1,22 @@
 version: 1
 
 service:
-  id: "psycopg-e2e-test"
-  name: "psycopg-e2e"
+  id: "psycopg-e2e-test-id"
+  name: "psycopg-e2e-test"
   port: 8000
   start:
     command: "python src/app.py"
   readiness_check:
-    command: "curl -fsS http://localhost:8000/health"
-    timeout: 30s
-    interval: 2s
+    command: "curl http://localhost:8000/health"
+    timeout: 45s
+    interval: 5s
 
 tusk_api:
   url: "http://localhost:8000"
 
 test_execution:
-  concurrent_limit: 5
-  batch_size: 5
+  concurrent_limit: 10
+  batch_size: 10
   timeout: 30s
 
 recording:
@@ -25,3 +25,4 @@ recording:
 
 replay:
   enable_telemetry: false
+

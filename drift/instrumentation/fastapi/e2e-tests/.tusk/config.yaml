@@ -1,8 +1,8 @@
 version: 1
 
 service:
-  id: "flask-e2e-test-id"
-  name: "flask-e2e-test"
+  id: "fastapi-e2e-test-id"
+  name: "fastapi-e2e-test"
   port: 8000
   start:
     command: "python src/app.py"

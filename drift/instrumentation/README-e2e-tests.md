@@ -6,10 +6,15 @@ End-to-end tests for the Drift Python SDK instrumentations. Each instrumentation
 
 Following the Node.js SDK pattern, e2e tests are co-located with their instrumentations:
 
-```
-python/drift/instrumentation/
+```text
+drift/instrumentation/
+├── e2e_common/             # Shared base classes and Dockerfile
 ├── flask/
 │   └── e2e-tests/          # Flask HTTP instrumentation tests
+├── fastapi/
+│   └── e2e-tests/          # FastAPI ASGI instrumentation tests
+├── django/
+│   └── e2e-tests/          # Django middleware instrumentation tests
 ├── redis/
 │   └── e2e-tests/          # Redis instrumentation tests
 ├── psycopg/
@@ -20,7 +25,7 @@ python/drift/instrumentation/
 
 Each e2e-tests directory contains:
 
-```
+```text
 e2e-tests/
 ├── Dockerfile              # Builds on python-e2e-base
 ├── docker-compose.yml      # Service orchestration
@@ -35,10 +40,12 @@ e2e-tests/
 
 ## Available Tests
 
-### 1. flask-http
+### 1. flask
+
 **Purpose:** Test Flask HTTP instrumentation
 
 **Features:**
+
 - External API calls (weather, user data, posts)
 - Parallel request execution with OpenTelemetry context propagation
 - Multiple HTTP methods (GET, POST, DELETE)
@@ -46,17 +53,64 @@ e2e-tests/
 **Services:** None (external APIs only)
 
 **Run:**
+
 ```bash
-cd python/drift/instrumentation/flask/e2e-tests
+cd drift/instrumentation/flask/e2e-tests
 ./run.sh
 ```
 
 ---
 
-### 2. redis
+### 2. fastapi
+
+**Purpose:** Test FastAPI ASGI instrumentation
+
+**Features:**
+
+- External API calls using both `requests` and `httpx`
+- Async HTTP handling
+- Parallel request execution with context propagation
+- Multiple HTTP methods (GET, POST, DELETE)
+
+**Services:** None (external APIs only)
+
+**Run:**
+
+```bash
+cd drift/instrumentation/fastapi/e2e-tests
+./run.sh
+```
+
+---
+
+### 3. django
+
+**Purpose:** Test Django middleware instrumentation
+
+**Features:**
+
+- Django middleware HTTP capture
+- External API calls
+- Parallel request execution with context propagation
+- Multiple HTTP methods (GET, POST, DELETE)
+
+**Services:** None (external APIs only)
+
+**Run:**
+
+```bash
+cd drift/instrumentation/django/e2e-tests
+./run.sh
+```
+
+---
+
+### 4. redis
+
 **Purpose:** Test Redis instrumentation
 
 **Features:**
+
 - Redis operations (SET, GET, INCR, DELETE, KEYS)
 - Pattern matching
 - Expiration
@@ -64,17 +118,20 @@ cd python/drift/instrumentation/flask/e2e-tests
 **Services:** Redis 7
 
 **Run:**
+
 ```bash
-cd python/drift/instrumentation/redis/e2e-tests
+cd drift/instrumentation/redis/e2e-tests
 ./run.sh
 ```
 
 ---
 
-### 3. psycopg
+### 5. psycopg
+
 **Purpose:** Test Psycopg (v3) PostgreSQL instrumentation
 
 **Features:**
+
 - Basic CRUD operations (SELECT, INSERT, UPDATE, DELETE)
 - Batch operations (executemany)
 - Transactions and rollback
@@ -83,44 +140,29 @@ cd python/drift/instrumentation/redis/e2e-tests
 **Services:** PostgreSQL 13
 
 **Run:**
+
 ```bash
-cd python/drift/instrumentation/psycopg/e2e-tests
+cd drift/instrumentation/psycopg/e2e-tests
 ./run.sh
 ```
 
 ---
 
-### 4. psycopg2
+### 6. psycopg2
+
 **Purpose:** Test Psycopg2 (legacy) PostgreSQL instrumentation
 
 **Features:**
+
 - Same as psycopg but using psycopg2 driver
 - Tests backward compatibility
 
 **Services:** PostgreSQL 13
 
 **Run:**
+
 ```bash
-cd python/drift/instrumentation/psycopg2/e2e-tests
-./run.sh
-```
-
----
-
-### 5. django-http
-**Purpose:** Test Django HTTP instrumentation (no database)
-
-**Features:**
-- Django middleware instrumentation
-- HTTP request/response capture
-- External API calls
-- Route parameter handling
-
-**Services:** None
-
-**Run:**
-```bash
-cd python/drift/instrumentation/django/e2e-tests
+cd drift/instrumentation/psycopg2/e2e-tests
 ./run.sh
 ```
 
@@ -132,7 +174,7 @@ cd python/drift/instrumentation/django/e2e-tests
 
 The e2e tests follow a **Docker entrypoint-driven architecture** where the Python `entrypoint.py` script inside the container handles the full test lifecycle:
 
-```
+```text
 ┌─────────────────────────────────────────┐
 │ run.sh (external orchestrator)          │
 │  - Builds containers                    │
@@ -166,6 +208,7 @@ The e2e tests follow a **Docker entrypoint-driven architecture** where the Pytho
 ### Why This Architecture?
 
 **Benefits:**
+
 - ✅ **Better error handling**: Python > Bash for complex orchestration
 - ✅ **Proper exit codes**: Docker propagates exit codes from entrypoint
 - ✅ **Simpler external script**: `run.sh` just starts containers
@@ -173,6 +216,7 @@ The e2e tests follow a **Docker entrypoint-driven architecture** where the Pytho
 - ✅ **CI-friendly**: Exit codes enable CI pass/fail detection
 
 **vs Node.js E2E Approach:**
+
 - Node.js uses external bash scripts for orchestration
 - Python uses Docker entrypoint for orchestration
 - Both approaches work, but Python approach is more maintainable
@@ -186,10 +230,11 @@ The e2e tests follow a **Docker entrypoint-driven architecture** where the Pytho
 Before running any test, build the shared Python e2e base image:
 
 ```bash
-docker build -t python-e2e-base:latest -f src/e2e-common/python-base/Dockerfile .
+docker build -t python-e2e-base:latest -f drift/instrumentation/e2e_common/Dockerfile.base .
 ```
 
 This image contains:
+
 - Python 3.12
 - Tusk Drift CLI
 - System utilities (curl, postgresql-client)
@@ -205,34 +250,36 @@ All tests require Docker and Docker Compose.
 ### Single Test
 
 ```bash
-cd python/drift/instrumentation/<instrumentation-name>/e2e-tests
+cd drift/instrumentation/<instrumentation-name>/e2e-tests
 ./run.sh
 ```
 
 Example:
+
 ```bash
-cd python/drift/instrumentation/flask/e2e-tests
+cd drift/instrumentation/flask/e2e-tests
 ./run.sh
 ```
 
-### All Tests (Sequential)
+### All Tests (Using run-all script)
 
 ```bash
-for dir in python/drift/instrumentation/*/e2e-tests; do
-  if [ -f "$dir/run.sh" ]; then
-    cd "$dir"
-    ./run.sh
-    cd -
-  fi
-done
+# Sequential (default)
+./run-all-e2e-tests.sh
+
+# 2 tests in parallel
+./run-all-e2e-tests.sh 2
+
+# All tests in parallel (unlimited)
+./run-all-e2e-tests.sh 0
 ```
 
-### All Tests (Parallel)
+### All Tests (Manual Parallel)
 
 ```bash
-cd python/drift/instrumentation/flask/e2e-tests && ./run.sh 8000 &
-cd python/drift/instrumentation/redis/e2e-tests && ./run.sh 8001 &
-cd python/drift/instrumentation/psycopg/e2e-tests && ./run.sh 8002 &
+cd drift/instrumentation/flask/e2e-tests && ./run.sh 8000 &
+cd drift/instrumentation/fastapi/e2e-tests && ./run.sh 8001 &
+cd drift/instrumentation/django/e2e-tests && ./run.sh 8002 &
 wait
 ```
 
@@ -244,7 +291,7 @@ Each test uses a unique Docker Compose project name based on the port, so they d
 
 ### Successful Test
 
-```
+```text
 ========================================
 Phase 1: Setup
 ========================================
@@ -283,6 +330,7 @@ Cleanup complete
 ### Failed Test
 
 If the test fails, you'll see:
+
 - Red ✗ marks for failed tests
 - Error messages
 - Exit code 1
@@ -298,7 +346,7 @@ Traces are preserved in `.tusk/traces/` for inspection.
 Traces are saved to `.tusk/traces/*.jsonl` inside each test directory:
 
 ```bash
-cd python/drift/instrumentation/flask/e2e-tests
+cd drift/instrumentation/flask/e2e-tests
 cat .tusk/traces/*.jsonl | jq
 ```
 
@@ -307,7 +355,7 @@ cat .tusk/traces/*.jsonl | jq
 Logs are saved to `.tusk/logs/`:
 
 ```bash
-cd python/drift/instrumentation/flask/e2e-tests
+cd drift/instrumentation/flask/e2e-tests
 cat .tusk/logs/*
 ```
 
@@ -316,12 +364,13 @@ cat .tusk/logs/*
 You can run the test app outside Docker for debugging:
 
 ```bash
-cd python/drift/instrumentation/flask/e2e-tests
+cd drift/instrumentation/flask/e2e-tests
 pip install -r requirements.txt
 TUSK_DRIFT_MODE=RECORD python src/app.py
 ```
 
 Then in another terminal:
+
 ```bash
 python src/test_requests.py
 ```
@@ -331,7 +380,7 @@ python src/test_requests.py
 To debug inside the container:
 
 ```bash
-cd python/drift/instrumentation/flask/e2e-tests
+cd drift/instrumentation/flask/e2e-tests
 docker compose build
 docker compose run --rm app /bin/bash
 ```
@@ -353,33 +402,34 @@ jobs:
     strategy:
       matrix:
         test:
-          - flask-http
+          - flask
+          - fastapi
+          - django
           - redis
           - psycopg
           - psycopg2
-          - django-http
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Build base image
         run: |
           docker build \
             -t python-e2e-base:latest \
-            -f src/e2e-common/python-base/Dockerfile \
+            -f drift/instrumentation/e2e_common/Dockerfile.base \
             .
 
       - name: Run ${{ matrix.test }} test
         run: |
-          cd python/drift/instrumentation/${{ matrix.test }}/e2e-tests
+          cd drift/instrumentation/${{ matrix.test }}/e2e-tests
           ./run.sh
 
       - name: Upload traces on failure
         if: failure()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: traces-${{ matrix.test }}
-          path: python/drift/instrumentation/${{ matrix.test }}/e2e-tests/.tusk/traces/
+          path: drift/instrumentation/${{ matrix.test }}/e2e-tests/.tusk/traces/
 ```
 
 ---
@@ -388,7 +438,7 @@ jobs:
 
 To add a new e2e test:
 
-1. **Create directory**: `python/drift/instrumentation/<instrumentation-name>/e2e-tests/`
+1. **Create directory**: `drift/instrumentation/<instrumentation-name>/e2e-tests/`
 
 2. **Copy template from existing test**: Use `flask/e2e-tests` as a template
 
@@ -402,8 +452,9 @@ To add a new e2e test:
    - `.tusk/config.yaml` - Update service ID/name
 
 4. **Test locally**:
+
    ```bash
-   cd python/drift/instrumentation/<instrumentation-name>/e2e-tests
+   cd drift/instrumentation/<instrumentation-name>/e2e-tests
    ./run.sh
    ```
 
@@ -416,13 +467,15 @@ To add a new e2e test:
 ### "python-e2e-base:latest not found"
 
 Build the base image first:
+
 ```bash
-docker build -t python-e2e-base:latest -f src/e2e-common/python-base/Dockerfile .
+docker build -t python-e2e-base:latest -f drift/instrumentation/e2e_common/Dockerfile.base .
 ```
 
 ### "Port already in use"
 
 Each test uses port 8000 by default. Run tests on different ports:
+
 ```bash
 ./run.sh 8001
 ```
@@ -430,6 +483,7 @@ Each test uses port 8000 by default. Run tests on different ports:
 ### "Service not ready"
 
 Increase healthcheck timeout in `docker-compose.yml`:
+
 ```yaml
 healthcheck:
   timeout: 10s  # Increase from 5s
@@ -439,10 +493,45 @@ healthcheck:
 ### "No traces recorded"
 
 Check that:
+
 1. `TUSK_DRIFT_MODE=RECORD` is set
 2. SDK is initialized correctly in app
 3. Requests are actually hitting the app
 4. SDK has time to flush traces (3 second wait)
+
+### Database Tests (psycopg/psycopg2) - Known Issues
+
+The psycopg and psycopg2 e2e tests have partial pass rates due to the complexity of mocking database operations. Key findings:
+
+**What works:**
+
+- Basic `execute()` queries (SELECT, INSERT, UPDATE, DELETE)
+- Mock data extraction from CLI (rowcount, description, rows)
+- Health checks and simple endpoints
+
+**Known issues:**
+
+1. **`cursor.description` is read-only**: Psycopg3's cursor has `description` as a C-level read-only property. The SDK works around this by:
+   - Adding `_tusk_description` attribute to `InstrumentedCursor`
+   - Overriding the `description` property getter to return mock data when available
+
+2. **`executemany()` mock matching**: Batch operations may fail to find mocks during replay. This appears to be a schema/hash mismatch between record and replay phases. The queries are recorded correctly but the CLI's mock matcher may not find them due to:
+   - Parameter serialization differences
+   - Hash calculation differences for batch parameters
+
+3. **Trace blocking**: If a request returns HTTP 500 during recording, the entire trace is blocked and won't be available for replay. This can cause cascading failures if early requests fail due to database state issues.
+
+**Workarounds:**
+
+- Ensure clean database state before each test run (`docker compose down -v`)
+- For `executemany` tests, consider using multiple `execute()` calls instead
+- Check trace files to verify spans are being recorded: `cat .tusk/traces/*.jsonl | jq`
+
+**Current test status:**
+
+- Flask, FastAPI, Django, Redis: ✅ All tests pass
+- psycopg: ⚠️ ~50% pass rate (execute works, executemany partial)
+- psycopg2: ⚠️ Similar to psycopg
 
 ---
 
@@ -463,9 +552,10 @@ Both approaches achieve the same goal, but Python's entrypoint-driven design is 
 
 ## Related Documentation
 
-- [Base Image README](../../src/e2e-common/python-base/README.md) - Python e2e base Docker image
-- [Python SDK README](../README.md) - Main Python SDK documentation
-- [Node.js E2E Tests](../../src/instrumentation/libraries/postgres/e2e-tests/) - For comparison
+- [Base Dockerfile](./e2e_common/Dockerfile.base) - Python e2e base Docker image
+- [Base Runner](./e2e_common/base_runner.py) - Shared e2e test runner class
+- [Python SDK README](../../README.md) - Main Python SDK documentation
+- [CONTRIBUTING.md](../../CONTRIBUTING.md) - Contribution guidelines with e2e test instructions
 
 ---
 
@@ -474,26 +564,29 @@ Both approaches achieve the same goal, but Python's entrypoint-driven design is 
 ### Updating Tusk CLI Version
 
 Update in base image:
+
 ```dockerfile
-# src/e2e-common/python-base/Dockerfile
+# drift/instrumentation/e2e_common/Dockerfile.base
 ARG TUSK_CLI_VERSION=v2.0.0
 ```
 
-Then rebuild all tests (they'll use new base image).
+Then rebuild the base image and all tests will use the new CLI.
 
 ### Updating Python Version
 
 Update in base image:
+
 ```dockerfile
-# src/e2e-common/python-base/Dockerfile
+# drift/instrumentation/e2e_common/Dockerfile.base
 FROM python:3.13-slim  # Update from 3.12
 ```
 
 ### Adding Dependencies
 
 Update `requirements.txt` in specific test directory:
-```
-# python/e2e-tests/flask-http/requirements.txt
+
+```text
+# drift/instrumentation/flask/e2e-tests/requirements.txt
 Flask>=3.2.0  # Update version
 ```
 
@@ -502,6 +595,7 @@ Flask>=3.2.0  # Update version
 ## Success Criteria
 
 All tests should:
+
 - ✅ Exit with code 0 on success
 - ✅ Record traces to `.tusk/traces/*.jsonl`
 - ✅ Pass all Tusk CLI tests

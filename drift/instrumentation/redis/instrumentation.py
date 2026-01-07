@@ -628,29 +628,16 @@ class RedisInstrumentation(InstrumentationBase):
     def _deserialize_response(self, mock_data: dict[str, Any]) -> Any:
         """Deserialize mocked response data from CLI.
 
-        The CLI wraps the response in: {"response": {"Body": {...output_value...}}}
-        For Redis, output_value is: {"result": value} or {"results": [values]}
+        The SDK communicator already extracts response.body from the CLI's MockInteraction.
+        So mock_data should contain: {"result": value} or {"results": [values]}
         """
-        logger.debug(f"Deserializing mock_data keys: {list(mock_data.keys()) if mock_data else None}")
+        logger.debug(f"Deserializing mock_data: {mock_data}")
 
-        # Navigate through CLI response structure
-        if "response" in mock_data:
-            response = mock_data["response"]
-            if isinstance(response, dict) and "Body" in response:
-                body = response["Body"]
-                logger.debug(f"Found Body in response: {body}")
-                # Body contains the output_value: {"result": ...} or {"results": [...]}
-                if isinstance(body, dict):
-                    if "result" in body:
-                        return body["result"]
-                    elif "results" in body:
-                        return body["results"]
-
-        # Fallback: check top level (for backwards compatibility)
-        if "result" in mock_data:
-            return mock_data["result"]
-        elif "results" in mock_data:
-            return mock_data["results"]
+        if isinstance(mock_data, dict):
+            if "result" in mock_data:
+                return mock_data["result"]
+            elif "results" in mock_data:
+                return mock_data["results"]
 
         logger.warning(f"Could not deserialize mock_data structure: {mock_data}")
         return None

@@ -766,8 +766,11 @@ class Psycopg2Instrumentation(InstrumentationBase):
         In psycopg2, cursor.execute() sets internal C-level attributes that we can't modify.
         Instead, we directly set the private attributes that psycopg2 uses internally.
         """
+        # The SDK communicator already extracts response.body from the CLI's MockInteraction.
+        # So mock_data should contain: {"rowcount": ..., "description": [...], "rows": [...]}
+        actual_data = mock_data
         logger.debug(
-            f"Mocking execute with data. Mock data keys: {mock_data.keys() if isinstance(mock_data, dict) else 'not a dict'}"
+            f"Mocking execute with data. Actual data keys: {actual_data.keys() if isinstance(actual_data, dict) else 'not a dict'}"
         )
 
         # Set internal cursor state that gets populated during execute()
@@ -775,17 +778,17 @@ class Psycopg2Instrumentation(InstrumentationBase):
         try:
             # rowcount: psycopg2 stores this in cursor.rowcount (read-only property)
             # We need to set the internal C attribute directly using object.__setattr__
-            object.__setattr__(cursor, "rowcount", mock_data.get("rowcount", -1))
+            object.__setattr__(cursor, "rowcount", actual_data.get("rowcount", -1))
         except (AttributeError, TypeError) as e:
             logger.debug(f"Could not set rowcount via __setattr__: {e}")
             # Try setting the private attribute that backs rowcount
             try:
-                cursor._rowcount = mock_data.get("rowcount", -1)
+                cursor._rowcount = actual_data.get("rowcount", -1)
             except AttributeError:
                 logger.debug("Could not set _rowcount either")
 
         # description: psycopg2 description format
-        description_data = mock_data.get("description")
+        description_data = actual_data.get("description")
         if description_data:
             # Convert to psycopg2 Column format
             desc = [(col["name"], col.get("type_code"), None, None, None, None, None) for col in description_data]
@@ -798,7 +801,7 @@ class Psycopg2Instrumentation(InstrumentationBase):
                     logger.debug("Could not set description")
 
         # Store mock rows for fetching
-        mock_rows = mock_data.get("rows", [])
+        mock_rows = actual_data.get("rows", [])
         cursor._mock_rows = mock_rows  # pyright: ignore[reportAttributeAccessIssue]
         cursor._mock_index = 0  # pyright: ignore[reportAttributeAccessIssue]
 

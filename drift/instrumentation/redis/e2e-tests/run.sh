@@ -8,7 +8,8 @@ APP_PORT=${1:-8000}
 export APP_PORT
 
 # Generate unique docker compose project name
-TEST_NAME="$(basename "$(pwd)")"
+# Get the instrumentation name (parent directory of e2e-tests)
+TEST_NAME="$(basename "$(dirname "$(pwd)")")"
 PROJECT_NAME="python-${TEST_NAME}-${APP_PORT}"
 
 # Colors for output
@@ -42,7 +43,7 @@ docker compose -p "$PROJECT_NAME" build --no-cache
 echo -e "${BLUE}Starting test...${NC}"
 echo ""
 
-# Run container and capture exit code
+# Run container and capture exit code (always use port 8000 inside container)
 docker compose -p "$PROJECT_NAME" run --rm app
 
 # Capture exit code from docker compose
