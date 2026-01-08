@@ -392,6 +392,16 @@ class TuskDrift:
         except ImportError:
             pass
 
+        try:
+            import httpx
+
+            from ..instrumentation.httpx import HttpxInstrumentation
+
+            _ = HttpxInstrumentation()
+            logger.debug("httpx instrumentation initialized")
+        except ImportError:
+            pass
+
         # Initialize PostgreSQL instrumentation before Django
         # Instrument BOTH psycopg2 and psycopg if available
         # This allows apps to use either or both
