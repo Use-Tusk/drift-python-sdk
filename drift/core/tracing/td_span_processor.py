@@ -177,7 +177,7 @@ class TdSpanProcessor(SpanProcessor):
                 if loop is not None:
                     loop.create_task(sdk.send_inbound_span_for_replay(clean_span))
                 else:
-                     # No running loop - run synchronously
+                    # No running loop - run synchronously
                     try:
                         asyncio.run(sdk.send_inbound_span_for_replay(clean_span))
                     except RuntimeError:
