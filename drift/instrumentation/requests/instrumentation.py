@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import time
 from typing import Any
 from urllib.parse import urlparse
 
@@ -38,7 +37,7 @@ from ...core.drift_sdk import TuskDrift
 from ...core.json_schema_helper import DecodedType, EncodingType, SchemaMerge
 from ...core.mode_utils import handle_record_mode, handle_replay_mode
 from ...core.tracing import TdSpanAttributes
-from ...core.tracing.span_utils import CreateSpanOptions, SpanInfo, SpanUtils
+from ...core.tracing.span_utils import CreateSpanOptions, SpanUtils
 from ...core.types import (
     PackageType,
     SpanKind,
@@ -192,7 +191,9 @@ class RequestsInstrumentation(InstrumentationBase):
             with SpanUtils.with_span(span_info):
                 # Use IDs from SpanInfo (already formatted)
                 mock_response = self._try_get_mock(
-                    sdk, method, url,
+                    sdk,
+                    method,
+                    url,
                     span_info.trace_id,
                     span_info.span_id,
                     **kwargs,

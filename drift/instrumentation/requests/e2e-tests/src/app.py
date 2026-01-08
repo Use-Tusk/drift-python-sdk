@@ -174,18 +174,18 @@ def chain_requests():
 
         # Third request: get comments on the first post
         if posts:
-            comments_response = requests.get(
-                f"https://jsonplaceholder.typicode.com/posts/{posts[0]['id']}/comments"
-            )
+            comments_response = requests.get(f"https://jsonplaceholder.typicode.com/posts/{posts[0]['id']}/comments")
             comments = comments_response.json()
         else:
             comments = []
 
-        return jsonify({
-            "user": user,
-            "post_count": len(posts),
-            "first_post_comments": len(comments),
-        })
+        return jsonify(
+            {
+                "user": user,
+                "post_count": len(posts),
+                "first_post_comments": len(comments),
+            }
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -221,11 +221,13 @@ def parallel_requests():
         users_response = users_future.result()
         comments_response = comments_future.result()
 
-    return jsonify({
-        "post": posts_response.json(),
-        "user": users_response.json(),
-        "comment": comments_response.json(),
-    })
+    return jsonify(
+        {
+            "post": posts_response.json(),
+            "user": users_response.json(),
+            "comment": comments_response.json(),
+        }
+    )
 
 
 # Request with timeout
@@ -250,10 +252,12 @@ def text_response():
     """Test request that returns text/plain."""
     try:
         response = requests.get("https://httpbin.org/robots.txt")
-        return jsonify({
-            "content": response.text,
-            "content_type": response.headers.get("Content-Type"),
-        })
+        return jsonify(
+            {
+                "content": response.text,
+                "content_type": response.headers.get("Content-Type"),
+            }
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

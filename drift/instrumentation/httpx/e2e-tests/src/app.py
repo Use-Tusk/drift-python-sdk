@@ -173,18 +173,18 @@ def sync_chain():
 
             # Third request: get comments on the first post
             if posts:
-                comments_response = client.get(
-                    f"https://jsonplaceholder.typicode.com/posts/{posts[0]['id']}/comments"
-                )
+                comments_response = client.get(f"https://jsonplaceholder.typicode.com/posts/{posts[0]['id']}/comments")
                 comments = comments_response.json()
             else:
                 comments = []
 
-            return jsonify({
-                "user": user,
-                "post_count": len(posts),
-                "first_post_comments": len(comments),
-            })
+            return jsonify(
+                {
+                    "user": user,
+                    "post_count": len(posts),
+                    "first_post_comments": len(comments),
+                }
+            )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -197,6 +197,7 @@ def sync_chain():
 @app.route("/api/async/get-json", methods=["GET"])
 def async_get_json():
     """Test async GET request returning JSON."""
+
     async def fetch():
         async with httpx.AsyncClient() as client:
             response = await client.get("https://jsonplaceholder.typicode.com/posts/2")
@@ -212,6 +213,7 @@ def async_get_json():
 @app.route("/api/async/get-with-params", methods=["GET"])
 def async_get_with_params():
     """Test async GET request with query parameters."""
+
     async def fetch():
         async with httpx.AsyncClient() as client:
             response = await client.get(
@@ -230,6 +232,7 @@ def async_get_with_params():
 @app.route("/api/async/post-json", methods=["POST"])
 def async_post_json():
     """Test async POST request with JSON body."""
+
     async def fetch():
         data = request.get_json() or {}
         async with httpx.AsyncClient() as client:
@@ -253,6 +256,7 @@ def async_post_json():
 @app.route("/api/async/put-json", methods=["PUT"])
 def async_put_json():
     """Test async PUT request with JSON body."""
+
     async def fetch():
         data = request.get_json() or {}
         async with httpx.AsyncClient() as client:
@@ -277,6 +281,7 @@ def async_put_json():
 @app.route("/api/async/delete", methods=["DELETE"])
 def async_delete():
     """Test async DELETE request."""
+
     async def fetch():
         async with httpx.AsyncClient() as client:
             response = await client.delete("https://jsonplaceholder.typicode.com/posts/2")
@@ -292,6 +297,7 @@ def async_delete():
 @app.route("/api/async/parallel", methods=["GET"])
 def async_parallel():
     """Test parallel async requests using asyncio.gather."""
+
     async def fetch():
         async with httpx.AsyncClient() as client:
             # Run three requests in parallel
@@ -319,6 +325,7 @@ def async_parallel():
 @app.route("/api/async/chain", methods=["GET"])
 def async_chain():
     """Test async sequential chained requests."""
+
     async def fetch():
         async with httpx.AsyncClient() as client:
             # First request: get a user
