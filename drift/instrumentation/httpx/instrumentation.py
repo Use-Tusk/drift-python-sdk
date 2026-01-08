@@ -445,9 +445,7 @@ class HttpxInstrumentation(InstrumentationBase):
             input_value = create_mock_input_value(raw_input_value)
 
             # Create schema merge hints for input
-            input_schema_merges = {
-                "headers": SchemaMerge(match_importance=0.0),
-            }
+            input_schema_merges = dict(HEADER_SCHEMA_MERGES)
             if body_base64 is not None:
                 request_content_type = self._get_content_type_header(headers)
                 input_schema_merges["body"] = SchemaMerge(
@@ -542,9 +540,7 @@ class HttpxInstrumentation(InstrumentationBase):
             input_value = create_mock_input_value(raw_input_value)
 
             # Create schema merge hints for input
-            input_schema_merges = {
-                "headers": SchemaMerge(match_importance=0.0),
-            }
+            input_schema_merges = dict(HEADER_SCHEMA_MERGES)
             if body_base64 is not None:
                 request_content_type = self._get_content_type_header(headers)
                 input_schema_merges["body"] = SchemaMerge(
@@ -769,18 +765,14 @@ class HttpxInstrumentation(InstrumentationBase):
             if response and hasattr(response, "headers"):
                 response_content_type = self._get_content_type_header(dict(response.headers))
 
-            input_schema_merges = {
-                "headers": SchemaMerge(match_importance=0.0),
-            }
+            input_schema_merges = dict(HEADER_SCHEMA_MERGES)
             if body_base64 is not None:
                 input_schema_merges["body"] = SchemaMerge(
                     encoding=EncodingType.BASE64,
                     decoded_type=self._get_decoded_type_from_content_type(request_content_type),
                 )
 
-            output_schema_merges = {
-                "headers": SchemaMerge(match_importance=0.0),
-            }
+            output_schema_merges = dict(HEADER_SCHEMA_MERGES)
             if response_body_base64 is not None:
                 output_schema_merges["body"] = SchemaMerge(
                     encoding=EncodingType.BASE64,
@@ -945,18 +937,14 @@ class HttpxInstrumentation(InstrumentationBase):
             if response and hasattr(response, "headers"):
                 response_content_type = self._get_content_type_header(dict(response.headers))
 
-            input_schema_merges = {
-                "headers": SchemaMerge(match_importance=0.0),
-            }
+            input_schema_merges = dict(HEADER_SCHEMA_MERGES)
             if body_base64 is not None:
                 input_schema_merges["body"] = SchemaMerge(
                     encoding=EncodingType.BASE64,
                     decoded_type=self._get_decoded_type_from_content_type(request_content_type),
                 )
 
-            output_schema_merges = {
-                "headers": SchemaMerge(match_importance=0.0),
-            }
+            output_schema_merges = dict(HEADER_SCHEMA_MERGES)
             if response_body_base64 is not None:
                 output_schema_merges["body"] = SchemaMerge(
                     encoding=EncodingType.BASE64,

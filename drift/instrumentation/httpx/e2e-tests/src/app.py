@@ -1,0 +1,359 @@
+"""Flask test app for e2e tests - HTTPX instrumentation testing (sync and async)."""
+
+import asyncio
+
+import httpx
+from flask import Flask, jsonify, request
+
+from drift import TuskDrift
+
+# Initialize SDK
+sdk = TuskDrift.initialize(
+    api_key="tusk-test-key",
+    log_level="debug",
+)
+
+app = Flask(__name__)
+
+
+# =============================================================================
+# Health Check
+# =============================================================================
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "healthy"})
+
+
+# =============================================================================
+# Sync Client Tests (httpx.Client)
+# =============================================================================
+
+
+@app.route("/api/sync/get-json", methods=["GET"])
+def sync_get_json():
+    """Test sync GET request returning JSON."""
+    try:
+        with httpx.Client() as client:
+            response = client.get("https://jsonplaceholder.typicode.com/posts/1")
+            return jsonify(response.json())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sync/get-with-params", methods=["GET"])
+def sync_get_with_params():
+    """Test sync GET request with query parameters."""
+    try:
+        with httpx.Client() as client:
+            response = client.get(
+                "https://jsonplaceholder.typicode.com/comments",
+                params={"postId": 1},
+            )
+            return jsonify(response.json())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sync/get-with-headers", methods=["GET"])
+def sync_get_with_headers():
+    """Test sync GET request with custom headers."""
+    try:
+        with httpx.Client() as client:
+            response = client.get(
+                "https://jsonplaceholder.typicode.com/posts/1",
+                headers={
+                    "X-Custom-Header": "test-value",
+                    "Accept": "application/json",
+                },
+            )
+            return jsonify(response.json())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sync/post-json", methods=["POST"])
+def sync_post_json():
+    """Test sync POST request with JSON body."""
+    try:
+        data = request.get_json() or {}
+        with httpx.Client() as client:
+            response = client.post(
+                "https://jsonplaceholder.typicode.com/posts",
+                json={
+                    "title": data.get("title", "Test Title"),
+                    "body": data.get("body", "Test Body"),
+                    "userId": data.get("userId", 1),
+                },
+            )
+            return jsonify(response.json()), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sync/post-form", methods=["POST"])
+def sync_post_form():
+    """Test sync POST request with form-encoded data (using content parameter)."""
+    try:
+        with httpx.Client() as client:
+            # Use jsonplaceholder which returns deterministic responses
+            # Send form data as content with explicit content-type
+            response = client.post(
+                "https://jsonplaceholder.typicode.com/posts",
+                content="title=Form+Title&body=Form+Body&userId=1",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            return jsonify(response.json())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sync/put-json", methods=["PUT"])
+def sync_put_json():
+    """Test sync PUT request with JSON body."""
+    try:
+        data = request.get_json() or {}
+        with httpx.Client() as client:
+            response = client.put(
+                "https://jsonplaceholder.typicode.com/posts/1",
+                json={
+                    "id": 1,
+                    "title": data.get("title", "Updated Title"),
+                    "body": data.get("body", "Updated Body"),
+                    "userId": data.get("userId", 1),
+                },
+            )
+            return jsonify(response.json())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sync/patch-json", methods=["PATCH"])
+def sync_patch_json():
+    """Test sync PATCH request with partial JSON body."""
+    try:
+        data = request.get_json() or {}
+        with httpx.Client() as client:
+            response = client.patch(
+                "https://jsonplaceholder.typicode.com/posts/1",
+                json={"title": data.get("title", "Patched Title")},
+            )
+            return jsonify(response.json())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sync/delete", methods=["DELETE"])
+def sync_delete():
+    """Test sync DELETE request."""
+    try:
+        with httpx.Client() as client:
+            response = client.delete("https://jsonplaceholder.typicode.com/posts/1")
+            return jsonify({"status": "deleted", "status_code": response.status_code})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sync/chain", methods=["GET"])
+def sync_chain():
+    """Test sync sequential chained requests."""
+    try:
+        with httpx.Client() as client:
+            # First request: get a user
+            user_response = client.get("https://jsonplaceholder.typicode.com/users/1")
+            user = user_response.json()
+
+            # Second request: get posts by that user
+            posts_response = client.get(
+                "https://jsonplaceholder.typicode.com/posts",
+                params={"userId": user["id"]},
+            )
+            posts = posts_response.json()
+
+            # Third request: get comments on the first post
+            if posts:
+                comments_response = client.get(
+                    f"https://jsonplaceholder.typicode.com/posts/{posts[0]['id']}/comments"
+                )
+                comments = comments_response.json()
+            else:
+                comments = []
+
+            return jsonify({
+                "user": user,
+                "post_count": len(posts),
+                "first_post_comments": len(comments),
+            })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# =============================================================================
+# Async Client Tests (httpx.AsyncClient)
+# =============================================================================
+
+
+@app.route("/api/async/get-json", methods=["GET"])
+def async_get_json():
+    """Test async GET request returning JSON."""
+    async def fetch():
+        async with httpx.AsyncClient() as client:
+            response = await client.get("https://jsonplaceholder.typicode.com/posts/2")
+            return response.json()
+
+    try:
+        result = asyncio.run(fetch())
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/async/get-with-params", methods=["GET"])
+def async_get_with_params():
+    """Test async GET request with query parameters."""
+    async def fetch():
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                "https://jsonplaceholder.typicode.com/comments",
+                params={"postId": 2},
+            )
+            return response.json()
+
+    try:
+        result = asyncio.run(fetch())
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/async/post-json", methods=["POST"])
+def async_post_json():
+    """Test async POST request with JSON body."""
+    async def fetch():
+        data = request.get_json() or {}
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://jsonplaceholder.typicode.com/posts",
+                json={
+                    "title": data.get("title", "Async Test Title"),
+                    "body": data.get("body", "Async Test Body"),
+                    "userId": data.get("userId", 2),
+                },
+            )
+            return response.json()
+
+    try:
+        result = asyncio.run(fetch())
+        return jsonify(result), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/async/put-json", methods=["PUT"])
+def async_put_json():
+    """Test async PUT request with JSON body."""
+    async def fetch():
+        data = request.get_json() or {}
+        async with httpx.AsyncClient() as client:
+            response = await client.put(
+                "https://jsonplaceholder.typicode.com/posts/2",
+                json={
+                    "id": 2,
+                    "title": data.get("title", "Async Updated Title"),
+                    "body": data.get("body", "Async Updated Body"),
+                    "userId": data.get("userId", 2),
+                },
+            )
+            return response.json()
+
+    try:
+        result = asyncio.run(fetch())
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/async/delete", methods=["DELETE"])
+def async_delete():
+    """Test async DELETE request."""
+    async def fetch():
+        async with httpx.AsyncClient() as client:
+            response = await client.delete("https://jsonplaceholder.typicode.com/posts/2")
+            return {"status": "deleted", "status_code": response.status_code}
+
+    try:
+        result = asyncio.run(fetch())
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/async/parallel", methods=["GET"])
+def async_parallel():
+    """Test parallel async requests using asyncio.gather."""
+    async def fetch():
+        async with httpx.AsyncClient() as client:
+            # Run three requests in parallel
+            posts_task = client.get("https://jsonplaceholder.typicode.com/posts/1")
+            users_task = client.get("https://jsonplaceholder.typicode.com/users/1")
+            comments_task = client.get("https://jsonplaceholder.typicode.com/comments/1")
+
+            posts_response, users_response, comments_response = await asyncio.gather(
+                posts_task, users_task, comments_task
+            )
+
+            return {
+                "post": posts_response.json(),
+                "user": users_response.json(),
+                "comment": comments_response.json(),
+            }
+
+    try:
+        result = asyncio.run(fetch())
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/async/chain", methods=["GET"])
+def async_chain():
+    """Test async sequential chained requests."""
+    async def fetch():
+        async with httpx.AsyncClient() as client:
+            # First request: get a user
+            user_response = await client.get("https://jsonplaceholder.typicode.com/users/2")
+            user = user_response.json()
+
+            # Second request: get posts by that user
+            posts_response = await client.get(
+                "https://jsonplaceholder.typicode.com/posts",
+                params={"userId": user["id"]},
+            )
+            posts = posts_response.json()
+
+            # Third request: get comments on the first post
+            if posts:
+                comments_response = await client.get(
+                    f"https://jsonplaceholder.typicode.com/posts/{posts[0]['id']}/comments"
+                )
+                comments = comments_response.json()
+            else:
+                comments = []
+
+            return {
+                "user": user,
+                "post_count": len(posts),
+                "first_post_comments": len(comments),
+            }
+
+    try:
+        result = asyncio.run(fetch())
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+if __name__ == "__main__":
+    sdk.mark_app_as_ready()
+    app.run(host="0.0.0.0", port=8000, debug=False)
