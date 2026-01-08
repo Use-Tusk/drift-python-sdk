@@ -5,12 +5,10 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import time
 from typing import Any
 from urllib.parse import urlparse
 
-from opentelemetry import context as otel_context
-from opentelemetry.trace import Span, Status, set_span_in_context
+from opentelemetry.trace import Span, Status
 from opentelemetry.trace import SpanKind as OTelSpanKind
 from opentelemetry.trace import StatusCode as OTelStatusCode
 
@@ -37,7 +35,9 @@ class RequestDroppedByTransform(Exception):
 from ...core.data_normalization import create_mock_input_value, remove_none_values
 from ...core.drift_sdk import TuskDrift
 from ...core.json_schema_helper import DecodedType, EncodingType, SchemaMerge
+from ...core.mode_utils import handle_record_mode, handle_replay_mode
 from ...core.tracing import TdSpanAttributes
+from ...core.tracing.span_utils import CreateSpanOptions, SpanUtils
 from ...core.types import (
     PackageType,
     SpanKind,
@@ -93,6 +93,374 @@ class HttpxInstrumentation(InstrumentationBase):
             return transforms["http"]
         return None
 
+    def _get_default_response(self, httpx_module: Any, method: str, url: str) -> Any:
+        """Create a default 200 OK response for background REPLAY requests.
+
+        This is used when a request is made outside of a trace context in REPLAY mode
+        (e.g., background health checks, warmup requests).
+
+        Args:
+            httpx_module: The httpx module
+            method: HTTP method
+            url: Request URL
+
+        Returns:
+            A minimal httpx.Response with 200 status
+        """
+        request = httpx_module.Request(method.upper(), url)
+        response = httpx_module.Response(
+            status_code=200,
+            headers={},
+            content=b"",
+            request=request,
+        )
+        logger.debug(f"[HttpxInstrumentation] Returning default 200 OK for background REPLAY request: {method} {url}")
+        return response
+
+    def _handle_replay_sync(
+        self,
+        httpx_module: Any,
+        client_self: Any,
+        method: str,
+        url: str,
+        original_request: Any,
+        **kwargs,
+    ) -> Any:
+        """Handle REPLAY mode for sync requests using SpanUtils.
+
+        Creates a span, tries to get a mock, and returns the mock response.
+        If no mock is found, falls back to real request.
+
+        Args:
+            httpx_module: The httpx module
+            client_self: The httpx.Client instance
+            method: HTTP method
+            url: Request URL
+            original_request: Original request function
+            **kwargs: Request kwargs
+
+        Returns:
+            Mock response if found, real response otherwise
+        """
+        sdk = TuskDrift.get_instance()
+        parsed_url = urlparse(url)
+        span_name = f"{method.upper()} {parsed_url.path or '/'}"
+
+        # Create span using SpanUtils
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name=span_name,
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: span_name,
+                    TdSpanAttributes.PACKAGE_NAME: parsed_url.scheme,
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "HttpxInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: method.upper(),
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
+                    TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
+                },
+                is_pre_app_start=not sdk.app_ready,
+            )
+        )
+
+        if not span_info:
+            # Span creation failed, make real request
+            logger.warning("[HttpxInstrumentation] REPLAY span creation failed, making real request")
+            calling_lib_token = calling_library_context.set("HttpxInstrumentation")
+            try:
+                return original_request(client_self, method, url, **kwargs)
+            finally:
+                calling_library_context.reset(calling_lib_token)
+
+        # Use with_span context manager for proper context management
+        with SpanUtils.with_span(span_info):
+            try:
+                # Try to get mock
+                mock_response = self._try_get_mock_sync(
+                    sdk, httpx_module, method, url, span_info.trace_id, span_info.span_id, **kwargs
+                )
+                if mock_response is not None:
+                    return mock_response
+
+                # No mock found - make real request as fallback
+                logger.warning(f"[HttpxInstrumentation] No mock found for REPLAY request: {method} {url}")
+                calling_lib_token = calling_library_context.set("HttpxInstrumentation")
+                try:
+                    return original_request(client_self, method, url, **kwargs)
+                finally:
+                    calling_library_context.reset(calling_lib_token)
+            finally:
+                span_info.span.end()
+
+    async def _handle_replay_async(
+        self,
+        httpx_module: Any,
+        client_self: Any,
+        method: str,
+        url: str,
+        original_request: Any,
+        **kwargs,
+    ) -> Any:
+        """Handle REPLAY mode for async requests using SpanUtils.
+
+        Creates a span, tries to get a mock, and returns the mock response.
+        If no mock is found, falls back to real request.
+
+        Args:
+            httpx_module: The httpx module
+            client_self: The httpx.AsyncClient instance
+            method: HTTP method
+            url: Request URL
+            original_request: Original async request function
+            **kwargs: Request kwargs
+
+        Returns:
+            Mock response if found, real response otherwise
+        """
+        sdk = TuskDrift.get_instance()
+        parsed_url = urlparse(url)
+        span_name = f"{method.upper()} {parsed_url.path or '/'}"
+
+        # Create span using SpanUtils
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name=span_name,
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: span_name,
+                    TdSpanAttributes.PACKAGE_NAME: parsed_url.scheme,
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "HttpxInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: method.upper(),
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
+                    TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
+                },
+                is_pre_app_start=not sdk.app_ready,
+            )
+        )
+
+        if not span_info:
+            # Span creation failed, make real request
+            logger.warning("[HttpxInstrumentation] REPLAY async span creation failed, making real request")
+            calling_lib_token = calling_library_context.set("HttpxInstrumentation")
+            try:
+                return await original_request(client_self, method, url, **kwargs)
+            finally:
+                calling_library_context.reset(calling_lib_token)
+
+        # Use with_span context manager for proper context management
+        with SpanUtils.with_span(span_info):
+            try:
+                # Try to get mock
+                mock_response = await self._try_get_mock_async(
+                    sdk, httpx_module, method, url, span_info.trace_id, span_info.span_id, **kwargs
+                )
+                if mock_response is not None:
+                    return mock_response
+
+                # No mock found - make real request as fallback
+                logger.warning(f"[HttpxInstrumentation] No mock found for REPLAY async request: {method} {url}")
+                calling_lib_token = calling_library_context.set("HttpxInstrumentation")
+                try:
+                    return await original_request(client_self, method, url, **kwargs)
+                finally:
+                    calling_library_context.reset(calling_lib_token)
+            finally:
+                span_info.span.end()
+
+    def _handle_record_sync(
+        self,
+        httpx_module: Any,
+        client_self: Any,
+        method: str,
+        url: str,
+        original_request: Any,
+        is_pre_app_start: bool,
+        **kwargs,
+    ) -> Any:
+        """Handle RECORD mode for sync requests using SpanUtils.
+
+        Creates a span, makes the real request, and captures the response.
+
+        Args:
+            httpx_module: The httpx module
+            client_self: The httpx.Client instance
+            method: HTTP method
+            url: Request URL
+            original_request: Original request function
+            is_pre_app_start: Whether we're in pre-app-start phase
+            **kwargs: Request kwargs
+
+        Returns:
+            The actual HTTP response
+        """
+        parsed_url = urlparse(url)
+        span_name = f"{method.upper()} {parsed_url.path or '/'}"
+
+        # Create span using SpanUtils
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name=span_name,
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: span_name,
+                    TdSpanAttributes.PACKAGE_NAME: parsed_url.scheme,
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "HttpxInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: method.upper(),
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
+                    TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+                },
+                is_pre_app_start=is_pre_app_start,
+            )
+        )
+
+        if not span_info:
+            # Span creation failed (e.g., trace blocked), proceed without instrumentation
+            calling_lib_token = calling_library_context.set("HttpxInstrumentation")
+            try:
+                return original_request(client_self, method, url, **kwargs)
+            finally:
+                calling_library_context.reset(calling_lib_token)
+
+        # Check drop transforms before making request
+        if self._transform_engine and self._transform_engine.should_drop_outbound_request(
+            method.upper(), url, kwargs.get("headers", {})
+        ):
+            span_info.span.set_attribute(
+                TdSpanAttributes.OUTPUT_VALUE,
+                json.dumps({"bodyProcessingError": "dropped"}),
+            )
+            span_info.span.set_status(Status(OTelStatusCode.ERROR, "Dropped by transform"))
+            span_info.span.end()
+
+            raise RequestDroppedByTransform(
+                f"Outbound request to {url} was dropped by transform rule",
+                method.upper(),
+                url,
+            )
+
+        # Execute request with span context using context manager
+        with SpanUtils.with_span(span_info):
+            error = None
+            response = None
+
+            # Set calling_library_context to prevent socket instrumentation warnings
+            calling_lib_token = calling_library_context.set("HttpxInstrumentation")
+            try:
+                response = original_request(client_self, method, url, **kwargs)
+                return response
+            except Exception as e:
+                error = e
+                raise
+            finally:
+                calling_library_context.reset(calling_lib_token)
+                # Finalize span with request/response data
+                self._finalize_span(
+                    span_info.span,
+                    method,
+                    url,
+                    response,
+                    error,
+                    kwargs,
+                )
+                span_info.span.end()
+
+    async def _handle_record_async(
+        self,
+        httpx_module: Any,
+        client_self: Any,
+        method: str,
+        url: str,
+        original_request: Any,
+        is_pre_app_start: bool,
+        **kwargs,
+    ) -> Any:
+        """Handle RECORD mode for async requests using SpanUtils.
+
+        Creates a span, makes the real request, and captures the response.
+
+        Args:
+            httpx_module: The httpx module
+            client_self: The httpx.AsyncClient instance
+            method: HTTP method
+            url: Request URL
+            original_request: Original async request function
+            is_pre_app_start: Whether we're in pre-app-start phase
+            **kwargs: Request kwargs
+
+        Returns:
+            The actual HTTP response
+        """
+        parsed_url = urlparse(url)
+        span_name = f"{method.upper()} {parsed_url.path or '/'}"
+
+        # Create span using SpanUtils
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name=span_name,
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: span_name,
+                    TdSpanAttributes.PACKAGE_NAME: parsed_url.scheme,
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "HttpxInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: method.upper(),
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
+                    TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+                },
+                is_pre_app_start=is_pre_app_start,
+            )
+        )
+
+        if not span_info:
+            # Span creation failed (e.g., trace blocked), proceed without instrumentation
+            calling_lib_token = calling_library_context.set("HttpxInstrumentation")
+            try:
+                return await original_request(client_self, method, url, **kwargs)
+            finally:
+                calling_library_context.reset(calling_lib_token)
+
+        # Check drop transforms before making request
+        if self._transform_engine and self._transform_engine.should_drop_outbound_request(
+            method.upper(), url, kwargs.get("headers", {})
+        ):
+            span_info.span.set_attribute(
+                TdSpanAttributes.OUTPUT_VALUE,
+                json.dumps({"bodyProcessingError": "dropped"}),
+            )
+            span_info.span.set_status(Status(OTelStatusCode.ERROR, "Dropped by transform"))
+            span_info.span.end()
+
+            raise RequestDroppedByTransform(
+                f"Outbound request to {url} was dropped by transform rule",
+                method.upper(),
+                url,
+            )
+
+        # Execute request with span context using context manager
+        with SpanUtils.with_span(span_info):
+            error = None
+            response = None
+
+            # Set calling_library_context to prevent socket instrumentation warnings
+            calling_lib_token = calling_library_context.set("HttpxInstrumentation")
+            try:
+                response = await original_request(client_self, method, url, **kwargs)
+                return response
+            except Exception as e:
+                error = e
+                raise
+            finally:
+                calling_library_context.reset(calling_lib_token)
+                # Finalize span with request/response data (async version)
+                await self._finalize_span_async(
+                    span_info.span,
+                    method,
+                    url,
+                    response,
+                    error,
+                    kwargs,
+                )
+                span_info.span.end()
+
     def patch(self, module: Any) -> None:
         """Patch the httpx module."""
         # Patch sync client
@@ -110,7 +478,7 @@ class HttpxInstrumentation(InstrumentationBase):
     def _patch_sync_client(self, module: Any) -> None:
         """Patch httpx.Client.request for sync HTTP calls."""
         original_request = module.Client.request
-        instrumentation = self
+        instrumentation_self = self
 
         def patched_request(client_self, method: str, url: Any, **kwargs):
             """Patched Client.request method."""
@@ -123,94 +491,28 @@ class HttpxInstrumentation(InstrumentationBase):
             if sdk.mode == TuskDriftMode.DISABLED:
                 return original_request(client_self, method, url, **kwargs)
 
-            # Get tracer and parse URL for span name
-            tracer = sdk.get_tracer()
-            parsed_url = urlparse(url_str)
-            span_name = f"{method.upper()} {parsed_url.path or '/'}"
+            # Define original call for RECORD mode
+            def original_call():
+                return original_request(client_self, method, url, **kwargs)
 
-            # Start OpenTelemetry span (automatically inherits parent context)
-            logger.debug(f"[HttpxInstrumentation] Creating span for {method.upper()} {url_str}")
-            span = tracer.start_span(
-                name=span_name,
-                kind=OTelSpanKind.CLIENT,
-                attributes={
-                    TdSpanAttributes.NAME: span_name,
-                    TdSpanAttributes.PACKAGE_NAME: parsed_url.scheme,
-                    TdSpanAttributes.INSTRUMENTATION_NAME: "HttpxInstrumentation",
-                    TdSpanAttributes.SUBMODULE_NAME: method.upper(),
-                    TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
-                    TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
-                },
+            # REPLAY mode: use mode handler with background request support
+            if sdk.mode == TuskDriftMode.REPLAY:
+                return handle_replay_mode(
+                    replay_mode_handler=lambda: instrumentation_self._handle_replay_sync(
+                        module, client_self, method, url_str, original_request, **kwargs
+                    ),
+                    no_op_request_handler=lambda: instrumentation_self._get_default_response(module, method, url_str),
+                    is_server_request=False,
+                )
+
+            # RECORD mode: use mode handler with is_pre_app_start logic
+            return handle_record_mode(
+                original_function_call=original_call,
+                record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record_sync(
+                    module, client_self, method, url_str, original_request, is_pre_app_start, **kwargs
+                ),
+                span_kind=OTelSpanKind.CLIENT,
             )
-            logger.debug(f"[HttpxInstrumentation] Span created: {span}")
-
-            # Make span active
-            ctx = otel_context.get_current()
-            ctx_with_span = set_span_in_context(span, ctx)
-            token = otel_context.attach(ctx_with_span)
-
-            try:
-                # Get span IDs for mock requests
-                span_context = span.get_span_context()
-                trace_id = format(span_context.trace_id, "032x")
-                span_id = format(span_context.span_id, "016x")
-
-                # REPLAY mode: Try to get mock
-                if sdk.mode == TuskDriftMode.REPLAY:
-                    mock_response = instrumentation._try_get_mock_sync(
-                        sdk, module, method, url_str, trace_id, span_id, **kwargs
-                    )
-                    if mock_response is not None:
-                        return mock_response
-
-                # Check drop transforms before making request
-                if instrumentation._transform_engine and instrumentation._transform_engine.should_drop_outbound_request(
-                    method.upper(), url_str, kwargs.get("headers", {})
-                ):
-                    span.set_attribute(
-                        TdSpanAttributes.OUTPUT_VALUE,
-                        json.dumps({"bodyProcessingError": "dropped"}),
-                    )
-                    span.set_status(Status(OTelStatusCode.ERROR, "Dropped by transform"))
-                    span.end()
-
-                    raise RequestDroppedByTransform(
-                        f"Outbound request to {url_str} was dropped by transform rule",
-                        method.upper(),
-                        url_str,
-                    )
-
-                # RECORD mode or mock not found: Make real request
-                start_time_ns = time.time_ns()
-                error = None
-                response = None
-
-                # Set calling_library_context to prevent socket instrumentation warnings
-                calling_lib_token = calling_library_context.set("HttpxInstrumentation")
-                try:
-                    response = original_request(client_self, method, url, **kwargs)
-                    return response
-                except Exception as e:
-                    error = e
-                    raise
-                finally:
-                    calling_library_context.reset(calling_lib_token)
-                    # Finalize span with request/response data
-                    (time.time_ns() - start_time_ns) / 1_000_000
-                    instrumentation._finalize_span(
-                        span,
-                        method,
-                        url_str,
-                        response,
-                        error,
-                        kwargs,
-                    )
-            finally:
-                # Detach context and end span
-                otel_context.detach(token)
-                logger.debug(f"[HttpxInstrumentation] Ending span for {method.upper()} {url_str}")
-                span.end()
-                logger.debug("[HttpxInstrumentation] Span ended")
 
         # Apply patch
         module.Client.request = patched_request
@@ -219,7 +521,7 @@ class HttpxInstrumentation(InstrumentationBase):
     def _patch_async_client(self, module: Any) -> None:
         """Patch httpx.AsyncClient.request for async HTTP calls."""
         original_request = module.AsyncClient.request
-        instrumentation = self
+        instrumentation_self = self
 
         async def patched_request(client_self, method: str, url: Any, **kwargs):
             """Patched AsyncClient.request method."""
@@ -232,94 +534,30 @@ class HttpxInstrumentation(InstrumentationBase):
             if sdk.mode == TuskDriftMode.DISABLED:
                 return await original_request(client_self, method, url, **kwargs)
 
-            # Get tracer and parse URL for span name
-            tracer = sdk.get_tracer()
-            parsed_url = urlparse(url_str)
-            span_name = f"{method.upper()} {parsed_url.path or '/'}"
+            # Define original call for RECORD mode
+            async def original_call():
+                return await original_request(client_self, method, url, **kwargs)
 
-            # Start OpenTelemetry span (automatically inherits parent context)
-            logger.debug(f"[HttpxInstrumentation] Creating async span for {method.upper()} {url_str}")
-            span = tracer.start_span(
-                name=span_name,
-                kind=OTelSpanKind.CLIENT,
-                attributes={
-                    TdSpanAttributes.NAME: span_name,
-                    TdSpanAttributes.PACKAGE_NAME: parsed_url.scheme,
-                    TdSpanAttributes.INSTRUMENTATION_NAME: "HttpxInstrumentation",
-                    TdSpanAttributes.SUBMODULE_NAME: method.upper(),
-                    TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
-                    TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
-                },
+            # REPLAY mode: use mode handler with background request support
+            if sdk.mode == TuskDriftMode.REPLAY:
+                # handle_replay_mode returns coroutine which we await
+                return await handle_replay_mode(
+                    replay_mode_handler=lambda: instrumentation_self._handle_replay_async(
+                        module, client_self, method, url_str, original_request, **kwargs
+                    ),
+                    no_op_request_handler=lambda: instrumentation_self._get_default_response(module, method, url_str),
+                    is_server_request=False,
+                )
+
+            # RECORD mode: use mode handler with is_pre_app_start logic
+            # handle_record_mode returns coroutine which we await
+            return await handle_record_mode(
+                original_function_call=original_call,
+                record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record_async(
+                    module, client_self, method, url_str, original_request, is_pre_app_start, **kwargs
+                ),
+                span_kind=OTelSpanKind.CLIENT,
             )
-            logger.debug(f"[HttpxInstrumentation] Async span created: {span}")
-
-            # Make span active
-            ctx = otel_context.get_current()
-            ctx_with_span = set_span_in_context(span, ctx)
-            token = otel_context.attach(ctx_with_span)
-
-            try:
-                # Get span IDs for mock requests
-                span_context = span.get_span_context()
-                trace_id = format(span_context.trace_id, "032x")
-                span_id = format(span_context.span_id, "016x")
-
-                # REPLAY mode: Try to get mock
-                if sdk.mode == TuskDriftMode.REPLAY:
-                    mock_response = await instrumentation._try_get_mock_async(
-                        sdk, module, method, url_str, trace_id, span_id, **kwargs
-                    )
-                    if mock_response is not None:
-                        return mock_response
-
-                # Check drop transforms before making request
-                if instrumentation._transform_engine and instrumentation._transform_engine.should_drop_outbound_request(
-                    method.upper(), url_str, kwargs.get("headers", {})
-                ):
-                    span.set_attribute(
-                        TdSpanAttributes.OUTPUT_VALUE,
-                        json.dumps({"bodyProcessingError": "dropped"}),
-                    )
-                    span.set_status(Status(OTelStatusCode.ERROR, "Dropped by transform"))
-                    span.end()
-
-                    raise RequestDroppedByTransform(
-                        f"Outbound request to {url_str} was dropped by transform rule",
-                        method.upper(),
-                        url_str,
-                    )
-
-                # RECORD mode or mock not found: Make real request
-                start_time_ns = time.time_ns()
-                error = None
-                response = None
-
-                # Set calling_library_context to prevent socket instrumentation warnings
-                calling_lib_token = calling_library_context.set("HttpxInstrumentation")
-                try:
-                    response = await original_request(client_self, method, url, **kwargs)
-                    return response
-                except Exception as e:
-                    error = e
-                    raise
-                finally:
-                    calling_library_context.reset(calling_lib_token)
-                    # Finalize span with request/response data (async version)
-                    (time.time_ns() - start_time_ns) / 1_000_000
-                    await instrumentation._finalize_span_async(
-                        span,
-                        method,
-                        url_str,
-                        response,
-                        error,
-                        kwargs,
-                    )
-            finally:
-                # Detach context and end span
-                otel_context.detach(token)
-                logger.debug(f"[HttpxInstrumentation] Ending async span for {method.upper()} {url_str}")
-                span.end()
-                logger.debug("[HttpxInstrumentation] Async span ended")
 
         # Apply patch
         module.AsyncClient.request = patched_request
