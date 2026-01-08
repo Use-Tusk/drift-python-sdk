@@ -263,8 +263,6 @@ class PsycopgInstrumentation(InstrumentationBase):
                     kwargs["cursor_factory"] = cursor_factory
                     connection = original_connect(*args, **kwargs)
                     logger.info("[PATCHED_CONNECT] REPLAY mode: Successfully connected to database (psycopg3)")
-                    # psycopg3's cursor_factory is set at connect() time, not cursor() time
-                    # No need to wrap cursor() method
                     return connection
                 except Exception as e:
                     logger.info(
@@ -277,8 +275,6 @@ class PsycopgInstrumentation(InstrumentationBase):
             kwargs["cursor_factory"] = cursor_factory
             connection = original_connect(*args, **kwargs)
             logger.debug("[PATCHED_CONNECT] RECORD mode: Connected to database (psycopg3)")
-            # psycopg3's cursor_factory is set at connect() time, not cursor() time
-            # No need to wrap cursor() method
             return connection
 
         module.connect = patched_connect  # type: ignore[attr-defined]
