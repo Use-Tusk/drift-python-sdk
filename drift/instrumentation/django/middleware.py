@@ -7,15 +7,15 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from opentelemetry import context as otel_context
 from opentelemetry.trace import SpanKind as OTelSpanKind
-from opentelemetry.trace import set_span_in_context
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from django.http import HttpRequest, HttpResponse  # type: ignore[import-not-found]
+from ...core.mode_utils import handle_record_mode
 from ...core.tracing import TdSpanAttributes
+from ...core.tracing.span_utils import CreateSpanOptions, SpanInfo, SpanUtils
 from ...core.types import (
     CleanSpanData,
     Duration,
@@ -64,67 +64,154 @@ class DriftMiddleware:
 
         sdk = TuskDrift.get_instance()
 
-        # Check if we're in REPLAY mode and handle trace ID extraction
-        replay_trace_id = None
-        replay_token = None
+        # DISABLED mode - just pass through
+        if sdk.mode == TuskDriftMode.DISABLED:
+            return self.get_response(request)
+
+        # REPLAY mode - handle trace ID extraction and context setup
         if sdk.mode == TuskDriftMode.REPLAY:
-            # Extract trace ID from headers (case-insensitive lookup)
-            # Django stores headers in request.META
-            headers_lower = {k.lower(): v for k, v in request.META.items() if k.startswith("HTTP_")}
-            logger.info(f"[DJANGO_MIDDLEWARE] REPLAY mode, headers: {list(headers_lower.keys())}")
-            # Convert HTTP_X_TD_TRACE_ID -> x-td-trace-id
-            replay_trace_id = headers_lower.get("http_x_td_trace_id")
-            logger.info(f"[DJANGO_MIDDLEWARE] replay_trace_id from header: {replay_trace_id}")
+            return self._handle_replay_request(request, sdk)
 
-            if not replay_trace_id:
-                # No trace context in REPLAY mode; proceed without span
-                logger.warning("[DJANGO_MIDDLEWARE] No replay_trace_id found in headers, proceeding without span")
-                return self.get_response(request)
+        # RECORD mode - use handle_record_mode for consistent is_pre_app_start logic
+        return handle_record_mode(
+            original_function_call=lambda: self.get_response(request),
+            record_mode_handler=lambda is_pre_app_start: self._record_request(request, sdk, is_pre_app_start),
+            span_kind=OTelSpanKind.SERVER,
+        )
 
-            # Set replay trace context
-            replay_token = replay_trace_id_context.set(replay_trace_id)
+    def _handle_replay_request(self, request: HttpRequest, sdk) -> HttpResponse:
+        """Handle request in REPLAY mode.
 
-        start_time_ns = time.time_ns()
+        Extracts trace ID from headers and sets up context for child spans.
+        Does not record the root span in REPLAY mode.
 
-        # Create OpenTelemetry span
-        from ...core.drift_sdk import TuskDrift
+        Args:
+            request: Django HttpRequest object
+            sdk: TuskDrift SDK instance
 
-        sdk = TuskDrift.get_instance()
-        tracer = sdk.get_tracer()
+        Returns:
+            Django HttpResponse object
+        """
+        # Extract trace ID from headers (case-insensitive lookup)
+        # Django stores headers in request.META
+        headers_lower = {k.lower(): v for k, v in request.META.items() if k.startswith("HTTP_")}
+        logger.info(f"[DJANGO_MIDDLEWARE] REPLAY mode, headers: {list(headers_lower.keys())}")
+        # Convert HTTP_X_TD_TRACE_ID -> x-td-trace-id
+        replay_trace_id = headers_lower.get("http_x_td_trace_id")
+        logger.info(f"[DJANGO_MIDDLEWARE] replay_trace_id from header: {replay_trace_id}")
+
+        if not replay_trace_id:
+            # No trace context in REPLAY mode; proceed without span
+            logger.warning("[DJANGO_MIDDLEWARE] No replay_trace_id found in headers, proceeding without span")
+            return self.get_response(request)
+
+        # Set replay trace context
+        replay_token = replay_trace_id_context.set(replay_trace_id)
 
         method = request.method
         path = request.path
         span_name = f"{method} {path}"
 
-        span = tracer.start_span(
-            name=span_name,
-            kind=OTelSpanKind.SERVER,
-            attributes={
-                TdSpanAttributes.NAME: span_name,
-                TdSpanAttributes.PACKAGE_NAME: "django",
-                TdSpanAttributes.INSTRUMENTATION_NAME: "DjangoInstrumentation",
-                TdSpanAttributes.SUBMODULE_NAME: method,
-                TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
-                TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
-                TdSpanAttributes.IS_ROOT_SPAN: True,
-            },
+        # Create span using SpanUtils
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name=span_name,
+                kind=OTelSpanKind.SERVER,
+                attributes={
+                    TdSpanAttributes.NAME: span_name,
+                    TdSpanAttributes.PACKAGE_NAME: "django",
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "DjangoInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: method,
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
+                    TdSpanAttributes.IS_PRE_APP_START: False,
+                    TdSpanAttributes.IS_ROOT_SPAN: True,
+                },
+                is_pre_app_start=False,
+            )
         )
 
-        # Make span active
-        ctx = otel_context.get_current()
-        ctx_with_span = set_span_in_context(span, ctx)
-        token = otel_context.attach(ctx_with_span)
+        if not span_info:
+            # Failed to create span, just process the request
+            replay_trace_id_context.reset(replay_token)
+            return self.get_response(request)
 
-        # Set span_kind_context for child spans and socket instrumentation to detect SERVER context
+        # Set span_kind_context for child spans
+        span_kind_token = span_kind_context.set(SpanKind.SERVER)
+
+        # Store metadata on request for later use
+        request._drift_start_time_ns = time.time_ns()  # type: ignore
+        request._drift_span = span_info.span  # type: ignore
+        request._drift_route_template = None  # type: ignore
+
+        try:
+            with SpanUtils.with_span(span_info):
+                response = self.get_response(request)
+                # REPLAY mode: don't capture the span (it's already recorded)
+                return response
+        finally:
+            # Reset context
+            span_kind_context.reset(span_kind_token)
+            replay_trace_id_context.reset(replay_token)
+            span_info.span.end()
+
+    def _record_request(self, request: HttpRequest, sdk, is_pre_app_start: bool) -> HttpResponse:
+        """Handle request in RECORD mode.
+
+        Creates a span, processes the request, and captures the span.
+
+        Args:
+            request: Django HttpRequest object
+            sdk: TuskDrift SDK instance
+            is_pre_app_start: Whether this request occurred before app was marked ready
+
+        Returns:
+            Django HttpResponse object
+        """
+        # Inbound request sampling (only when app is ready)
+        # Always sample during startup to capture initialization behavior
+        if not is_pre_app_start:
+            from ...core.sampling import should_sample
+
+            sampling_rate = sdk.get_sampling_rate()
+            if not should_sample(sampling_rate, is_app_ready=True):
+                logger.debug(f"[Django] Request not sampled (rate={sampling_rate}), path={request.path}")
+                return self.get_response(request)
+
+        start_time_ns = time.time_ns()
+
+        method = request.method
+        path = request.path
+        span_name = f"{method} {path}"
+
+        # Create span using SpanUtils
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name=span_name,
+                kind=OTelSpanKind.SERVER,
+                attributes={
+                    TdSpanAttributes.NAME: span_name,
+                    TdSpanAttributes.PACKAGE_NAME: "django",
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "DjangoInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: method,
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
+                    TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+                    TdSpanAttributes.IS_ROOT_SPAN: True,
+                },
+                is_pre_app_start=is_pre_app_start,
+            )
+        )
+
+        if not span_info:
+            # Failed to create span, just process the request
+            return self.get_response(request)
+
+        # Set span_kind_context for child spans
         span_kind_token = span_kind_context.set(SpanKind.SERVER)
 
         # Capture request body
-        # Django provides request.body which handles reading and caching
-        # No truncation at capture time - span-level 1MB blocking at export handles oversized spans
         request_body = None
         if request.method in ("POST", "PUT", "PATCH"):
             try:
-                # Django's request.body automatically reads and caches the body
                 request_body = request.body
             except Exception:
                 pass
@@ -133,7 +220,6 @@ class DriftMiddleware:
         query_string = request.META.get("QUERY_STRING", "")
         target = f"{path}?{query_string}" if query_string else path
 
-        # Extract headers from META
         from ..wsgi import extract_headers
 
         request_headers = extract_headers(request.META)
@@ -141,40 +227,26 @@ class DriftMiddleware:
         if self.transform_engine and self.transform_engine.should_drop_inbound_request(method, target, request_headers):
             # Reset context before early return
             span_kind_context.reset(span_kind_token)
-            if replay_token:
-                replay_trace_id_context.reset(replay_token)
-            otel_context.detach(token)
-            span.end()
+            span_info.span.end()
             return self.get_response(request)
 
         # Store metadata on request for later use
         request._drift_start_time_ns = start_time_ns  # type: ignore
-        request._drift_span = span  # type: ignore
-        request._drift_token = token  # type: ignore
-        request._drift_replay_token = replay_token  # type: ignore
-        request._drift_span_kind_token = span_kind_token  # type: ignore
+        request._drift_span_info = span_info  # type: ignore
         request._drift_request_body = request_body  # type: ignore
-        request._drift_route_template = None  # Will be set in process_view  # type: ignore
+        request._drift_route_template = None  # type: ignore
 
         try:
-            # Call next middleware or view
-            response = self.get_response(request)
-
-            # Capture span after response is complete
-            self._capture_span(request, response)
-
-            return response
+            with SpanUtils.with_span(span_info):
+                response = self.get_response(request)
+                self._capture_span(request, response, span_info)
+                return response
         except Exception as e:
-            # Capture error span
-            self._capture_error_span(request, e)
+            self._capture_error_span(request, e, span_info)
             raise
         finally:
-            # Reset context
             span_kind_context.reset(span_kind_token)
-            if replay_token:
-                replay_trace_id_context.reset(replay_token)
-            otel_context.detach(token)
-            span.end()
+            span_info.span.end()
 
     def process_view(
         self,
@@ -199,23 +271,22 @@ class DriftMiddleware:
             if route:
                 request._drift_route_template = route  # type: ignore
 
-    def _capture_span(self, request: HttpRequest, response: HttpResponse) -> None:
+    def _capture_span(self, request: HttpRequest, response: HttpResponse, span_info: SpanInfo) -> None:
         """Create and collect a span from request/response data.
 
         Args:
             request: Django HttpRequest object
             response: Django HttpResponse object
+            span_info: SpanInfo containing trace/span IDs and span reference
         """
         start_time_ns = getattr(request, "_drift_start_time_ns", None)
-        span = getattr(request, "_drift_span", None)
 
-        if not start_time_ns or not span or not span.is_recording():
+        if not start_time_ns or not span_info.span.is_recording():
             return
 
-        # Extract trace_id and span_id from the span context
-        span_context = span.get_span_context()
-        trace_id = format(span_context.trace_id, "032x")
-        span_id = format(span_context.span_id, "016x")
+        # Use trace_id and span_id from span_info
+        trace_id = span_info.trace_id
+        span_id = span_info.span_id
 
         end_time_ns = time.time_ns()
         duration_ns = end_time_ns - start_time_ns
@@ -338,7 +409,7 @@ class DriftMiddleware:
         # Only create and collect span in RECORD mode
         # In REPLAY mode, we only set up context for child spans but don't record the root span
         if sdk.mode == TuskDriftMode.RECORD:
-            span = CleanSpanData(
+            clean_span = CleanSpanData(
                 trace_id=trace_id,
                 span_id=span_id,
                 parent_span_id="",
@@ -357,7 +428,7 @@ class DriftMiddleware:
                 input_schema_hash=input_schema_info.decoded_schema_hash,
                 output_schema_hash=output_schema_info.decoded_schema_hash,
                 status=status,
-                is_pre_app_start=not sdk.app_ready,
+                is_pre_app_start=span_info.is_pre_app_start,
                 is_root_span=True,
                 timestamp=Timestamp(seconds=timestamp_seconds, nanos=timestamp_nanos),
                 duration=Duration(seconds=duration_seconds, nanos=duration_nanos),
@@ -365,25 +436,24 @@ class DriftMiddleware:
                 metadata=None,
             )
 
-            sdk.collect_span(span)
+            sdk.collect_span(clean_span)
 
-    def _capture_error_span(self, request: HttpRequest, exception: Exception) -> None:
+    def _capture_error_span(self, request: HttpRequest, exception: Exception, span_info: SpanInfo) -> None:
         """Create and collect an error span.
 
         Args:
             request: Django HttpRequest object
             exception: The exception that was raised
+            span_info: SpanInfo containing trace/span IDs and span reference
         """
         start_time_ns = getattr(request, "_drift_start_time_ns", None)
-        span = getattr(request, "_drift_span", None)
 
-        if not start_time_ns or not span or not span.is_recording():
+        if not start_time_ns or not span_info.span.is_recording():
             return
 
-        # Extract trace_id and span_id from the span context
-        span_context = span.get_span_context()
-        trace_id = format(span_context.trace_id, "032x")
-        span_id = format(span_context.span_id, "016x")
+        # Use trace_id and span_id from span_info
+        trace_id = span_info.trace_id
+        span_id = span_info.span_id
 
         end_time_ns = time.time_ns()
         duration_ns = end_time_ns - start_time_ns
@@ -436,7 +506,7 @@ class DriftMiddleware:
         route_template = getattr(request, "_drift_route_template", None)
         span_name = f"{method} {route_template}" if route_template else f"{method} {request.path}"
 
-        span = CleanSpanData(
+        clean_span = CleanSpanData(
             trace_id=trace_id,
             span_id=span_id,
             parent_span_id="",
@@ -455,7 +525,7 @@ class DriftMiddleware:
             input_schema_hash=input_schema_info.decoded_schema_hash,
             output_schema_hash=output_schema_info.decoded_schema_hash,
             status=SpanStatus(code=StatusCode.ERROR, message=f"Exception: {type(exception).__name__}"),
-            is_pre_app_start=not sdk.app_ready,
+            is_pre_app_start=span_info.is_pre_app_start,
             is_root_span=True,
             timestamp=Timestamp(seconds=timestamp_seconds, nanos=timestamp_nanos),
             duration=Duration(seconds=duration_seconds, nanos=duration_nanos),
@@ -463,4 +533,4 @@ class DriftMiddleware:
             metadata=None,
         )
 
-        sdk.collect_span(span)
+        sdk.collect_span(clean_span)

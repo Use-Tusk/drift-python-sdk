@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
 from opentelemetry.trace import Span
 
-from ..sampling import should_sample
 from ..trace_blocking_manager import TraceBlockingManager, should_block_span
 from ..types import TD_INSTRUMENTATION_LIBRARY_NAME, TuskDriftMode, replay_trace_id_context
 from ..types import SpanKind as TdSpanKind
@@ -139,10 +138,6 @@ class TdSpanProcessor(SpanProcessor):
 
             # Check if this span should block the trace (size limit or server error)
             if should_block_span(clean_span):
-                return
-
-            # Apply sampling logic
-            if not should_sample(self._sampling_rate, self._app_ready):
                 return
 
             # Validate protobuf serialization

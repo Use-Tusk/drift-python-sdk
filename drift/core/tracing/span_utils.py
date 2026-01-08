@@ -41,6 +41,7 @@ class SpanInfo:
 
     trace_id: str
     span_id: str
+    parent_span_id: str | None
     span: Span
     context: Context
     is_pre_app_start: bool
@@ -146,10 +147,14 @@ class SpanUtils:
             # Check if we should block span creation for this trace
             # (This matches the trace blocking check in Node.js SDK)
             active_span = trace.get_current_span(parent_context)
+            parent_span_id: str | None = None
+
             if active_span and active_span.is_recording():
                 from ..trace_blocking_manager import TraceBlockingManager
 
-                parent_trace_id = format_trace_id(active_span.get_span_context().trace_id)
+                parent_span_context = active_span.get_span_context()
+                parent_trace_id = format_trace_id(parent_span_context.trace_id)
+                parent_span_id = format_span_id(parent_span_context.span_id)
                 trace_blocking_manager = TraceBlockingManager.get_instance()
 
                 if trace_blocking_manager.is_trace_blocked(parent_trace_id):
@@ -182,6 +187,7 @@ class SpanUtils:
             return SpanInfo(
                 trace_id=trace_id,
                 span_id=span_id,
+                parent_span_id=parent_span_id,
                 span=span,
                 context=new_context,
                 is_pre_app_start=options.is_pre_app_start,
@@ -319,6 +325,10 @@ class SpanUtils:
             trace_id = format_trace_id(span_context.trace_id)
             span_id = format_span_id(span_context.span_id)
 
+            # Note: We can't easily get the parent span ID from an already-created span
+            # The parent is set at creation time. For current span info, parent_span_id is None.
+            parent_span_id = None
+
             # Check if span has is_pre_app_start attribute
             is_pre_app_start = False
             # Note: We can't easily read attributes from active span
@@ -327,6 +337,7 @@ class SpanUtils:
             return SpanInfo(
                 trace_id=trace_id,
                 span_id=span_id,
+                parent_span_id=parent_span_id,
                 span=active_span,
                 context=otel_context.get_current(),
                 is_pre_app_start=is_pre_app_start,
