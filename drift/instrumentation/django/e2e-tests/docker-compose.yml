@@ -11,4 +11,8 @@ services:
       - PYTHONUNBUFFERED=1
       - DJANGO_SETTINGS_MODULE=settings
     working_dir: /app
-
+    volumes:
+      # Mount app source for development
+      - ./src:/app/src
+      # Mount .tusk folder to persist traces
+      - ./.tusk:/app/.tusk

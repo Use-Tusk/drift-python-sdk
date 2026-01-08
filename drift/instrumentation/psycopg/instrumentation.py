@@ -28,6 +28,7 @@ from ...core.types import (
     replay_trace_id_context,
 )
 from ..base import InstrumentationBase
+from ..utils.psycopg_utils import deserialize_db_value
 
 logger = logging.getLogger(__name__)
 
@@ -453,11 +454,12 @@ class PsycopgInstrumentation(InstrumentationBase):
 
                 # For all other queries (pre-app-start OR within a request trace), get mock
                 # Convert params_seq to list for serialization
+                # Wrap in {"_batch": ...} to match the recording format
                 params_list = list(params_seq)
                 mock_result = self._try_get_mock(
                     sdk,
                     query_str,
-                    params_list,
+                    {"_batch": params_list},
                     trace_id,
                     span_id,
                     parent_span_id,
@@ -625,6 +627,8 @@ class PsycopgInstrumentation(InstrumentationBase):
                     pass
 
         mock_rows = actual_data.get("rows", [])
+        # Deserialize datetime strings back to datetime objects for consistent Flask serialization
+        mock_rows = [deserialize_db_value(row) for row in mock_rows]
         cursor._mock_rows = mock_rows  # pyright: ignore[reportAttributeAccessIssue]
         cursor._mock_index = 0  # pyright: ignore[reportAttributeAccessIssue]
 
