@@ -22,7 +22,7 @@ from opentelemetry.trace import StatusCode as OTelStatusCode
 
 from ...core.communication.types import MockRequestInput
 from ...core.drift_sdk import TuskDrift
-from ...core.json_schema_helper import JsonSchema, JsonSchemaHelper
+from ...core.json_schema_helper import JsonSchemaHelper
 from ...core.tracing import TdSpanAttributes
 from ...core.types import (
     CleanSpanData,
@@ -675,8 +675,8 @@ class Psycopg2Instrumentation(InstrumentationBase):
                 submodule_name="query",
                 input_value=input_value,
                 output_value=None,
-                input_schema=JsonSchema(),
-                output_schema=JsonSchema(),
+                input_schema=None,  # type: ignore[arg-type]
+                output_schema=None,  # type: ignore[arg-type]
                 input_schema_hash=input_result.decoded_schema_hash,
                 output_schema_hash="",
                 input_value_hash=input_result.decoded_value_hash,
