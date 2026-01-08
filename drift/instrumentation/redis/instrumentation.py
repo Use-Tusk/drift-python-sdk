@@ -6,16 +6,17 @@ import time
 from types import ModuleType
 from typing import Any
 
-from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind as OTelSpanKind
-from opentelemetry.trace import Status, set_span_in_context
+from opentelemetry.trace import Status
 from opentelemetry.trace import StatusCode as OTelStatusCode
 
 from ...core.communication.types import MockRequestInput
 from ...core.drift_sdk import TuskDrift
 from ...core.json_schema_helper import JsonSchemaHelper
+from ...core.mode_utils import handle_record_mode, handle_replay_mode
 from ...core.tracing import TdSpanAttributes
+from ...core.tracing.span_utils import CreateSpanOptions, SpanUtils
 from ...core.types import (
     CleanSpanData,
     Duration,
@@ -149,12 +150,36 @@ class RedisInstrumentation(InstrumentationBase):
         command_name = args[0] if args else "UNKNOWN"
         command_str = self._format_command(args)
 
-        # Get tracer and start span
-        tracer = sdk.get_tracer()
+        def original_call():
+            return original_execute(redis_client, *args, **kwargs)
+
+        if sdk.mode == TuskDriftMode.REPLAY:
+            return handle_replay_mode(
+                replay_mode_handler=lambda: self._replay_execute_command(
+                    sdk, command_name, command_str, args
+                ),
+                no_op_request_handler=lambda: self._get_default_response(command_name),
+                is_server_request=False,
+            )
+
+        # RECORD mode
+        return handle_record_mode(
+            original_function_call=original_call,
+            record_mode_handler=lambda is_pre_app_start: self._record_execute_command(
+                redis_client, original_execute, sdk, args, kwargs,
+                command_name, command_str, is_pre_app_start
+            ),
+            span_kind=OTelSpanKind.CLIENT,
+        )
+
+    def _replay_execute_command(
+        self, sdk: TuskDrift, command_name: str, command_str: str, args: tuple
+    ) -> Any:
+        """Handle REPLAY mode for execute_command."""
         span_name = f"redis.{command_name}"
 
-        # Start OpenTelemetry span (automatically inherits parent context)
-        span = tracer.start_span(
+        # Create span using SpanUtils
+        span_info = SpanUtils.create_span(CreateSpanOptions(
             name=span_name,
             kind=OTelSpanKind.CLIENT,
             attributes={
@@ -165,47 +190,65 @@ class RedisInstrumentation(InstrumentationBase):
                 TdSpanAttributes.PACKAGE_TYPE: PackageType.REDIS.name,
                 TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
             },
-        )
+            is_pre_app_start=not sdk.app_ready,
+        ))
 
-        # Make span active
-        ctx = otel_context.get_current()
-        ctx_with_span = set_span_in_context(span, ctx)
-        token = otel_context.attach(ctx_with_span)
+        if not span_info:
+            raise RuntimeError("Error creating span in replay mode")
 
-        try:
-            # Get span IDs for mock requests
-            span_context = span.get_span_context()
-            trace_id = format(span_context.trace_id, "032x")
-            span_id = format(span_context.span_id, "016x")
+        with SpanUtils.with_span(span_info):
+            mock_result = self._try_get_mock(
+                sdk, command_name, command_str, args,
+                span_info.trace_id, span_info.span_id, span_info.parent_span_id
+            )
 
-            # Get parent span ID from parent context
-            parent_span = trace.get_current_span(ctx)
-            parent_span_id = None
-            if parent_span and parent_span.is_recording():
-                parent_ctx = parent_span.get_span_context()
-                parent_span_id = format(parent_ctx.span_id, "016x")
+            if mock_result is None:
+                is_pre_app_start = not sdk.app_ready
+                raise RuntimeError(
+                    f"[Tusk REPLAY] No mock found for Redis command. "
+                    f"This {'pre-app-start ' if is_pre_app_start else ''}command was not recorded during the trace capture. "
+                    f"Command: {command_str}"
+                )
 
-            if sdk.mode == TuskDriftMode.REPLAY:
-                # Handle background requests (app ready + no parent span)
-                if sdk.app_ready and not parent_span_id:
-                    return self._get_default_response(command_name)
+            return self._deserialize_response(mock_result)
 
-                mock_result = self._try_get_mock(sdk, command_str, args, trace_id, span_id, parent_span_id)
+    def _record_execute_command(
+        self,
+        redis_client: Any,
+        original_execute: Any,
+        sdk: TuskDrift,
+        args: tuple,
+        kwargs: dict,
+        command_name: str,
+        command_str: str,
+        is_pre_app_start: bool,
+    ) -> Any:
+        """Handle RECORD mode for execute_command."""
+        span_name = f"redis.{command_name}"
 
-                if mock_result is None:
-                    is_pre_app_start = not sdk.app_ready
-                    raise RuntimeError(
-                        f"[Tusk REPLAY] No mock found for Redis command. "
-                        f"This {'pre-app-start ' if is_pre_app_start else ''}command was not recorded during the trace capture. "
-                        f"Command: {command_str}"
-                    )
+        # Create span using SpanUtils
+        span_info = SpanUtils.create_span(CreateSpanOptions(
+            name=span_name,
+            kind=OTelSpanKind.CLIENT,
+            attributes={
+                TdSpanAttributes.NAME: span_name,
+                TdSpanAttributes.PACKAGE_NAME: "redis",
+                TdSpanAttributes.INSTRUMENTATION_NAME: "RedisInstrumentation",
+                TdSpanAttributes.SUBMODULE_NAME: str(command_name),
+                TdSpanAttributes.PACKAGE_TYPE: PackageType.REDIS.name,
+                TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+            },
+            is_pre_app_start=is_pre_app_start,
+        ))
 
-                return self._deserialize_response(mock_result)
+        if not span_info:
+            # Fallback to original call if span creation fails
+            return original_execute(redis_client, *args, **kwargs)
 
-            # RECORD mode
-            error = None
-            result = None
+        error = None
+        result = None
 
+        with SpanUtils.with_span(span_info):
             try:
                 result = original_execute(redis_client, *args, **kwargs)
                 return result
@@ -213,39 +256,56 @@ class RedisInstrumentation(InstrumentationBase):
                 error = e
                 raise
             finally:
-                if sdk.mode == TuskDriftMode.RECORD:
-                    self._finalize_command_span(
-                        span,
-                        command_str,
-                        args,
-                        result if error is None else None,
-                        error,
-                    )
-        finally:
-            otel_context.detach(token)
-            span.end()
+                self._finalize_command_span(
+                    span_info.span,
+                    command_str,
+                    args,
+                    result if error is None else None,
+                    error,
+                )
 
     async def _traced_async_execute_command(
         self, redis_client: Any, original_execute: Any, sdk: TuskDrift, args: tuple, kwargs: dict
     ) -> Any:
         """Traced async Redis execute_command method."""
-        # For REPLAY mode, use sync mocking
-        if sdk.mode == TuskDriftMode.REPLAY:
-            return self._traced_execute_command(redis_client, lambda *a, **kw: None, sdk, args, kwargs)
-
-        # For RECORD mode, actually execute async
         if sdk.mode == TuskDriftMode.DISABLED:
             return await original_execute(redis_client, *args, **kwargs)
 
         command_name = args[0] if args else "UNKNOWN"
         command_str = self._format_command(args)
 
-        # Get tracer and start span
-        tracer = sdk.get_tracer()
+        # For REPLAY mode, use sync mocking (mocks are retrieved synchronously)
+        if sdk.mode == TuskDriftMode.REPLAY:
+            return handle_replay_mode(
+                replay_mode_handler=lambda: self._replay_execute_command(
+                    sdk, command_name, command_str, args
+                ),
+                no_op_request_handler=lambda: self._get_default_response(command_name),
+                is_server_request=False,
+            )
+
+        # RECORD mode with async execution
+        return await self._record_async_execute_command(
+            redis_client, original_execute, sdk, args, kwargs,
+            command_name, command_str
+        )
+
+    async def _record_async_execute_command(
+        self,
+        redis_client: Any,
+        original_execute: Any,
+        sdk: TuskDrift,
+        args: tuple,
+        kwargs: dict,
+        command_name: str,
+        command_str: str,
+    ) -> Any:
+        """Handle async RECORD mode for execute_command."""
+        is_pre_app_start = not sdk.app_ready
         span_name = f"redis.{command_name}"
 
-        # Start OpenTelemetry span (automatically inherits parent context)
-        span = tracer.start_span(
+        # Create span using SpanUtils
+        span_info = SpanUtils.create_span(CreateSpanOptions(
             name=span_name,
             kind=OTelSpanKind.CLIENT,
             attributes={
@@ -254,20 +314,19 @@ class RedisInstrumentation(InstrumentationBase):
                 TdSpanAttributes.INSTRUMENTATION_NAME: "RedisInstrumentation",
                 TdSpanAttributes.SUBMODULE_NAME: str(command_name),
                 TdSpanAttributes.PACKAGE_TYPE: PackageType.REDIS.name,
-                TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
+                TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
             },
-        )
+            is_pre_app_start=is_pre_app_start,
+        ))
 
-        # Make span active
-        ctx = otel_context.get_current()
-        ctx_with_span = set_span_in_context(span, ctx)
-        token = otel_context.attach(ctx_with_span)
+        if not span_info:
+            # Fallback to original call if span creation fails
+            return await original_execute(redis_client, *args, **kwargs)
 
-        try:
-            # RECORD mode
-            error = None
-            result = None
+        error = None
+        result = None
 
+        with SpanUtils.with_span(span_info):
             try:
                 result = await original_execute(redis_client, *args, **kwargs)
                 return result
@@ -275,17 +334,13 @@ class RedisInstrumentation(InstrumentationBase):
                 error = e
                 raise
             finally:
-                if sdk.mode == TuskDriftMode.RECORD:
-                    self._finalize_command_span(
-                        span,
-                        command_str,
-                        args,
-                        result if error is None else None,
-                        error,
-                    )
-        finally:
-            otel_context.detach(token)
-            span.end()
+                self._finalize_command_span(
+                    span_info.span,
+                    command_str,
+                    args,
+                    result if error is None else None,
+                    error,
+                )
 
     def _traced_pipeline_execute(
         self, pipeline: Any, original_execute: Any, sdk: TuskDrift, args: tuple, kwargs: dict
@@ -298,12 +353,36 @@ class RedisInstrumentation(InstrumentationBase):
         command_stack = self._get_pipeline_commands(pipeline)
         command_str = self._format_pipeline_commands(command_stack)
 
-        # Get tracer and start span
-        tracer = sdk.get_tracer()
+        def original_call():
+            return original_execute(pipeline, *args, **kwargs)
+
+        if sdk.mode == TuskDriftMode.REPLAY:
+            return handle_replay_mode(
+                replay_mode_handler=lambda: self._replay_pipeline_execute(
+                    sdk, command_str, command_stack
+                ),
+                no_op_request_handler=lambda: [],  # Empty list for pipeline
+                is_server_request=False,
+            )
+
+        # RECORD mode
+        return handle_record_mode(
+            original_function_call=original_call,
+            record_mode_handler=lambda is_pre_app_start: self._record_pipeline_execute(
+                pipeline, original_execute, sdk, args, kwargs,
+                command_str, command_stack, is_pre_app_start
+            ),
+            span_kind=OTelSpanKind.CLIENT,
+        )
+
+    def _replay_pipeline_execute(
+        self, sdk: TuskDrift, command_str: str, command_stack: list
+    ) -> Any:
+        """Handle REPLAY mode for pipeline execute."""
         span_name = "redis.pipeline"
 
-        # Start OpenTelemetry span (automatically inherits parent context)
-        span = tracer.start_span(
+        # Create span using SpanUtils
+        span_info = SpanUtils.create_span(CreateSpanOptions(
             name=span_name,
             kind=OTelSpanKind.CLIENT,
             attributes={
@@ -314,47 +393,65 @@ class RedisInstrumentation(InstrumentationBase):
                 TdSpanAttributes.PACKAGE_TYPE: PackageType.REDIS.name,
                 TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
             },
-        )
+            is_pre_app_start=not sdk.app_ready,
+        ))
 
-        # Make span active
-        ctx = otel_context.get_current()
-        ctx_with_span = set_span_in_context(span, ctx)
-        token = otel_context.attach(ctx_with_span)
+        if not span_info:
+            raise RuntimeError("Error creating span in replay mode")
 
-        try:
-            # Get span IDs for mock requests
-            span_context = span.get_span_context()
-            trace_id = format(span_context.trace_id, "032x")
-            span_id = format(span_context.span_id, "016x")
+        with SpanUtils.with_span(span_info):
+            mock_result = self._try_get_mock(
+                sdk, "pipeline", command_str, command_stack,
+                span_info.trace_id, span_info.span_id, span_info.parent_span_id
+            )
 
-            # Get parent span ID from parent context
-            parent_span = trace.get_current_span(ctx)
-            parent_span_id = None
-            if parent_span and parent_span.is_recording():
-                parent_ctx = parent_span.get_span_context()
-                parent_span_id = format(parent_ctx.span_id, "016x")
+            if mock_result is None:
+                is_pre_app_start = not sdk.app_ready
+                raise RuntimeError(
+                    f"[Tusk REPLAY] No mock found for Redis pipeline. "
+                    f"This {'pre-app-start ' if is_pre_app_start else ''}pipeline was not recorded during the trace capture. "
+                    f"Commands: {command_str}"
+                )
 
-            if sdk.mode == TuskDriftMode.REPLAY:
-                # Handle background requests
-                if sdk.app_ready and not parent_span_id:
-                    return []
+            return self._deserialize_response(mock_result)
 
-                mock_result = self._try_get_mock(sdk, command_str, command_stack, trace_id, span_id, parent_span_id)
+    def _record_pipeline_execute(
+        self,
+        pipeline: Any,
+        original_execute: Any,
+        sdk: TuskDrift,
+        args: tuple,
+        kwargs: dict,
+        command_str: str,
+        command_stack: list,
+        is_pre_app_start: bool,
+    ) -> Any:
+        """Handle RECORD mode for pipeline execute."""
+        span_name = "redis.pipeline"
 
-                if mock_result is None:
-                    is_pre_app_start = not sdk.app_ready
-                    raise RuntimeError(
-                        f"[Tusk REPLAY] No mock found for Redis pipeline. "
-                        f"This {'pre-app-start ' if is_pre_app_start else ''}pipeline was not recorded during the trace capture. "
-                        f"Commands: {command_str}"
-                    )
+        # Create span using SpanUtils
+        span_info = SpanUtils.create_span(CreateSpanOptions(
+            name=span_name,
+            kind=OTelSpanKind.CLIENT,
+            attributes={
+                TdSpanAttributes.NAME: span_name,
+                TdSpanAttributes.PACKAGE_NAME: "redis",
+                TdSpanAttributes.INSTRUMENTATION_NAME: "RedisInstrumentation",
+                TdSpanAttributes.SUBMODULE_NAME: "pipeline",
+                TdSpanAttributes.PACKAGE_TYPE: PackageType.REDIS.name,
+                TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+            },
+            is_pre_app_start=is_pre_app_start,
+        ))
 
-                return self._deserialize_response(mock_result)
+        if not span_info:
+            # Fallback to original call if span creation fails
+            return original_execute(pipeline, *args, **kwargs)
 
-            # RECORD mode
-            error = None
-            result = None
+        error = None
+        result = None
 
+        with SpanUtils.with_span(span_info):
             try:
                 result = original_execute(pipeline, *args, **kwargs)
                 return result
@@ -362,17 +459,13 @@ class RedisInstrumentation(InstrumentationBase):
                 error = e
                 raise
             finally:
-                if sdk.mode == TuskDriftMode.RECORD:
-                    self._finalize_pipeline_span(
-                        span,
-                        command_str,
-                        command_stack,
-                        result if error is None else None,
-                        error,
-                    )
-        finally:
-            otel_context.detach(token)
-            span.end()
+                self._finalize_pipeline_span(
+                    span_info.span,
+                    command_str,
+                    command_stack,
+                    result if error is None else None,
+                    error,
+                )
 
     def _format_command(self, args: tuple) -> str:
         """Format Redis command as string."""
@@ -425,7 +518,8 @@ class RedisInstrumentation(InstrumentationBase):
     def _try_get_mock(
         self,
         sdk: TuskDrift,
-        command: str,
+        command_name: str,
+        command_str: str,
         args: Any,
         trace_id: str,
         span_id: str,
@@ -435,7 +529,7 @@ class RedisInstrumentation(InstrumentationBase):
         try:
             # Build input value
             input_value = {
-                "command": command.strip(),
+                "command": command_str.strip(),
             }
             if args is not None:
                 input_value["arguments"] = self._serialize_args(args)
@@ -444,19 +538,22 @@ class RedisInstrumentation(InstrumentationBase):
             input_result = JsonSchemaHelper.generate_schema_and_hash(input_value, {})
 
             # Create mock span for matching
+            # Use replay_trace_id for matching (the recorded trace ID)
+            replay_trace_id = replay_trace_id_context.get()
             timestamp_ms = time.time() * 1000
             timestamp_seconds = int(timestamp_ms // 1000)
             timestamp_nanos = int((timestamp_ms % 1000) * 1_000_000)
 
+            span_name = f"redis.{command_name}"
             mock_span = CleanSpanData(
                 trace_id=trace_id,
                 span_id=span_id,
                 parent_span_id=parent_span_id or "",
-                name="redis.command",
+                name=span_name,
                 package_name="redis",
                 package_type=PackageType.REDIS,
                 instrumentation_name="RedisInstrumentation",
-                submodule_name="command",
+                submodule_name=str(command_name),
                 input_value=input_value,
                 output_value=None,
                 input_schema=None,  # type: ignore
@@ -474,19 +571,17 @@ class RedisInstrumentation(InstrumentationBase):
             )
 
             # Request mock from CLI
-            replay_trace_id = replay_trace_id_context.get()
-
             mock_request = MockRequestInput(
                 test_id=replay_trace_id or "",
                 outbound_span=mock_span,
             )
 
-            logger.debug(f"Requesting mock from CLI for command: {command[:50]}...")
+            logger.debug(f"Requesting mock from CLI for command: {command_str[:50]}...")
             mock_response_output = sdk.request_mock_sync(mock_request)
             logger.debug(f"CLI returned: found={mock_response_output.found}")
 
             if not mock_response_output.found:
-                logger.debug(f"No mock found for Redis command: {command}")
+                logger.debug(f"No mock found for Redis command: {command_str}")
                 return None
 
             return mock_response_output.response
@@ -544,6 +639,8 @@ class RedisInstrumentation(InstrumentationBase):
         except Exception as e:
             logger.error(f"Error finalizing Redis command span: {e}")
             span.set_status(Status(OTelStatusCode.ERROR, str(e)))
+        finally:
+            span.end()
 
     def _finalize_pipeline_span(
         self,
@@ -596,6 +693,8 @@ class RedisInstrumentation(InstrumentationBase):
         except Exception as e:
             logger.error(f"Error finalizing Redis pipeline span: {e}")
             span.set_status(Status(OTelStatusCode.ERROR, str(e)))
+        finally:
+            span.end()
 
     def _serialize_args(self, args: Any) -> list:
         """Serialize command arguments."""

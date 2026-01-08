@@ -30,7 +30,9 @@ if TYPE_CHECKING:
     WsgiAppMethod = Callable[[WSGIApplication, WSGIEnvironment, StartResponse], "Iterable[bytes]"]
 
 
+from ...core.mode_utils import handle_record_mode
 from ...core.tracing import TdSpanAttributes
+from ...core.tracing.span_utils import CreateSpanOptions, SpanUtils
 from ...core.types import (
     PackageType,
     SpanKind,
@@ -82,22 +84,112 @@ def handle_wsgi_request(
     if instrumentation_name is None:
         instrumentation_name = f"{framework_name.title()}Instrumentation"
 
-    # Check if we're in REPLAY mode and handle trace ID extraction
-    replay_trace_id = None
-    replay_token = None
+    # Define passthrough function
+    def original_call() -> Iterable[bytes]:
+        return original_wsgi_app(app, environ, start_response)
+
+    # DISABLED mode: pass through
+    if sdk.mode == TuskDriftMode.DISABLED:
+        return original_call()
+
+    # REPLAY mode: requires trace ID header
     if sdk.mode == TuskDriftMode.REPLAY:
-        # Extract trace ID from headers (case-insensitive lookup)
-        request_headers = extract_headers(environ)
-        headers_lower = {k.lower(): v for k, v in request_headers.items()}
-        replay_trace_id = headers_lower.get("x-td-trace-id")
+        return _handle_replay_request(
+            app, environ, start_response, original_wsgi_app,
+            framework_name, instrumentation_name, transform_engine, sdk
+        )
 
-        if not replay_trace_id:
-            # No trace context in REPLAY mode; proceed without span
-            return original_wsgi_app(app, environ, start_response)
+    # RECORD mode: use mode_utils for decision logic
+    # Note: For SERVER spans, handle_record_mode will determine is_pre_app_start
+    # and whether to skip recording (e.g., if nested in a pre-app-start span)
+    return handle_record_mode(
+        original_function_call=original_call,
+        record_mode_handler=lambda is_pre_app_start: _handle_record_request(
+            app, environ, start_response, original_wsgi_app,
+            framework_name, instrumentation_name, transform_engine, sdk, is_pre_app_start
+        ),
+        span_kind=OTelSpanKind.SERVER,
+    )
 
-        # Set replay trace context
-        replay_token = replay_trace_id_context.set(replay_trace_id)
 
+def _handle_replay_request(
+    app: WSGIApplication,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    original_wsgi_app: WsgiAppMethod,
+    framework_name: str,
+    instrumentation_name: str,
+    transform_engine: HttpTransformEngine | None,
+    sdk: Any,
+) -> Iterable[bytes]:
+    """Handle REPLAY mode request.
+
+    In REPLAY mode, we require a trace ID header to proceed with instrumentation.
+    If no trace ID is present, we pass through to the original app.
+    """
+    # Extract trace ID from headers (case-insensitive lookup)
+    request_headers = extract_headers(environ)
+    headers_lower = {k.lower(): v for k, v in request_headers.items()}
+    replay_trace_id = headers_lower.get("x-td-trace-id")
+
+    if not replay_trace_id:
+        # No trace context in REPLAY mode; proceed without span
+        return original_wsgi_app(app, environ, start_response)
+
+    # Set replay trace context
+    replay_token = replay_trace_id_context.set(replay_trace_id)
+
+    # Continue with request handling (similar to RECORD but with replay context)
+    return _create_and_handle_request(
+        app, environ, start_response, original_wsgi_app,
+        framework_name, instrumentation_name, transform_engine, sdk,
+        is_pre_app_start=not sdk.app_ready,
+        replay_token=replay_token,
+    )
+
+
+def _handle_record_request(
+    app: WSGIApplication,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    original_wsgi_app: WsgiAppMethod,
+    framework_name: str,
+    instrumentation_name: str,
+    transform_engine: HttpTransformEngine | None,
+    sdk: Any,
+    is_pre_app_start: bool,
+) -> Iterable[bytes]:
+    """Handle RECORD mode request.
+
+    The is_pre_app_start flag is determined by handle_record_mode based on
+    app readiness and current span context.
+    """
+    return _create_and_handle_request(
+        app, environ, start_response, original_wsgi_app,
+        framework_name, instrumentation_name, transform_engine, sdk,
+        is_pre_app_start=is_pre_app_start,
+        replay_token=None,
+    )
+
+
+def _create_and_handle_request(
+    app: WSGIApplication,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    original_wsgi_app: WsgiAppMethod,
+    framework_name: str,
+    instrumentation_name: str,
+    transform_engine: HttpTransformEngine | None,
+    sdk: Any,
+    is_pre_app_start: bool,
+    replay_token: Any | None,
+) -> Iterable[bytes]:
+    """Create span and handle request with proper context management.
+
+    This is the common path for both RECORD and REPLAY modes.
+    We manually manage context because the span needs to stay open
+    across the WSGI response iterator.
+    """
     # Extract request info for span name and drop check
     method = environ.get("REQUEST_METHOD", "GET")
     path = environ.get("PATH_INFO", "")
@@ -115,8 +207,6 @@ def handle_wsgi_request(
             replay_trace_id_context.reset(replay_token)
         return original_wsgi_app(app, environ, start_response)
 
-    # Get tracer and prepare to start span
-    tracer = sdk.get_tracer()
     span_name = f"{method} {path}"
 
     # Build input value before starting span
@@ -125,9 +215,8 @@ def handle_wsgi_request(
     # Store start time for duration calculation
     start_time_ns = time.time_ns()
 
-    # Start the span and make it current
-    # Note: We manually manage context because span needs to stay open across WSGI response iterator
-    span = tracer.start_span(
+    # Create span using SpanUtils
+    span_info = SpanUtils.create_span(CreateSpanOptions(
         name=span_name,
         kind=OTelSpanKind.SERVER,
         attributes={
@@ -136,16 +225,23 @@ def handle_wsgi_request(
             TdSpanAttributes.INSTRUMENTATION_NAME: instrumentation_name,
             TdSpanAttributes.SUBMODULE_NAME: method,
             TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
-            TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
+            TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
             TdSpanAttributes.IS_ROOT_SPAN: True,
             TdSpanAttributes.INPUT_VALUE: json.dumps(input_value),
         },
-    )
+        is_pre_app_start=is_pre_app_start,
+    ))
 
-    # Make span active by attaching to context (manual management)
-    ctx = otel_context.get_current()
-    ctx_with_span = set_span_in_context(span, ctx)
-    token = otel_context.attach(ctx_with_span)
+    if not span_info:
+        # Span creation failed (e.g., trace blocked), proceed without instrumentation
+        if replay_token:
+            replay_trace_id_context.reset(replay_token)
+        return original_wsgi_app(app, environ, start_response)
+
+    span = span_info.span
+
+    # Manually attach context (required for WSGI streaming pattern)
+    token = otel_context.attach(span_info.context)
 
     # Set span_kind_context for child spans and socket instrumentation to detect SERVER context
     span_kind_token = span_kind_context.set(SpanKind.SERVER)
