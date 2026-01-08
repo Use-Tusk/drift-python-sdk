@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import time
 from collections.abc import Callable
 from functools import wraps
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, override
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -112,11 +115,7 @@ async def _handle_replay_request(
     - Execute the request normally (NOT mocked!)
     - Create SERVER span for tracking
     """
-    import logging
-
     from ...core.types import replay_trace_id_context
-
-    logger = logging.getLogger(__name__)
 
     # Extract trace ID from headers (case-insensitive lookup)
     request_headers = _extract_headers(scope)
@@ -258,6 +257,17 @@ async def _record_request(
         raw_path: Request path
         is_pre_app_start: Whether this request occurred before app was marked ready
     """
+    # Inbound request sampling (only when app is ready)
+    # Always sample during startup to capture initialization behavior
+    if not is_pre_app_start:
+        from ...core.sampling import should_sample
+
+        sdk = TuskDrift.get_instance()
+        sampling_rate = sdk.get_sampling_rate()
+        if not should_sample(sampling_rate, is_app_ready=True):
+            logger.debug(f"[FastAPI] Request not sampled (rate={sampling_rate}), path={raw_path}")
+            return await original_call(app, scope, receive, send)
+
     start_time_ns = time.time_ns()
 
     # Get route for span name
@@ -489,12 +499,9 @@ def _finalize_span(
         output_value["errorName"] = response_data["error_type"]  # Match Node SDK field name
 
     # Check if content type should block the trace
-    import logging
-
     from ...core.content_type_utils import get_decoded_type, should_block_content_type
     from ...core.trace_blocking_manager import TraceBlockingManager
 
-    logger = logging.getLogger(__name__)
     response_headers = response_data.get("headers", {})
     content_type = response_headers.get("content-type") or response_headers.get("Content-Type")
     decoded_type = get_decoded_type(content_type)

@@ -207,6 +207,17 @@ def _create_and_handle_request(
             replay_trace_id_context.reset(replay_token)
         return original_wsgi_app(app, environ, start_response)
 
+    # Inbound request sampling (only RECORD mode + app ready)
+    # - replay_token is None means RECORD mode (REPLAY mode sets replay_token)
+    # - not is_pre_app_start means app is ready (always sample during startup)
+    if replay_token is None and not is_pre_app_start:
+        from ...core.sampling import should_sample
+
+        sampling_rate = sdk.get_sampling_rate()
+        if not should_sample(sampling_rate, is_app_ready=True):
+            logger.debug(f"[WSGI] Request not sampled (rate={sampling_rate}), path={path}")
+            return original_wsgi_app(app, environ, start_response)
+
     span_name = f"{method} {path}"
 
     # Build input value before starting span

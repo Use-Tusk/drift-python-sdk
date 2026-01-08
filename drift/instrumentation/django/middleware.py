@@ -181,6 +181,18 @@ class DriftMiddleware:
         Returns:
             Django HttpResponse object
         """
+        # Inbound request sampling (only when app is ready)
+        # Always sample during startup to capture initialization behavior
+        if not is_pre_app_start:
+            from ...core.sampling import should_sample
+
+            sampling_rate = sdk.get_sampling_rate()
+            if not should_sample(sampling_rate, is_app_ready=True):
+                logger.debug(
+                    f"[Django] Request not sampled (rate={sampling_rate}), path={request.path}"
+                )
+                return self.get_response(request)
+
         start_time_ns = time.time_ns()
 
         method = request.method

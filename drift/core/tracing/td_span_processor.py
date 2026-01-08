@@ -141,10 +141,6 @@ class TdSpanProcessor(SpanProcessor):
             if should_block_span(clean_span):
                 return
 
-            # Apply sampling logic
-            if not should_sample(self._sampling_rate, self._app_ready):
-                return
-
             # Validate protobuf serialization
             try:
                 clean_span.to_proto()
