@@ -10,4 +10,9 @@ services:
       - TUSK_ANALYTICS_DISABLED=1
       - PYTHONUNBUFFERED=1
     working_dir: /app
+    volumes:
+      # Mount app source for development
+      - ./src:/app/src
+      # Mount .tusk folder to persist traces
+      - ./.tusk:/app/.tusk
 
