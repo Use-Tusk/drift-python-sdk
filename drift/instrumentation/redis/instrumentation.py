@@ -155,9 +155,7 @@ class RedisInstrumentation(InstrumentationBase):
 
         if sdk.mode == TuskDriftMode.REPLAY:
             return handle_replay_mode(
-                replay_mode_handler=lambda: self._replay_execute_command(
-                    sdk, command_name, command_str, args
-                ),
+                replay_mode_handler=lambda: self._replay_execute_command(sdk, command_name, command_str, args),
                 no_op_request_handler=lambda: self._get_default_response(command_name),
                 is_server_request=False,
             )
@@ -166,40 +164,38 @@ class RedisInstrumentation(InstrumentationBase):
         return handle_record_mode(
             original_function_call=original_call,
             record_mode_handler=lambda is_pre_app_start: self._record_execute_command(
-                redis_client, original_execute, sdk, args, kwargs,
-                command_name, command_str, is_pre_app_start
+                redis_client, original_execute, sdk, args, kwargs, command_name, command_str, is_pre_app_start
             ),
             span_kind=OTelSpanKind.CLIENT,
         )
 
-    def _replay_execute_command(
-        self, sdk: TuskDrift, command_name: str, command_str: str, args: tuple
-    ) -> Any:
+    def _replay_execute_command(self, sdk: TuskDrift, command_name: str, command_str: str, args: tuple) -> Any:
         """Handle REPLAY mode for execute_command."""
         span_name = f"redis.{command_name}"
 
         # Create span using SpanUtils
-        span_info = SpanUtils.create_span(CreateSpanOptions(
-            name=span_name,
-            kind=OTelSpanKind.CLIENT,
-            attributes={
-                TdSpanAttributes.NAME: span_name,
-                TdSpanAttributes.PACKAGE_NAME: "redis",
-                TdSpanAttributes.INSTRUMENTATION_NAME: "RedisInstrumentation",
-                TdSpanAttributes.SUBMODULE_NAME: str(command_name),
-                TdSpanAttributes.PACKAGE_TYPE: PackageType.REDIS.name,
-                TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
-            },
-            is_pre_app_start=not sdk.app_ready,
-        ))
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name=span_name,
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: span_name,
+                    TdSpanAttributes.PACKAGE_NAME: "redis",
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "RedisInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: str(command_name),
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.REDIS.name,
+                    TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
+                },
+                is_pre_app_start=not sdk.app_ready,
+            )
+        )
 
         if not span_info:
             raise RuntimeError("Error creating span in replay mode")
 
         with SpanUtils.with_span(span_info):
             mock_result = self._try_get_mock(
-                sdk, command_name, command_str, args,
-                span_info.trace_id, span_info.span_id, span_info.parent_span_id
+                sdk, command_name, command_str, args, span_info.trace_id, span_info.span_id, span_info.parent_span_id
             )
 
             if mock_result is None:
@@ -227,19 +223,21 @@ class RedisInstrumentation(InstrumentationBase):
         span_name = f"redis.{command_name}"
 
         # Create span using SpanUtils
-        span_info = SpanUtils.create_span(CreateSpanOptions(
-            name=span_name,
-            kind=OTelSpanKind.CLIENT,
-            attributes={
-                TdSpanAttributes.NAME: span_name,
-                TdSpanAttributes.PACKAGE_NAME: "redis",
-                TdSpanAttributes.INSTRUMENTATION_NAME: "RedisInstrumentation",
-                TdSpanAttributes.SUBMODULE_NAME: str(command_name),
-                TdSpanAttributes.PACKAGE_TYPE: PackageType.REDIS.name,
-                TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
-            },
-            is_pre_app_start=is_pre_app_start,
-        ))
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name=span_name,
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: span_name,
+                    TdSpanAttributes.PACKAGE_NAME: "redis",
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "RedisInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: str(command_name),
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.REDIS.name,
+                    TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+                },
+                is_pre_app_start=is_pre_app_start,
+            )
+        )
 
         if not span_info:
             # Fallback to original call if span creation fails
@@ -277,17 +275,14 @@ class RedisInstrumentation(InstrumentationBase):
         # For REPLAY mode, use sync mocking (mocks are retrieved synchronously)
         if sdk.mode == TuskDriftMode.REPLAY:
             return handle_replay_mode(
-                replay_mode_handler=lambda: self._replay_execute_command(
-                    sdk, command_name, command_str, args
-                ),
+                replay_mode_handler=lambda: self._replay_execute_command(sdk, command_name, command_str, args),
                 no_op_request_handler=lambda: self._get_default_response(command_name),
                 is_server_request=False,
             )
 
         # RECORD mode with async execution
         return await self._record_async_execute_command(
-            redis_client, original_execute, sdk, args, kwargs,
-            command_name, command_str
+            redis_client, original_execute, sdk, args, kwargs, command_name, command_str
         )
 
     async def _record_async_execute_command(
@@ -305,19 +300,21 @@ class RedisInstrumentation(InstrumentationBase):
         span_name = f"redis.{command_name}"
 
         # Create span using SpanUtils
-        span_info = SpanUtils.create_span(CreateSpanOptions(
-            name=span_name,
-            kind=OTelSpanKind.CLIENT,
-            attributes={
-                TdSpanAttributes.NAME: span_name,
-                TdSpanAttributes.PACKAGE_NAME: "redis",
-                TdSpanAttributes.INSTRUMENTATION_NAME: "RedisInstrumentation",
-                TdSpanAttributes.SUBMODULE_NAME: str(command_name),
-                TdSpanAttributes.PACKAGE_TYPE: PackageType.REDIS.name,
-                TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
-            },
-            is_pre_app_start=is_pre_app_start,
-        ))
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name=span_name,
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: span_name,
+                    TdSpanAttributes.PACKAGE_NAME: "redis",
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "RedisInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: str(command_name),
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.REDIS.name,
+                    TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+                },
+                is_pre_app_start=is_pre_app_start,
+            )
+        )
 
         if not span_info:
             # Fallback to original call if span creation fails
@@ -358,9 +355,7 @@ class RedisInstrumentation(InstrumentationBase):
 
         if sdk.mode == TuskDriftMode.REPLAY:
             return handle_replay_mode(
-                replay_mode_handler=lambda: self._replay_pipeline_execute(
-                    sdk, command_str, command_stack
-                ),
+                replay_mode_handler=lambda: self._replay_pipeline_execute(sdk, command_str, command_stack),
                 no_op_request_handler=lambda: [],  # Empty list for pipeline
                 is_server_request=False,
             )
@@ -369,40 +364,44 @@ class RedisInstrumentation(InstrumentationBase):
         return handle_record_mode(
             original_function_call=original_call,
             record_mode_handler=lambda is_pre_app_start: self._record_pipeline_execute(
-                pipeline, original_execute, sdk, args, kwargs,
-                command_str, command_stack, is_pre_app_start
+                pipeline, original_execute, sdk, args, kwargs, command_str, command_stack, is_pre_app_start
             ),
             span_kind=OTelSpanKind.CLIENT,
         )
 
-    def _replay_pipeline_execute(
-        self, sdk: TuskDrift, command_str: str, command_stack: list
-    ) -> Any:
+    def _replay_pipeline_execute(self, sdk: TuskDrift, command_str: str, command_stack: list) -> Any:
         """Handle REPLAY mode for pipeline execute."""
         span_name = "redis.pipeline"
 
         # Create span using SpanUtils
-        span_info = SpanUtils.create_span(CreateSpanOptions(
-            name=span_name,
-            kind=OTelSpanKind.CLIENT,
-            attributes={
-                TdSpanAttributes.NAME: span_name,
-                TdSpanAttributes.PACKAGE_NAME: "redis",
-                TdSpanAttributes.INSTRUMENTATION_NAME: "RedisInstrumentation",
-                TdSpanAttributes.SUBMODULE_NAME: "pipeline",
-                TdSpanAttributes.PACKAGE_TYPE: PackageType.REDIS.name,
-                TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
-            },
-            is_pre_app_start=not sdk.app_ready,
-        ))
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name=span_name,
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: span_name,
+                    TdSpanAttributes.PACKAGE_NAME: "redis",
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "RedisInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: "pipeline",
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.REDIS.name,
+                    TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
+                },
+                is_pre_app_start=not sdk.app_ready,
+            )
+        )
 
         if not span_info:
             raise RuntimeError("Error creating span in replay mode")
 
         with SpanUtils.with_span(span_info):
             mock_result = self._try_get_mock(
-                sdk, "pipeline", command_str, command_stack,
-                span_info.trace_id, span_info.span_id, span_info.parent_span_id
+                sdk,
+                "pipeline",
+                command_str,
+                command_stack,
+                span_info.trace_id,
+                span_info.span_id,
+                span_info.parent_span_id,
             )
 
             if mock_result is None:
@@ -430,19 +429,21 @@ class RedisInstrumentation(InstrumentationBase):
         span_name = "redis.pipeline"
 
         # Create span using SpanUtils
-        span_info = SpanUtils.create_span(CreateSpanOptions(
-            name=span_name,
-            kind=OTelSpanKind.CLIENT,
-            attributes={
-                TdSpanAttributes.NAME: span_name,
-                TdSpanAttributes.PACKAGE_NAME: "redis",
-                TdSpanAttributes.INSTRUMENTATION_NAME: "RedisInstrumentation",
-                TdSpanAttributes.SUBMODULE_NAME: "pipeline",
-                TdSpanAttributes.PACKAGE_TYPE: PackageType.REDIS.name,
-                TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
-            },
-            is_pre_app_start=is_pre_app_start,
-        ))
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name=span_name,
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: span_name,
+                    TdSpanAttributes.PACKAGE_NAME: "redis",
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "RedisInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: "pipeline",
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.REDIS.name,
+                    TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+                },
+                is_pre_app_start=is_pre_app_start,
+            )
+        )
 
         if not span_info:
             # Fallback to original call if span creation fails

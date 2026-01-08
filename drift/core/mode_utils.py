@@ -69,9 +69,7 @@ def handle_record_mode(
     # App is ready - check span context
     is_server_span = span_kind == OTelSpanKind.SERVER
 
-    if (not current_span_info and not is_server_span) or (
-        current_span_info and current_span_info.is_pre_app_start
-    ):
+    if (not current_span_info and not is_server_span) or (current_span_info and current_span_info.is_pre_app_start):
         # No span context and not a server request, OR within a pre-app-start span
         # Skip recording - call original function
         return original_function_call()

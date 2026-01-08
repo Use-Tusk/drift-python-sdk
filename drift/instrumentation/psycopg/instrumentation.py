@@ -350,27 +350,28 @@ class PsycopgInstrumentation(InstrumentationBase):
 
     def _replay_execute(self, cursor: Any, sdk: TuskDrift, query_str: str, params: Any) -> Any:
         """Handle REPLAY mode for execute - fetch mock from CLI."""
-        span_info = SpanUtils.create_span(CreateSpanOptions(
-            name="psycopg.query",
-            kind=OTelSpanKind.CLIENT,
-            attributes={
-                TdSpanAttributes.NAME: "psycopg.query",
-                TdSpanAttributes.PACKAGE_NAME: "psycopg",
-                TdSpanAttributes.INSTRUMENTATION_NAME: "PsycopgInstrumentation",
-                TdSpanAttributes.SUBMODULE_NAME: "query",
-                TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
-                TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
-            },
-            is_pre_app_start=not sdk.app_ready,
-        ))
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name="psycopg.query",
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: "psycopg.query",
+                    TdSpanAttributes.PACKAGE_NAME: "psycopg",
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "PsycopgInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: "query",
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
+                    TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
+                },
+                is_pre_app_start=not sdk.app_ready,
+            )
+        )
 
         if not span_info:
             raise RuntimeError("Error creating span in replay mode")
 
         with SpanUtils.with_span(span_info):
             mock_result = self._try_get_mock(
-                sdk, query_str, params,
-                span_info.trace_id, span_info.span_id, span_info.parent_span_id
+                sdk, query_str, params, span_info.trace_id, span_info.span_id, span_info.parent_span_id
             )
 
             if mock_result is None:
@@ -397,19 +398,21 @@ class PsycopgInstrumentation(InstrumentationBase):
         kwargs: dict,
     ) -> Any:
         """Handle RECORD mode for execute - create span and execute query."""
-        span_info = SpanUtils.create_span(CreateSpanOptions(
-            name="psycopg.query",
-            kind=OTelSpanKind.CLIENT,
-            attributes={
-                TdSpanAttributes.NAME: "psycopg.query",
-                TdSpanAttributes.PACKAGE_NAME: "psycopg",
-                TdSpanAttributes.INSTRUMENTATION_NAME: "PsycopgInstrumentation",
-                TdSpanAttributes.SUBMODULE_NAME: "query",
-                TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
-                TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
-            },
-            is_pre_app_start=is_pre_app_start,
-        ))
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name="psycopg.query",
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: "psycopg.query",
+                    TdSpanAttributes.PACKAGE_NAME: "psycopg",
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "PsycopgInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: "query",
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
+                    TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+                },
+                is_pre_app_start=is_pre_app_start,
+            )
+        )
 
         if not span_info:
             # Fallback to original call if span creation fails
@@ -464,27 +467,28 @@ class PsycopgInstrumentation(InstrumentationBase):
 
     def _replay_executemany(self, cursor: Any, sdk: TuskDrift, query_str: str, params_list: list) -> Any:
         """Handle REPLAY mode for executemany - fetch mock from CLI."""
-        span_info = SpanUtils.create_span(CreateSpanOptions(
-            name="psycopg.query",
-            kind=OTelSpanKind.CLIENT,
-            attributes={
-                TdSpanAttributes.NAME: "psycopg.query",
-                TdSpanAttributes.PACKAGE_NAME: "psycopg",
-                TdSpanAttributes.INSTRUMENTATION_NAME: "PsycopgInstrumentation",
-                TdSpanAttributes.SUBMODULE_NAME: "query",
-                TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
-                TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
-            },
-            is_pre_app_start=not sdk.app_ready,
-        ))
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name="psycopg.query",
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: "psycopg.query",
+                    TdSpanAttributes.PACKAGE_NAME: "psycopg",
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "PsycopgInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: "query",
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
+                    TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
+                },
+                is_pre_app_start=not sdk.app_ready,
+            )
+        )
 
         if not span_info:
             raise RuntimeError("Error creating span in replay mode")
 
         with SpanUtils.with_span(span_info):
             mock_result = self._try_get_mock(
-                sdk, query_str, {"_batch": params_list},
-                span_info.trace_id, span_info.span_id, span_info.parent_span_id
+                sdk, query_str, {"_batch": params_list}, span_info.trace_id, span_info.span_id, span_info.parent_span_id
             )
 
             if mock_result is None:
@@ -514,19 +518,21 @@ class PsycopgInstrumentation(InstrumentationBase):
         kwargs: dict,
     ) -> Any:
         """Handle RECORD mode for executemany - create span and execute query."""
-        span_info = SpanUtils.create_span(CreateSpanOptions(
-            name="psycopg.query",
-            kind=OTelSpanKind.CLIENT,
-            attributes={
-                TdSpanAttributes.NAME: "psycopg.query",
-                TdSpanAttributes.PACKAGE_NAME: "psycopg",
-                TdSpanAttributes.INSTRUMENTATION_NAME: "PsycopgInstrumentation",
-                TdSpanAttributes.SUBMODULE_NAME: "query",
-                TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
-                TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
-            },
-            is_pre_app_start=is_pre_app_start,
-        ))
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name="psycopg.query",
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: "psycopg.query",
+                    TdSpanAttributes.PACKAGE_NAME: "psycopg",
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "PsycopgInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: "query",
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
+                    TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+                },
+                is_pre_app_start=is_pre_app_start,
+            )
+        )
 
         if not span_info:
             # Fallback to original call if span creation fails

@@ -95,8 +95,7 @@ def handle_wsgi_request(
     # REPLAY mode: requires trace ID header
     if sdk.mode == TuskDriftMode.REPLAY:
         return _handle_replay_request(
-            app, environ, start_response, original_wsgi_app,
-            framework_name, instrumentation_name, transform_engine, sdk
+            app, environ, start_response, original_wsgi_app, framework_name, instrumentation_name, transform_engine, sdk
         )
 
     # RECORD mode: use mode_utils for decision logic
@@ -105,8 +104,15 @@ def handle_wsgi_request(
     return handle_record_mode(
         original_function_call=original_call,
         record_mode_handler=lambda is_pre_app_start: _handle_record_request(
-            app, environ, start_response, original_wsgi_app,
-            framework_name, instrumentation_name, transform_engine, sdk, is_pre_app_start
+            app,
+            environ,
+            start_response,
+            original_wsgi_app,
+            framework_name,
+            instrumentation_name,
+            transform_engine,
+            sdk,
+            is_pre_app_start,
         ),
         span_kind=OTelSpanKind.SERVER,
     )
@@ -141,8 +147,14 @@ def _handle_replay_request(
 
     # Continue with request handling (similar to RECORD but with replay context)
     return _create_and_handle_request(
-        app, environ, start_response, original_wsgi_app,
-        framework_name, instrumentation_name, transform_engine, sdk,
+        app,
+        environ,
+        start_response,
+        original_wsgi_app,
+        framework_name,
+        instrumentation_name,
+        transform_engine,
+        sdk,
         is_pre_app_start=not sdk.app_ready,
         replay_token=replay_token,
     )
@@ -165,8 +177,14 @@ def _handle_record_request(
     app readiness and current span context.
     """
     return _create_and_handle_request(
-        app, environ, start_response, original_wsgi_app,
-        framework_name, instrumentation_name, transform_engine, sdk,
+        app,
+        environ,
+        start_response,
+        original_wsgi_app,
+        framework_name,
+        instrumentation_name,
+        transform_engine,
+        sdk,
         is_pre_app_start=is_pre_app_start,
         replay_token=None,
     )
@@ -227,21 +245,23 @@ def _create_and_handle_request(
     start_time_ns = time.time_ns()
 
     # Create span using SpanUtils
-    span_info = SpanUtils.create_span(CreateSpanOptions(
-        name=span_name,
-        kind=OTelSpanKind.SERVER,
-        attributes={
-            TdSpanAttributes.NAME: span_name,
-            TdSpanAttributes.PACKAGE_NAME: framework_name,
-            TdSpanAttributes.INSTRUMENTATION_NAME: instrumentation_name,
-            TdSpanAttributes.SUBMODULE_NAME: method,
-            TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
-            TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
-            TdSpanAttributes.IS_ROOT_SPAN: True,
-            TdSpanAttributes.INPUT_VALUE: json.dumps(input_value),
-        },
-        is_pre_app_start=is_pre_app_start,
-    ))
+    span_info = SpanUtils.create_span(
+        CreateSpanOptions(
+            name=span_name,
+            kind=OTelSpanKind.SERVER,
+            attributes={
+                TdSpanAttributes.NAME: span_name,
+                TdSpanAttributes.PACKAGE_NAME: framework_name,
+                TdSpanAttributes.INSTRUMENTATION_NAME: instrumentation_name,
+                TdSpanAttributes.SUBMODULE_NAME: method,
+                TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
+                TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+                TdSpanAttributes.IS_ROOT_SPAN: True,
+                TdSpanAttributes.INPUT_VALUE: json.dumps(input_value),
+            },
+            is_pre_app_start=is_pre_app_start,
+        )
+    )
 
     if not span_info:
         # Span creation failed (e.g., trace blocked), proceed without instrumentation

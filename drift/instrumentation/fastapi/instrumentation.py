@@ -197,9 +197,7 @@ async def _handle_replay_request(
             response_data["status_message"] = _get_status_message(message.get("status", 200))
             raw_headers = message.get("headers", [])
             response_data["headers"] = {
-                k.decode("utf-8", errors="replace") if isinstance(k, bytes) else k: v.decode(
-                    "utf-8", errors="replace"
-                )
+                k.decode("utf-8", errors="replace") if isinstance(k, bytes) else k: v.decode("utf-8", errors="replace")
                 if isinstance(v, bytes)
                 else v
                 for k, v in raw_headers
@@ -324,9 +322,7 @@ async def _record_request(
             response_data["status_message"] = _get_status_message(message.get("status", 200))
             raw_headers = message.get("headers", [])
             response_data["headers"] = {
-                k.decode("utf-8", errors="replace") if isinstance(k, bytes) else k: v.decode(
-                    "utf-8", errors="replace"
-                )
+                k.decode("utf-8", errors="replace") if isinstance(k, bytes) else k: v.decode("utf-8", errors="replace")
                 if isinstance(v, bytes)
                 else v
                 for k, v in raw_headers

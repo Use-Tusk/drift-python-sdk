@@ -75,15 +75,11 @@ class DriftMiddleware:
         # RECORD mode - use handle_record_mode for consistent is_pre_app_start logic
         return handle_record_mode(
             original_function_call=lambda: self.get_response(request),
-            record_mode_handler=lambda is_pre_app_start: self._record_request(
-                request, sdk, is_pre_app_start
-            ),
+            record_mode_handler=lambda is_pre_app_start: self._record_request(request, sdk, is_pre_app_start),
             span_kind=OTelSpanKind.SERVER,
         )
 
-    def _handle_replay_request(
-        self, request: HttpRequest, sdk
-    ) -> HttpResponse:
+    def _handle_replay_request(self, request: HttpRequest, sdk) -> HttpResponse:
         """Handle request in REPLAY mode.
 
         Extracts trace ID from headers and sets up context for child spans.
@@ -98,23 +94,15 @@ class DriftMiddleware:
         """
         # Extract trace ID from headers (case-insensitive lookup)
         # Django stores headers in request.META
-        headers_lower = {
-            k.lower(): v for k, v in request.META.items() if k.startswith("HTTP_")
-        }
-        logger.info(
-            f"[DJANGO_MIDDLEWARE] REPLAY mode, headers: {list(headers_lower.keys())}"
-        )
+        headers_lower = {k.lower(): v for k, v in request.META.items() if k.startswith("HTTP_")}
+        logger.info(f"[DJANGO_MIDDLEWARE] REPLAY mode, headers: {list(headers_lower.keys())}")
         # Convert HTTP_X_TD_TRACE_ID -> x-td-trace-id
         replay_trace_id = headers_lower.get("http_x_td_trace_id")
-        logger.info(
-            f"[DJANGO_MIDDLEWARE] replay_trace_id from header: {replay_trace_id}"
-        )
+        logger.info(f"[DJANGO_MIDDLEWARE] replay_trace_id from header: {replay_trace_id}")
 
         if not replay_trace_id:
             # No trace context in REPLAY mode; proceed without span
-            logger.warning(
-                "[DJANGO_MIDDLEWARE] No replay_trace_id found in headers, proceeding without span"
-            )
+            logger.warning("[DJANGO_MIDDLEWARE] No replay_trace_id found in headers, proceeding without span")
             return self.get_response(request)
 
         # Set replay trace context
@@ -166,9 +154,7 @@ class DriftMiddleware:
             replay_trace_id_context.reset(replay_token)
             span_info.span.end()
 
-    def _record_request(
-        self, request: HttpRequest, sdk, is_pre_app_start: bool
-    ) -> HttpResponse:
+    def _record_request(self, request: HttpRequest, sdk, is_pre_app_start: bool) -> HttpResponse:
         """Handle request in RECORD mode.
 
         Creates a span, processes the request, and captures the span.
@@ -188,9 +174,7 @@ class DriftMiddleware:
 
             sampling_rate = sdk.get_sampling_rate()
             if not should_sample(sampling_rate, is_app_ready=True):
-                logger.debug(
-                    f"[Django] Request not sampled (rate={sampling_rate}), path={request.path}"
-                )
+                logger.debug(f"[Django] Request not sampled (rate={sampling_rate}), path={request.path}")
                 return self.get_response(request)
 
         start_time_ns = time.time_ns()
@@ -240,9 +224,7 @@ class DriftMiddleware:
 
         request_headers = extract_headers(request.META)
 
-        if self.transform_engine and self.transform_engine.should_drop_inbound_request(
-            method, target, request_headers
-        ):
+        if self.transform_engine and self.transform_engine.should_drop_inbound_request(method, target, request_headers):
             # Reset context before early return
             span_kind_context.reset(span_kind_token)
             span_info.span.end()
@@ -289,9 +271,7 @@ class DriftMiddleware:
             if route:
                 request._drift_route_template = route  # type: ignore
 
-    def _capture_span(
-        self, request: HttpRequest, response: HttpResponse, span_info: SpanInfo
-    ) -> None:
+    def _capture_span(self, request: HttpRequest, response: HttpResponse, span_info: SpanInfo) -> None:
         """Create and collect a span from request/response data.
 
         Args:
@@ -458,9 +438,7 @@ class DriftMiddleware:
 
             sdk.collect_span(clean_span)
 
-    def _capture_error_span(
-        self, request: HttpRequest, exception: Exception, span_info: SpanInfo
-    ) -> None:
+    def _capture_error_span(self, request: HttpRequest, exception: Exception, span_info: SpanInfo) -> None:
         """Create and collect an error span.
 
         Args:
