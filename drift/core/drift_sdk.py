@@ -393,7 +393,7 @@ class TuskDrift:
             pass
 
         try:
-            import httpx
+            import httpx  # type: ignore[unresolved-import]
 
             from ..instrumentation.httpx import HttpxInstrumentation
 

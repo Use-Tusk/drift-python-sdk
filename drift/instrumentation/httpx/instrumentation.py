@@ -989,4 +989,3 @@ class HttpxInstrumentation(InstrumentationBase):
         except Exception as e:
             logger.error(f"Error finalizing async span for {method} {url}: {e}")
             span.set_status(Status(OTelStatusCode.ERROR, str(e)))
-
