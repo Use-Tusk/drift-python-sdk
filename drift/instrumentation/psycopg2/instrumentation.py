@@ -219,7 +219,7 @@ class InstrumentedConnection:
             self._sdk,
             cursor_factory,  # This becomes the base class (None uses default)
         )
-        return self._connection.cursor(name=name, cursor_factory=wrapped_factory, *args, **kwargs)
+        return self._connection.cursor(*args, name=name, cursor_factory=wrapped_factory, **kwargs)
 
     def __getattr__(self, name: str) -> Any:
         """Proxy all other methods/attributes to the real connection."""
@@ -852,7 +852,7 @@ class Psycopg2Instrumentation(InstrumentationBase):
         # If it's a dict cursor and we have description, convert rows to dicts
         if is_dict_cursor and description_data:
             column_names = [col["name"] for col in description_data]
-            mock_rows = [dict(zip(column_names, row)) for row in mock_rows]
+            mock_rows = [dict(zip(column_names, row, strict=True)) for row in mock_rows]
 
         cursor._mock_rows = mock_rows  # pyright: ignore[reportAttributeAccessIssue]
         cursor._mock_index = 0  # pyright: ignore[reportAttributeAccessIssue]
