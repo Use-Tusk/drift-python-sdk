@@ -44,3 +44,39 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  # Publish instrumentation manifest to GitHub Pages
+  # This makes the manifest available at: https://use-tusk.github.io/drift-python-sdk/instrumentation-manifest.json
+  publish-manifest:
+    needs: [publish]
+    if: github.event_name == 'release'  # Only run on actual releases, not workflow_dispatch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout source (tagged commit)
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate manifest
+        run: |
+          python scripts/generate_manifest.py --output /tmp/instrumentation-manifest.json
+          cat /tmp/instrumentation-manifest.json
+
+      - name: Checkout gh-pages branch
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+
+      - name: Update manifest and commit
+        run: |
+          cp /tmp/instrumentation-manifest.json ./instrumentation-manifest.json
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add instrumentation-manifest.json
+          git commit -m "Update manifest for ${{ github.event.release.tag_name }}" || echo "No changes to commit"
+          git push origin gh-pages
