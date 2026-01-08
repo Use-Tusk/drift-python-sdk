@@ -157,3 +157,44 @@ For more details, see `drift/instrumentation/README-e2e-tests.md`.
 |----------|-------------|
 | `docs/context-propagation.md` | Context propagation behavior, edge cases, and patterns |
 | `drift/instrumentation/README-e2e-tests.md` | E2E test architecture and debugging |
+
+## For Maintainers
+
+### Releasing
+
+Releases are automated using GitHub Actions. When a GitHub Release is created, the package is automatically built and published to PyPI using [trusted publishing](https://docs.pypi.org/trusted-publishers/).
+
+Prerequisites:
+
+- [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated
+- On the `main` branch with no uncommitted changes
+- Local branch up to date with remote
+
+#### Creating a release
+
+Use the release script to bump the version, create a tag, and publish a GitHub Release:
+
+```bash
+# Patch release (0.1.5 → 0.1.6)
+./scripts/release.sh patch
+
+# Minor release (0.1.5 → 0.2.0)
+./scripts/release.sh minor
+```
+
+The script will:
+
+1. Run preflight checks (lint, format, tests)
+2. Calculate the next version from `pyproject.toml`
+3. Update the version in `pyproject.toml`
+4. Commit and tag the version bump
+5. Push to origin and create a GitHub Release
+
+Once the release is created, GitHub Actions will automatically:
+
+- Build the Python package with `uv build`
+- Publish to PyPI using trusted publishing (no API tokens needed)
+
+#### Manual workflow dispatch
+
+For testing purposes, you can also trigger the publish workflow manually from the Actions tab with an optional version override (e.g., `0.1.6-test`). This is useful for testing the publishing process without affecting the main version.
