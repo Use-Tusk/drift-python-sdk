@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from opentelemetry import context as otel_context
 from opentelemetry.trace import SpanKind as OTelSpanKind
-from opentelemetry.trace import Status, set_span_in_context
+from opentelemetry.trace import Status
 from opentelemetry.trace import StatusCode as OTelStatusCode
 
 logger = logging.getLogger(__name__)

@@ -13,7 +13,9 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from django.http import HttpRequest, HttpResponse  # type: ignore[import-not-found]
+from ...core.mode_utils import handle_record_mode
 from ...core.tracing import TdSpanAttributes
+from ...core.tracing.span_utils import CreateSpanOptions, SpanInfo, SpanUtils
 from ...core.types import (
     CleanSpanData,
     Duration,
@@ -33,8 +35,6 @@ from ..wsgi import (
     build_output_schema_merges,
     build_output_value,
 )
-from ...core.mode_utils import handle_record_mode
-from ...core.tracing.span_utils import CreateSpanOptions, SpanInfo, SpanUtils
 
 
 class DriftMiddleware:

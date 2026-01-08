@@ -8,12 +8,13 @@ decide how to handle requests based on the SDK mode and app state.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Callable, TypeVar
+from collections.abc import Callable
+from typing import TYPE_CHECKING, TypeVar
 
 from opentelemetry.trace import SpanKind as OTelSpanKind
 
 if TYPE_CHECKING:
-    from .tracing.span_utils import SpanInfo
+    pass
 
 logger = logging.getLogger(__name__)
 

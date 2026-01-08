@@ -18,16 +18,15 @@ if TYPE_CHECKING:
     Receive = Callable[[], Awaitable[dict[str, Any]]]
     Send = Callable[[dict[str, Any]], Awaitable[None]]
 
-from opentelemetry import trace
 from opentelemetry.trace import SpanKind as OTelSpanKind
 from opentelemetry.trace import Status
 from opentelemetry.trace import StatusCode as OTelStatusCode
 
 from ...core.drift_sdk import TuskDrift
-from ...core.mode_utils import handle_record_mode
-from ...core.tracing.span_utils import CreateSpanOptions, SpanInfo, SpanUtils
 from ...core.json_schema_helper import JsonSchemaHelper, SchemaMerge
+from ...core.mode_utils import handle_record_mode
 from ...core.tracing import TdSpanAttributes
+from ...core.tracing.span_utils import CreateSpanOptions, SpanInfo, SpanUtils
 from ...core.types import (
     PackageType,
     SpanKind,
