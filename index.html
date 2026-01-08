@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Tusk Drift Python SDK</title>
+    <style>
+        body { 
+            font-family: system-ui, -apple-system, sans-serif; 
+            max-width: 720px; 
+            margin: 3rem auto; 
+            padding: 0 1.5rem;
+            line-height: 1.6;
+            color: #1a1a1a;
+        }
+        h1 { margin-bottom: 0.5rem; }
+        .subtitle { color: #666; margin-top: 0; }
+        pre { 
+            background: #0d1117; 
+            color: #c9d1d9; 
+            padding: 1rem; 
+            border-radius: 6px; 
+            overflow-x: auto; 
+        }
+        code { font-family: 'SF Mono', Consolas, 'Liberation Mono', monospace; }
+        .install-cmd { font-size: 0.95rem; }
+        a { color: #0969da; }
+        ul { padding-left: 1.5rem; }
+        .manifest-preview { font-size: 0.8rem; max-height: 400px; overflow-y: auto; }
+        details { margin-top: 1.5rem; }
+        summary { cursor: pointer; font-weight: 500; }
+    </style>
+</head>
+<body>
+    <h1>Tusk Drift Python SDK</h1>
+    <p class="subtitle">Python instrumentation for API drift detection</p>
+    
+    <h2>Install</h2>
+    <pre class="install-cmd"><code>pip install tusk-drift-python-sdk</code></pre>
+    
+    <h2>Resources</h2>
+    <ul>
+        <li><a href="https://github.com/Use-Tusk/drift-python-sdk">GitHub Repository</a></li>
+        <li><a href="https://pypi.org/project/tusk-drift-python-sdk/">PyPI Package</a></li>
+        <li><a href="instrumentation-manifest.json">Instrumentation Manifest (JSON)</a></li>
+    </ul>
+
+    <details>
+        <summary>View instrumentation manifest</summary>
+        <pre class="manifest-preview"><code id="manifest">Loading...</code></pre>
+    </details>
+
+    <script>
+        fetch('instrumentation-manifest.json')
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('manifest').textContent = JSON.stringify(data, null, 2);
+            })
+            .catch(() => {
+                document.getElementById('manifest').textContent = 'Failed to load manifest';
+            });
+    </script>
+</body>
+</html>
+

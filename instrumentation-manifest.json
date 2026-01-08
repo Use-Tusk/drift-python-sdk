@@ -1,0 +1,55 @@
+{
+  "sdkVersion": "0.1.6",
+  "language": "python",
+  "generatedAt": "2026-01-08T03:06:18.820179Z",
+  "instrumentations": [
+    {
+      "packageName": "django",
+      "supportedVersions": [
+        ">=3.2.0"
+      ]
+    },
+    {
+      "packageName": "fastapi",
+      "supportedVersions": [
+        ">=0.68.0"
+      ]
+    },
+    {
+      "packageName": "flask",
+      "supportedVersions": [
+        ">=2.0.0"
+      ]
+    },
+    {
+      "packageName": "httpx",
+      "supportedVersions": [
+        "*"
+      ]
+    },
+    {
+      "packageName": "psycopg",
+      "supportedVersions": [
+        ">=3.1.12"
+      ]
+    },
+    {
+      "packageName": "psycopg2",
+      "supportedVersions": [
+        "*"
+      ]
+    },
+    {
+      "packageName": "redis",
+      "supportedVersions": [
+        ">=4.0.0"
+      ]
+    },
+    {
+      "packageName": "requests",
+      "supportedVersions": [
+        "*"
+      ]
+    }
+  ]
+}
