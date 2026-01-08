@@ -14,16 +14,17 @@ if TYPE_CHECKING:
 
     QueryType = str | bytes | Composable
 
-from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind as OTelSpanKind
-from opentelemetry.trace import Status, set_span_in_context
+from opentelemetry.trace import Status
 from opentelemetry.trace import StatusCode as OTelStatusCode
 
 from ...core.communication.types import MockRequestInput
 from ...core.drift_sdk import TuskDrift
 from ...core.json_schema_helper import JsonSchemaHelper
+from ...core.mode_utils import handle_record_mode, handle_replay_mode
 from ...core.tracing import TdSpanAttributes
+from ...core.tracing.span_utils import CreateSpanOptions, SpanUtils
 from ...core.types import (
     CleanSpanData,
     Duration,
@@ -403,17 +404,37 @@ class Psycopg2Instrumentation(InstrumentationBase):
         params: Any = None,
     ) -> Any:
         """Traced cursor.execute method."""
-        # Convert query to string for logging and storage
-        query_str = _query_to_str(query)
-
-        # Pass through if SDK is disabled
         if sdk.mode == TuskDriftMode.DISABLED:
-            logger.debug("[PSYCOPG2] _traced_execute: SDK disabled, passing through")
             return original_execute(query, params)
 
-        # Create OpenTelemetry span
-        tracer = sdk.get_tracer()
-        span = tracer.start_span(
+        query_str = _query_to_str(query)
+
+        if sdk.mode == TuskDriftMode.REPLAY:
+            return handle_replay_mode(
+                replay_mode_handler=lambda: self._replay_execute(cursor, sdk, query_str, params),
+                no_op_request_handler=lambda: self._noop_execute(cursor),
+                is_server_request=False,
+            )
+
+        # RECORD mode
+        return handle_record_mode(
+            original_function_call=lambda: original_execute(query, params),
+            record_mode_handler=lambda is_pre_app_start: self._record_execute(
+                cursor, original_execute, sdk, query, query_str, params, is_pre_app_start
+            ),
+            span_kind=OTelSpanKind.CLIENT,
+        )
+
+    def _noop_execute(self, cursor: Any) -> None:
+        """Handle background requests in REPLAY mode - return None with empty cursor state."""
+        cursor.rowcount = 0
+        cursor._mock_rows = []  # pyright: ignore
+        cursor._mock_index = 0  # pyright: ignore
+        return None
+
+    def _replay_execute(self, cursor: Any, sdk: TuskDrift, query_str: str, params: Any) -> None:
+        """Handle REPLAY mode for execute - fetch mock from CLI."""
+        span_info = SpanUtils.create_span(CreateSpanOptions(
             name="psycopg2.query",
             kind=OTelSpanKind.CLIENT,
             attributes={
@@ -424,126 +445,85 @@ class Psycopg2Instrumentation(InstrumentationBase):
                 TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
                 TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
             },
-        )
+            is_pre_app_start=not sdk.app_ready,
+        ))
 
-        # Make span active
-        ctx = otel_context.get_current()
-        ctx_with_span = set_span_in_context(span, ctx)
-        token = otel_context.attach(ctx_with_span)
+        if not span_info:
+            raise RuntimeError("Error creating span in replay mode")
 
-        logger.info("[PSYCOPG2] _traced_execute START")
-        logger.info(f"  SDK mode: {sdk.mode}")
-        logger.info(f"  app_ready: {sdk.app_ready}")
-        logger.info(f"  query: {query_str[:200] if len(query_str) > 200 else query_str}")
+        with SpanUtils.with_span(span_info):
+            mock_result = self._try_get_mock(
+                sdk, query_str, params,
+                span_info.trace_id, span_info.span_id, span_info.parent_span_id
+            )
 
-        try:
-            # Get span IDs for mock requests
-            span_context = span.get_span_context()
-            trace_id = format(span_context.trace_id, "032x")
-            span_id = format(span_context.span_id, "016x")
-
-            # Get parent span ID from parent context
-            parent_span = trace.get_current_span(ctx)
-            parent_span_id = None
-            if parent_span and parent_span.is_recording():
-                parent_ctx = parent_span.get_span_context()
-                parent_span_id = format(parent_ctx.span_id, "016x")
-
-            # REPLAY mode: Mock ALL queries (including pre-app-start)
-            if sdk.mode == TuskDriftMode.REPLAY:
-                logger.info("[PSYCOPG2_REPLAY] execute() entering REPLAY mode")
-                logger.info(f"[PSYCOPG2_REPLAY]   query: {query_str[:100]}")
-                logger.info(f"[PSYCOPG2_REPLAY]   parent_span_id: {parent_span_id}")
-                logger.info(f"[PSYCOPG2_REPLAY]   app_ready: {sdk.app_ready}")
-
-                # Handle background requests: App is ready + no parent span
-                # These are background jobs/health checks that run AFTER app startup
-                # They were never recorded, so return empty result
-                if sdk.app_ready and not parent_span_id:
-                    logger.info("[PSYCOPG2_REPLAY] Background request (app ready, no parent) - returning empty result")
-                    # Return empty cursor result
-                    cursor.rowcount = 0
-                    cursor._mock_rows = []  # pyright: ignore
-                    cursor._mock_index = 0  # pyright: ignore
+            if mock_result is None:
+                is_pre_app_start = not sdk.app_ready
+                if is_pre_app_start:
+                    logger.warning(
+                        "[PSYCOPG2_REPLAY] No mock found for pre-app-start query, returning empty result"
+                    )
+                    empty_mock = {"rowcount": 0, "rows": [], "description": None}
+                    self._mock_execute_with_data(cursor, empty_mock)
+                    span_info.span.end()
                     return None
 
-                # For all other queries (pre-app-start OR within a request trace), get mock
-                replay_trace_id = replay_trace_id_context.get()
-                is_pre_app_start = not sdk.app_ready
-                logger.info(f"[PSYCOPG2_REPLAY] replay_trace_id={replay_trace_id}")
-                logger.info(f"[PSYCOPG2_REPLAY] is_pre_app_start={is_pre_app_start}")
-                logger.info("[PSYCOPG2_REPLAY] Requesting mock from CLI...")
+                raise RuntimeError(
+                    f"[Tusk REPLAY] No mock found for psycopg2 execute query. "
+                    f"This query was not recorded during the trace capture. "
+                    f"Query: {query_str[:100]}..."
+                )
 
-                # Try to get mock for this query
-                mock_result = self._try_get_mock(sdk, query, params, trace_id, span_id, parent_span_id)
-                logger.info(f"[PSYCOPG2_REPLAY] Mock result received: {mock_result is not None}")
+            self._mock_execute_with_data(cursor, mock_result)
+            span_info.span.end()
+            return None
 
-                if mock_result is None:
-                    # For pre-app-start queries without a mock, return empty result
-                    # This allows Django migrations and startup queries to proceed
-                    # even if they weren't recorded during trace capture
-                    if is_pre_app_start:
-                        logger.warning(
-                            "[PSYCOPG2_REPLAY] No mock found for pre-app-start query, returning empty result"
-                        )
-                        logger.warning(f"[PSYCOPG2_REPLAY]   query: {query_str[:100]}")
-                        logger.warning("[PSYCOPG2_REPLAY]   This query was not recorded during trace capture")
-                        # Return empty cursor result using the proper mock method
-                        empty_mock = {"rowcount": 0, "rows": [], "description": None}
-                        self._mock_execute_with_data(cursor, empty_mock)
-                        return None
+    def _record_execute(
+        self,
+        cursor: Any,
+        original_execute: Any,
+        sdk: TuskDrift,
+        query: QueryType,
+        query_str: str,
+        params: Any,
+        is_pre_app_start: bool,
+    ) -> Any:
+        """Handle RECORD mode for execute - create span and execute query."""
+        span_info = SpanUtils.create_span(CreateSpanOptions(
+            name="psycopg2.query",
+            kind=OTelSpanKind.CLIENT,
+            attributes={
+                TdSpanAttributes.NAME: "psycopg2.query",
+                TdSpanAttributes.PACKAGE_NAME: "psycopg2",
+                TdSpanAttributes.INSTRUMENTATION_NAME: "Psycopg2Instrumentation",
+                TdSpanAttributes.SUBMODULE_NAME: "query",
+                TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
+                TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+            },
+            is_pre_app_start=is_pre_app_start,
+        ))
 
-                    # For in-request queries, we MUST have a mock - this is an error
-                    logger.error("[PSYCOPG2_REPLAY] ERROR: No mock found for in-request query")
-                    logger.error(f"[PSYCOPG2_REPLAY]   query: {query_str[:100]}")
-                    logger.error(f"[PSYCOPG2_REPLAY]   trace_id: {trace_id}")
-                    logger.error(f"[PSYCOPG2_REPLAY]   span_id: {span_id}")
-                    logger.error(f"[PSYCOPG2_REPLAY]   parent_span_id: {parent_span_id}")
-                    logger.error(f"[PSYCOPG2_REPLAY]   replay_trace_id: {replay_trace_id}")
-                    raise RuntimeError(
-                        f"[Tusk REPLAY] No mock found for psycopg2 execute query. "
-                        f"This query was not recorded during the trace capture. "
-                        f"Query: {query_str[:100]}..."
-                    )
+        if not span_info:
+            return original_execute(query, params)
 
-                logger.info("[PSYCOPG2_REPLAY] Applying mock to cursor...")
-                # Mock execute by setting cursor internal state
-                self._mock_execute_with_data(cursor, mock_result)
-                logger.info("[PSYCOPG2_REPLAY] Mock applied successfully, returning None")
-                return None  # execute() returns None
+        error = None
 
-            # RECORD mode: Execute real query and record span
-            error = None
-
-            logger.info("[PSYCOPG2_RECORD] execute() entering RECORD mode")
-            logger.info(f"[PSYCOPG2_RECORD]   query: {query_str[:100]}")
-            logger.info(f"[PSYCOPG2_RECORD]   app_ready: {sdk.app_ready}")
-            logger.info(f"[PSYCOPG2_RECORD]   is_pre_app_start: {not sdk.app_ready}")
-
+        with SpanUtils.with_span(span_info):
             try:
-                logger.debug("[PSYCOPG2_RECORD] Executing query...")
                 result = original_execute(query, params)
-                logger.info("[PSYCOPG2_RECORD] Query executed successfully")
                 return result
             except Exception as e:
                 error = e
-                logger.error(f"[PSYCOPG2_RECORD] Query failed with error: {e}")
                 raise
             finally:
-                # Always finalize span in RECORD mode (including pre-app-start queries)
-                if sdk.mode == TuskDriftMode.RECORD:
-                    logger.info("[PSYCOPG2_RECORD] Finalizing span for query")
-                    self._finalize_query_span(
-                        span,
-                        cursor,
-                        query,
-                        params,
-                        error,
-                    )
-                    logger.info("[PSYCOPG2_RECORD] Span finalized successfully")
-        finally:
-            otel_context.detach(token)
-            span.end()
+                self._finalize_query_span(
+                    span_info.span,
+                    cursor,
+                    query,
+                    params,
+                    error,
+                )
+                span_info.span.end()
 
     def _traced_executemany(
         self,
@@ -554,16 +534,32 @@ class Psycopg2Instrumentation(InstrumentationBase):
         params_list: Any,
     ) -> Any:
         """Traced cursor.executemany method."""
-        # Convert query to string for logging and storage
-        query_str = _query_to_str(query)
-
-        # Pass through if SDK is disabled
         if sdk.mode == TuskDriftMode.DISABLED:
             return original_executemany(query, params_list)
 
-        # Create OpenTelemetry span
-        tracer = sdk.get_tracer()
-        span = tracer.start_span(
+        query_str = _query_to_str(query)
+        # Convert to list BEFORE executing to avoid iterator exhaustion
+        params_as_list = list(params_list)
+
+        if sdk.mode == TuskDriftMode.REPLAY:
+            return handle_replay_mode(
+                replay_mode_handler=lambda: self._replay_executemany(cursor, sdk, query_str, params_as_list),
+                no_op_request_handler=lambda: self._noop_execute(cursor),
+                is_server_request=False,
+            )
+
+        # RECORD mode
+        return handle_record_mode(
+            original_function_call=lambda: original_executemany(query, params_as_list),
+            record_mode_handler=lambda is_pre_app_start: self._record_executemany(
+                cursor, original_executemany, sdk, query, query_str, params_as_list, is_pre_app_start
+            ),
+            span_kind=OTelSpanKind.CLIENT,
+        )
+
+    def _replay_executemany(self, cursor: Any, sdk: TuskDrift, query_str: str, params_list: list) -> None:
+        """Handle REPLAY mode for executemany - fetch mock from CLI."""
+        span_info = SpanUtils.create_span(CreateSpanOptions(
             name="psycopg2.query",
             kind=OTelSpanKind.CLIENT,
             attributes={
@@ -574,101 +570,85 @@ class Psycopg2Instrumentation(InstrumentationBase):
                 TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
                 TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
             },
-        )
+            is_pre_app_start=not sdk.app_ready,
+        ))
 
-        # Make span active
-        ctx = otel_context.get_current()
-        ctx_with_span = set_span_in_context(span, ctx)
-        token = otel_context.attach(ctx_with_span)
+        if not span_info:
+            raise RuntimeError("Error creating span in replay mode")
 
-        try:
-            # Get span IDs for mock requests
-            span_context = span.get_span_context()
-            trace_id = format(span_context.trace_id, "032x")
-            span_id = format(span_context.span_id, "016x")
+        with SpanUtils.with_span(span_info):
+            mock_result = self._try_get_mock(
+                sdk, query_str, {"_batch": params_list},
+                span_info.trace_id, span_info.span_id, span_info.parent_span_id
+            )
 
-            # Get parent span ID from parent context
-            parent_span = trace.get_current_span(ctx)
-            parent_span_id = None
-            if parent_span and parent_span.is_recording():
-                parent_ctx = parent_span.get_span_context()
-                parent_span_id = format(parent_ctx.span_id, "016x")
-
-            # For executemany, we'll treat each parameter set as a batch
-            # REPLAY mode: Mock ALL queries (including pre-app-start)
-            if sdk.mode == TuskDriftMode.REPLAY:
-                # Handle background requests: App is ready + no parent span
-                # These are background jobs/health checks that run AFTER app startup
-                # They were never recorded, so return empty result
-                if sdk.app_ready and not parent_span_id:
-                    logger.debug("Background executemany request (app ready, no parent) - returning empty result")
-                    # Return empty cursor result
-                    cursor.rowcount = 0
-                    cursor._mock_rows = []  # pyright: ignore
-                    cursor._mock_index = 0  # pyright: ignore
+            if mock_result is None:
+                is_pre_app_start = not sdk.app_ready
+                if is_pre_app_start:
+                    logger.warning(
+                        "[PSYCOPG2_REPLAY] No mock found for pre-app-start executemany query, returning empty result"
+                    )
+                    empty_mock = {"rowcount": 0, "rows": [], "description": None}
+                    self._mock_execute_with_data(cursor, empty_mock)
+                    span_info.span.end()
                     return None
 
-                # For all other queries (pre-app-start OR within a request trace), get mock
-                # Wrap in {"_batch": ...} to match the recording format
-                # Normalize to list to match RECORD mode and avoid iterator/serialization issues
-                is_pre_app_start = not sdk.app_ready
-                mock_result = self._try_get_mock(
-                    sdk,
-                    query,
-                    {"_batch": list(params_list)},
-                    trace_id,
-                    span_id,
-                    parent_span_id,
+                raise RuntimeError(
+                    f"[Tusk REPLAY] No mock found for psycopg2 executemany query. "
+                    f"This query was not recorded during the trace capture. "
+                    f"Query: {query_str[:100]}..."
                 )
-                if mock_result is None:
-                    # For pre-app-start queries without a mock, return empty result
-                    if is_pre_app_start:
-                        logger.warning(
-                            "[PSYCOPG2_REPLAY] No mock found for pre-app-start executemany query, returning empty result"
-                        )
-                        logger.warning(f"[PSYCOPG2_REPLAY]   query: {query_str[:100]}")
-                        # Return empty cursor result using the proper mock method
-                        empty_mock = {"rowcount": 0, "rows": [], "description": None}
-                        self._mock_execute_with_data(cursor, empty_mock)
-                        return None
 
-                    # For in-request queries, we MUST have a mock - this is an error
-                    logger.error(f"[PSYCOPG2_REPLAY] No mock found for in-request executemany query: {query_str[:100]}")
-                    raise RuntimeError(
-                        f"[Tusk REPLAY] No mock found for psycopg2 executemany query. "
-                        f"This query was not recorded during the trace capture. "
-                        f"Query: {query_str[:100]}..."
-                    )
+            self._mock_execute_with_data(cursor, mock_result)
+            span_info.span.end()
+            return None
 
-                # Instead of modifying cursor, create a mock execute that sets internal state
-                # We need to set the cursor's internal state that gets populated during execute()
-                self._mock_execute_with_data(cursor, mock_result)
-                return None  # executemany() returns None
+    def _record_executemany(
+        self,
+        cursor: Any,
+        original_executemany: Any,
+        sdk: TuskDrift,
+        query: QueryType,
+        query_str: str,
+        params_list: list,
+        is_pre_app_start: bool,
+    ) -> Any:
+        """Handle RECORD mode for executemany - create span and execute query."""
+        span_info = SpanUtils.create_span(CreateSpanOptions(
+            name="psycopg2.query",
+            kind=OTelSpanKind.CLIENT,
+            attributes={
+                TdSpanAttributes.NAME: "psycopg2.query",
+                TdSpanAttributes.PACKAGE_NAME: "psycopg2",
+                TdSpanAttributes.INSTRUMENTATION_NAME: "Psycopg2Instrumentation",
+                TdSpanAttributes.SUBMODULE_NAME: "query",
+                TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
+                TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+            },
+            is_pre_app_start=is_pre_app_start,
+        ))
 
-            # RECORD mode: Execute real query and record span
-            error = None
-            # Convert to list BEFORE executing to avoid iterator exhaustion
-            params_as_list = list(params_list)
+        if not span_info:
+            return original_executemany(query, params_list)
 
+        error = None
+
+        with SpanUtils.with_span(span_info):
             try:
-                result = original_executemany(query, params_as_list)
+                result = original_executemany(query, params_list)
                 return result
             except Exception as e:
                 error = e
                 raise
             finally:
-                # Always finalize span in RECORD mode (including pre-app-start queries)
-                if sdk.mode == TuskDriftMode.RECORD:
-                    self._finalize_query_span(
-                        span,
-                        cursor,
-                        query,
-                        {"_batch": params_as_list},
-                        error,
-                    )
-        finally:
-            otel_context.detach(token)
-            span.end()
+                self._finalize_query_span(
+                    span_info.span,
+                    cursor,
+                    query,
+                    {"_batch": params_list},
+                    error,
+                )
+                span_info.span.end()
 
     def _try_get_mock(
         self,
