@@ -23,6 +23,7 @@ class FlaskE2ETestRunner(E2ETestRunnerBase):
 
     def __init__(self):
         import os
+
         port = int(os.getenv("PORT", "8000"))
         super().__init__(app_port=port)
 

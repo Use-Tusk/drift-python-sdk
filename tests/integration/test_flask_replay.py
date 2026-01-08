@@ -22,10 +22,11 @@ test_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 test_socket.bind(socket_path)
 test_socket.listen(1)
 
-from drift import TuskDrift
-from drift.core.types import SpanKind
-from drift.core.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
 from flask import Flask, jsonify
+
+from drift import TuskDrift
+from drift.core.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
+from drift.core.types import SpanKind
 
 
 class TestFlaskReplayMode(unittest.TestCase):
@@ -52,6 +53,7 @@ class TestFlaskReplayMode(unittest.TestCase):
         @cls.app.route("/echo", methods=["POST"])
         def echo():
             from flask import request
+
             data = request.get_json()
             return jsonify({"echoed": data})
 
@@ -89,10 +91,7 @@ class TestFlaskReplayMode(unittest.TestCase):
 
     def test_request_with_trace_id_header(self):
         """Test that requests with trace ID create SERVER spans."""
-        response = self.client.get(
-            "/user/alice",
-            headers={"x-td-trace-id": "test-trace-123"}
-        )
+        response = self.client.get("/user/alice", headers={"x-td-trace-id": "test-trace-123"})
 
         self.assertEqual(response.status_code, 200)
         data = response.get_json()
@@ -115,11 +114,7 @@ class TestFlaskReplayMode(unittest.TestCase):
 
     def test_post_request_with_trace_id(self):
         """Test that POST requests work in replay mode."""
-        response = self.client.post(
-            "/echo",
-            json={"message": "test"},
-            headers={"x-td-trace-id": "post-trace-456"}
-        )
+        response = self.client.post("/echo", json={"message": "test"}, headers={"x-td-trace-id": "post-trace-456"})
 
         self.assertEqual(response.status_code, 200)
         data = response.get_json()
@@ -137,17 +132,11 @@ class TestFlaskReplayMode(unittest.TestCase):
     def test_case_insensitive_headers(self):
         """Test that trace ID header is case-insensitive."""
         # Try lowercase
-        response = self.client.get(
-            "/health",
-            headers={"x-td-trace-id": "lowercase-trace"}
-        )
+        response = self.client.get("/health", headers={"x-td-trace-id": "lowercase-trace"})
         self.assertEqual(response.status_code, 200)
 
         # Try uppercase
-        response = self.client.get(
-            "/health",
-            headers={"X-TD-TRACE-ID": "uppercase-trace"}
-        )
+        response = self.client.get("/health", headers={"X-TD-TRACE-ID": "uppercase-trace"})
         self.assertEqual(response.status_code, 200)
 
 

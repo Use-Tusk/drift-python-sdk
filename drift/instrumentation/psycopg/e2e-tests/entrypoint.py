@@ -15,7 +15,7 @@ import sys
 # Add SDK to path for imports
 sys.path.insert(0, "/sdk")
 
-from drift.instrumentation.e2e_common.base_runner import E2ETestRunnerBase, Colors
+from drift.instrumentation.e2e_common.base_runner import Colors, E2ETestRunnerBase
 
 
 class PsycopgE2ETestRunner(E2ETestRunnerBase):

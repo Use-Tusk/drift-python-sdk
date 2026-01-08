@@ -28,8 +28,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 import requests
 
 from drift import TuskDrift
-from drift.core.types import SpanKind
 from drift.core.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
+from drift.core.types import SpanKind
 
 
 class TestFastAPIReplayMode(unittest.TestCase):
@@ -105,9 +105,7 @@ class TestFastAPIReplayMode(unittest.TestCase):
 
     def test_request_with_trace_id_header(self):
         """Test that requests with trace ID create SERVER spans."""
-        response = requests.get(
-            f"{self.base_url}/user/alice", headers={"x-td-trace-id": "test-trace-123"}
-        )
+        response = requests.get(f"{self.base_url}/user/alice", headers={"x-td-trace-id": "test-trace-123"})
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -151,14 +149,10 @@ class TestFastAPIReplayMode(unittest.TestCase):
 
     def test_case_insensitive_headers(self):
         """Test that trace ID header is case-insensitive."""
-        response = requests.get(
-            f"{self.base_url}/health", headers={"x-td-trace-id": "lowercase-trace"}
-        )
+        response = requests.get(f"{self.base_url}/health", headers={"x-td-trace-id": "lowercase-trace"})
         self.assertEqual(response.status_code, 200)
 
-        response = requests.get(
-            f"{self.base_url}/health", headers={"X-TD-TRACE-ID": "uppercase-trace"}
-        )
+        response = requests.get(f"{self.base_url}/health", headers={"X-TD-TRACE-ID": "uppercase-trace"})
         self.assertEqual(response.status_code, 200)
 
 

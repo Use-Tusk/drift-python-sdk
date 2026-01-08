@@ -12,9 +12,10 @@ import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from .communication.types import MockResponseOutput
     from .drift_sdk import TuskDrift
     from .json_schema_helper import SchemaMerges
-    from .types import CleanSpanData, MockResponseOutput
+    from .types import CleanSpanData
 
 from .json_schema_helper import JsonSchemaHelper
 from .types import (
@@ -91,7 +92,7 @@ def convert_mock_request_to_clean_span(
         input_schema=input_result.schema,
         input_schema_hash=input_result.decoded_schema_hash,
         input_value_hash=input_result.decoded_value_hash,
-        output_schema=None,
+        output_schema=None,  # type: ignore[arg-type] - Must be None to avoid betterproto serialization issues
         output_schema_hash="",
         output_value_hash="",
         kind=kind,

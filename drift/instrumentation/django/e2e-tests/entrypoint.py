@@ -23,6 +23,7 @@ class DjangoE2ETestRunner(E2ETestRunnerBase):
 
     def __init__(self):
         import os
+
         port = int(os.getenv("PORT", "8000"))
         super().__init__(app_port=port)
 
@@ -31,4 +32,3 @@ if __name__ == "__main__":
     runner = DjangoE2ETestRunner()
     exit_code = runner.run()
     sys.exit(exit_code)
-

@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import requests
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_GET, require_POST, require_http_methods
+from django.views.decorators.http import require_GET, require_http_methods, require_POST
 from opentelemetry import context as otel_context
 
 
@@ -39,10 +39,12 @@ def get_weather(request):
         )
         weather = response.json()
 
-        return JsonResponse({
-            "location": "New York",
-            "weather": weather.get("current_weather", {}),
-        })
+        return JsonResponse(
+            {
+                "location": "New York",
+                "weather": weather.get("current_weather", {}),
+            }
+        )
     except Exception as e:
         return JsonResponse({"error": f"Failed to fetch weather: {str(e)}"}, status=500)
 
@@ -98,10 +100,12 @@ def get_post(request, post_id: int):
         post_response = post_future.result()
         comments_response = comments_future.result()
 
-    return JsonResponse({
-        "post": post_response.json(),
-        "comments": comments_response.json(),
-    })
+    return JsonResponse(
+        {
+            "post": post_response.json(),
+            "comments": comments_response.json(),
+        }
+    )
 
 
 @csrf_exempt
@@ -123,4 +127,3 @@ def get_activity(request):
         return JsonResponse(response.json())
     except Exception as e:
         return JsonResponse({"error": f"Failed to fetch activity: {str(e)}"}, status=500)
-

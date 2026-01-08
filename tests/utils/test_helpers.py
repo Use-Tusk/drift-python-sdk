@@ -29,7 +29,7 @@ def create_test_span(
     submodule_name: str = "test",
     input_value: dict[str, Any] | None = None,
     output_value: dict[str, Any] | None = None,
-) -> "CleanSpanData":
+) -> CleanSpanData:
     """
     Create a minimal test span for unit tests.
 

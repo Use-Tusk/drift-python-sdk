@@ -213,12 +213,13 @@ class SocketInstrumentation(InstrumentationBase):
 
                 def _send_in_thread() -> None:
                     try:
-                        asyncio.run(
-                            sdk.communicator.send_unpatched_dependency_alert(
-                                stack_trace=stack_trace,
-                                trace_test_server_span_id=trace_test_server_span_id,
+                        if sdk.communicator is not None:
+                            asyncio.run(
+                                sdk.communicator.send_unpatched_dependency_alert(
+                                    stack_trace=stack_trace,
+                                    trace_test_server_span_id=trace_test_server_span_id,
+                                )
                             )
-                        )
                     except Exception:
                         pass  # Fire-and-forget, ignore errors
 

@@ -1,15 +1,14 @@
 """URL configuration for Django e2e test application."""
 
 from django.urls import path
-
 from views import (
-    health,
-    get_weather,
-    get_user,
     create_post,
-    get_post,
     delete_post,
     get_activity,
+    get_post,
+    get_user,
+    get_weather,
+    health,
 )
 
 urlpatterns = [
@@ -21,4 +20,3 @@ urlpatterns = [
     path("api/post/<int:post_id>/delete", delete_post, name="delete_post"),
     path("api/activity", get_activity, name="get_activity"),
 ]
-

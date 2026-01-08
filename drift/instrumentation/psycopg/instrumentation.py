@@ -134,8 +134,9 @@ class MockConnection:
 
             return instrumentation._traced_executemany(cursor, noop_executemany, sdk, query, params_seq, **kwargs)
 
-        cursor.execute = mock_execute
-        cursor.executemany = mock_executemany
+        # Monkey-patch mock functions onto cursor
+        cursor.execute = mock_execute  # type: ignore[method-assign]
+        cursor.executemany = mock_executemany  # type: ignore[method-assign]
 
         logger.debug("[MOCK_CONNECTION] Created cursor (psycopg3)")
         return cursor
@@ -275,7 +276,7 @@ class PsycopgInstrumentation(InstrumentationBase):
             logger.debug("[PATCHED_CONNECT] RECORD mode: Connected to database (psycopg3)")
             return connection
 
-        module.connect = patched_connect  # pyright: ignore[reportAttributeAccessIssue]
+        module.connect = patched_connect  # type: ignore[attr-defined]
         logger.debug("psycopg.connect instrumented")
 
     def _create_cursor_factory(self, sdk: TuskDrift, base_factory=None):

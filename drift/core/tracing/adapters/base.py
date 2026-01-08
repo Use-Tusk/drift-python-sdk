@@ -8,7 +8,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ...core.types import CleanSpanData
+    from ...types import CleanSpanData
 
 
 class ExportResultCode(Enum):

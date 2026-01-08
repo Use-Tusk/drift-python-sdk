@@ -2,7 +2,8 @@
 
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from drift.core.types import current_trace_id_context, current_span_id_context
+
+from drift.core.types import current_span_id_context, current_trace_id_context
 
 
 class TestContextPropagation(unittest.TestCase):
@@ -46,14 +47,10 @@ class TestContextPropagation(unittest.TestCase):
                 result2 = future2.result()
 
                 # Context should be accessible in threads
-                self.assertEqual(result1["trace_id"], trace_id,
-                               "Context trace_id not propagated to thread 1")
-                self.assertEqual(result1["span_id"], span_id,
-                               "Context span_id not propagated to thread 1")
-                self.assertEqual(result2["trace_id"], trace_id,
-                               "Context trace_id not propagated to thread 2")
-                self.assertEqual(result2["span_id"], span_id,
-                               "Context span_id not propagated to thread 2")
+                self.assertEqual(result1["trace_id"], trace_id, "Context trace_id not propagated to thread 1")
+                self.assertEqual(result1["span_id"], span_id, "Context span_id not propagated to thread 1")
+                self.assertEqual(result2["trace_id"], trace_id, "Context trace_id not propagated to thread 2")
+                self.assertEqual(result2["span_id"], span_id, "Context span_id not propagated to thread 2")
         finally:
             current_trace_id_context.reset(trace_token)
             current_span_id_context.reset(span_token)

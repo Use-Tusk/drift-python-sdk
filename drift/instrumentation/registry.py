@@ -88,7 +88,7 @@ def _apply_patch(module: ModuleType, patch_fn: PatchFn) -> None:
         return
 
     patch_fn(module)
-    module.__drift_patched__ = True  # pyright: ignore[reportAttributeAccessIssue]
+    module.__drift_patched__ = True  # type: ignore[attr-defined]
 
 
 from typing import TypeVar

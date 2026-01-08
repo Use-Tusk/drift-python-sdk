@@ -16,9 +16,7 @@ from drift.core.types import (
 
 class SpanSerializationTests(unittest.TestCase):
     def test_basic_span_serializes_to_proto(self):
-        input_schema_info = JsonSchemaHelper.generate_schema_and_hash(
-            {"method": "GET", "path": "/health"}
-        )
+        input_schema_info = JsonSchemaHelper.generate_schema_and_hash({"method": "GET", "path": "/health"})
         output_schema_info = JsonSchemaHelper.generate_schema_and_hash({"status_code": 200})
 
         span = CleanSpanData(
@@ -48,11 +46,14 @@ class SpanSerializationTests(unittest.TestCase):
         proto = span.to_proto()
 
         self.assertEqual(proto.trace_id, span.trace_id)
-        self.assertEqual(proto.package_type.value, span.package_type.value)
-        self.assertEqual(proto.kind.value, span.kind.value)
-        self.assertEqual(proto.status.code.value, StatusCode.OK.value)
-        self.assertEqual(proto.input_value["method"], "GET")
-        self.assertEqual(proto.output_value["status_code"], 200)
+        # proto.package_type and proto.kind are ints in protobuf
+        assert span.package_type is not None
+        self.assertEqual(proto.package_type, span.package_type.value)
+        self.assertEqual(proto.kind, span.kind.value)
+        self.assertEqual(proto.status.code, StatusCode.OK.value)
+        # input_value and output_value are protobuf Struct objects
+        self.assertEqual(proto.input_value.fields["method"].string_value, "GET")
+        self.assertEqual(proto.output_value.fields["status_code"].number_value, 200)
         self.assertEqual(proto.timestamp.year, 2023)
         self.assertEqual(proto.duration.total_seconds(), 0.000001)
 

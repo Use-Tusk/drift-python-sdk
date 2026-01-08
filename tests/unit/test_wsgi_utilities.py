@@ -4,10 +4,10 @@ import base64
 import unittest
 
 from drift.instrumentation.wsgi import (
-    build_input_value,
-    build_output_value,
     build_input_schema_merges,
+    build_input_value,
     build_output_schema_merges,
+    build_output_value,
     build_url,
     capture_request_body,
     extract_headers,
@@ -97,16 +97,19 @@ class TestCaptureRequestBody(unittest.TestCase):
             "CONTENT_LENGTH": str(len(body_content)),
             "wsgi.input": BytesIO(body_content),
         }
-        body, truncated = capture_request_body(environ, max_size=10000)
+        body = capture_request_body(environ)
         self.assertEqual(body, body_content)
-        self.assertFalse(truncated)
 
         # Verify input was reset
-        new_body = environ["wsgi.input"].read()
+        from io import BytesIO
+
+        wsgi_input = environ["wsgi.input"]
+        assert isinstance(wsgi_input, BytesIO)
+        new_body = wsgi_input.read()
         self.assertEqual(new_body, body_content)
 
-    def test_truncates_large_body(self):
-        """Test truncation of large body."""
+    def test_captures_large_body(self):
+        """Test capturing large body (no truncation at capture time)."""
         from io import BytesIO
 
         body_content = b"x" * 15000
@@ -115,18 +118,18 @@ class TestCaptureRequestBody(unittest.TestCase):
             "CONTENT_LENGTH": str(len(body_content)),
             "wsgi.input": BytesIO(body_content),
         }
-        body, truncated = capture_request_body(environ, max_size=10000)
-        self.assertEqual(len(body), 10000)
-        self.assertTrue(truncated)
+        body = capture_request_body(environ)
+        # No truncation - span-level blocking handles oversized spans
+        assert body is not None
+        self.assertEqual(len(body), 15000)
 
     def test_ignores_get_requests(self):
         """Test that GET requests are ignored."""
         environ = {
             "REQUEST_METHOD": "GET",
         }
-        body, truncated = capture_request_body(environ)
+        body = capture_request_body(environ)
         self.assertIsNone(body)
-        self.assertFalse(truncated)
 
     def test_handles_empty_body(self):
         """Test handling of empty body."""
@@ -137,9 +140,8 @@ class TestCaptureRequestBody(unittest.TestCase):
             "CONTENT_LENGTH": "0",
             "wsgi.input": BytesIO(b""),
         }
-        body, truncated = capture_request_body(environ)
+        body = capture_request_body(environ)
         self.assertIsNone(body)
-        self.assertFalse(truncated)
 
 
 class TestParseStatusLine(unittest.TestCase):
@@ -201,29 +203,13 @@ class TestBuildInputValue(unittest.TestCase):
         self.assertEqual(input_value["body"], base64.b64encode(body).decode("ascii"))
         self.assertEqual(input_value["bodySize"], len(body))
 
-    def test_includes_truncation_flag(self):
-        """Test truncation flag in input value."""
-        environ = {
-            "REQUEST_METHOD": "POST",
-            "wsgi.url_scheme": "http",
-            "HTTP_HOST": "example.com",
-            "PATH_INFO": "/api",
-            "QUERY_STRING": "",
-            "SERVER_PROTOCOL": "HTTP/1.1",
-        }
-        body = b"x" * 100
-        input_value = build_input_value(environ, body=body, body_truncated=True)
-        self.assertEqual(input_value["bodyProcessingError"], "truncated")
-
 
 class TestBuildOutputValue(unittest.TestCase):
     """Test build_output_value function."""
 
     def test_builds_basic_output_value(self):
         """Test building basic output value."""
-        output_value = build_output_value(
-            200, "OK", {"Content-Type": "application/json"}
-        )
+        output_value = build_output_value(200, "OK", {"Content-Type": "application/json"})
         self.assertEqual(output_value["statusCode"], 200)
         self.assertEqual(output_value["statusMessage"], "OK")
         self.assertEqual(output_value["headers"]["Content-Type"], "application/json")
@@ -231,27 +217,15 @@ class TestBuildOutputValue(unittest.TestCase):
     def test_includes_body_when_present(self):
         """Test including body in output value."""
         body = b'{"result": "success"}'
-        output_value = build_output_value(
-            200, "OK", {}, body=body
-        )
+        output_value = build_output_value(200, "OK", {}, body=body)
         self.assertIn("body", output_value)
         self.assertEqual(output_value["body"], base64.b64encode(body).decode("ascii"))
         self.assertEqual(output_value["bodySize"], len(body))
 
     def test_includes_error_when_present(self):
         """Test including error in output value."""
-        output_value = build_output_value(
-            500, "Internal Server Error", {}, error="Database connection failed"
-        )
+        output_value = build_output_value(500, "Internal Server Error", {}, error="Database connection failed")
         self.assertEqual(output_value["errorMessage"], "Database connection failed")
-
-    def test_includes_truncation_flag(self):
-        """Test truncation flag in output value."""
-        body = b"x" * 100
-        output_value = build_output_value(
-            200, "OK", {}, body=body, body_truncated=True
-        )
-        self.assertEqual(output_value["bodyProcessingError"], "truncated")
 
 
 class TestBuildSchemaMerges(unittest.TestCase):
@@ -285,20 +259,6 @@ class TestBuildSchemaMerges(unittest.TestCase):
         # Should have body merge with BASE64 encoding
         self.assertIn("body", schema_merges)
         self.assertEqual(schema_merges["body"]["encoding"], 1)  # BASE64 = 1
-
-    def test_builds_input_schema_merges_with_truncation(self):
-        """Test input schema merge building with truncation."""
-        input_value = {
-            "method": "POST",
-            "url": "http://example.com/api",
-            "body": "encoded_body",
-            "bodyProcessingError": "truncated",
-        }
-        schema_merges = build_input_schema_merges(input_value, body_truncated=True)
-
-        # Should have bodyProcessingError merge
-        self.assertIn("bodyProcessingError", schema_merges)
-        self.assertEqual(schema_merges["bodyProcessingError"]["match_importance"], 1.0)
 
     def test_builds_output_schema_merges(self):
         """Test output schema merge building."""

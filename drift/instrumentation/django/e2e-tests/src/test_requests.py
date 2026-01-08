@@ -31,12 +31,15 @@ if __name__ == "__main__":
     make_request("GET", "/api/user/test123")
     make_request("GET", "/api/activity")
     make_request("GET", "/api/post/1")
-    make_request("POST", "/api/post", json={
-        "title": "Test Post",
-        "body": "This is a test post body",
-        "userId": 1,
-    })
+    make_request(
+        "POST",
+        "/api/post",
+        json={
+            "title": "Test Post",
+            "body": "This is a test post body",
+            "userId": 1,
+        },
+    )
     make_request("DELETE", "/api/post/1/delete")
 
     print("\nAll requests completed successfully")
-

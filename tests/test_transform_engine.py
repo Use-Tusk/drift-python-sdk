@@ -7,8 +7,8 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from drift.instrumentation.http import HttpSpanData, HttpTransformEngine
 from drift.core.types import SpanKind
+from drift.instrumentation.http import HttpSpanData, HttpTransformEngine
 from drift.instrumentation.http import transform_engine as te
 
 
@@ -27,9 +27,7 @@ class HttpTransformEngineTests(unittest.TestCase):
             ]
         )
 
-        self.assertTrue(
-            engine.should_drop_inbound_request("GET", "/private/123", {"Host": "example.com"})
-        )
+        self.assertTrue(engine.should_drop_inbound_request("GET", "/private/123", {"Host": "example.com"}))
 
         span = HttpSpanData(
             kind=SpanKind.SERVER,
@@ -45,6 +43,9 @@ class HttpTransformEngineTests(unittest.TestCase):
 
         metadata = engine.apply_transforms(span)
         self.assertIsNotNone(metadata)
+        assert metadata is not None
+        assert span.input_value is not None
+        assert span.output_value is not None
         self.assertEqual(metadata.actions[0].type, "drop")
         self.assertEqual(span.input_value["bodySize"], 0)
         self.assertEqual(span.output_value["bodySize"], 0)
@@ -77,6 +78,8 @@ class HttpTransformEngineTests(unittest.TestCase):
 
         metadata = engine.apply_transforms(span)
         self.assertIsNotNone(metadata)
+        assert metadata is not None
+        assert span.input_value is not None
         self.assertTrue(metadata.transformed)
         self.assertTrue(metadata.actions[0].field.startswith("jsonPath"))
 
@@ -130,6 +133,7 @@ class HttpTransformEngineTests(unittest.TestCase):
 
         metadata = engine.apply_transforms(span)
         self.assertIsNotNone(metadata)
+        assert span.input_value is not None
         masked_body = json.loads(base64.b64decode(span.input_value["body"].encode("ascii")))
         self.assertEqual(masked_body["password"], "redacted")
 

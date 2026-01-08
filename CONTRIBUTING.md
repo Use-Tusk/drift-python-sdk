@@ -21,9 +21,9 @@ uv sync --all-extras
 This project uses [ruff](https://docs.astral.sh/ruff/) for linting/formatting and [ty](https://github.com/astral-sh/ty) for type checking.
 
 ```bash
-uv run ruff check drift/ --fix   # Lint and auto-fix
-uv run ruff format drift/        # Format
-uv run ty check drift/           # Type check
+uv run ruff check drift/ tests/ --fix  # Lint and auto-fix
+uv run ruff format drift/ tests/       # Format
+uv run ty check drift/ tests/          # Type check
 ```
 
 ## Running Tests

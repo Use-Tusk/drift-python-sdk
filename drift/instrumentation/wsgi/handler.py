@@ -20,9 +20,14 @@ from opentelemetry.trace import StatusCode as OTelStatusCode
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from _typeshed import OptExcInfo
     from _typeshed.wsgi import StartResponse, WSGIApplication, WSGIEnvironment
     from opentelemetry.trace import Span
+
+    # Type for unbound WSGI method like Flask.wsgi_app that takes (self, environ, start_response)
+    WsgiAppMethod = Callable[[WSGIApplication, WSGIEnvironment, StartResponse], "Iterable[bytes]"]
 
 
 from ...core.tracing import TdSpanAttributes
@@ -50,7 +55,7 @@ def handle_wsgi_request(
     app: WSGIApplication,
     environ: WSGIEnvironment,
     start_response: StartResponse,
-    original_wsgi_app: WSGIApplication,
+    original_wsgi_app: WsgiAppMethod,
     framework_name: str = "wsgi",
     instrumentation_name: str | None = None,
     transform_engine: HttpTransformEngine | None = None,

@@ -59,6 +59,7 @@ class TraceBlockingManager:
                 if cls._instance is None:
                     cls._instance = TraceBlockingManager()
                     cls._instance._start_cleanup_thread()
+        assert cls._instance is not None
         return cls._instance
 
     def block_trace(self, trace_id: str, reason: str = "size_limit") -> None:

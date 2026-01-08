@@ -108,8 +108,9 @@ class MockConnection:
 
             return instrumentation._traced_executemany(cursor, noop_executemany, sdk, query, vars_list)
 
-        cursor.execute = mock_execute
-        cursor.executemany = mock_executemany
+        # Monkey-patch mock functions onto cursor
+        cursor.execute = mock_execute  # type: ignore[method-assign]
+        cursor.executemany = mock_executemany  # type: ignore[method-assign]
 
         logger.debug("[MOCK_CONNECTION] Created cursor")
         return cursor
@@ -317,8 +318,8 @@ class Psycopg2Instrumentation(InstrumentationBase):
             return connection
 
         # Apply patch
-        module.connect = patched_connect  # pyright: ignore[reportAttributeAccessIssue]
-        logger.info(f"psycopg2.connect instrumented. module.connect is now: {module.connect}")
+        module.connect = patched_connect  # type: ignore[attr-defined]
+        logger.info(f"psycopg2.connect instrumented. module.connect is now: {getattr(module, 'connect', None)}")
 
         # Also verify it's actually patched
         import psycopg2
@@ -674,8 +675,8 @@ class Psycopg2Instrumentation(InstrumentationBase):
                 submodule_name="query",
                 input_value=input_value,
                 output_value=None,
-                input_schema=None,  # pyright: ignore[reportArgumentType]
-                output_schema=None,  # pyright: ignore[reportArgumentType]
+                input_schema=None,  # type: ignore[arg-type]
+                output_schema=None,  # type: ignore[arg-type]
                 input_schema_hash=input_result.decoded_schema_hash,
                 output_schema_hash="",
                 input_value_hash=input_result.decoded_value_hash,
