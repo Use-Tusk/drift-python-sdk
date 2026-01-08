@@ -15,13 +15,14 @@ if TYPE_CHECKING:
     Receive = Callable[[], Awaitable[dict[str, Any]]]
     Send = Callable[[dict[str, Any]], Awaitable[None]]
 
-from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind as OTelSpanKind
-from opentelemetry.trace import Status, set_span_in_context
+from opentelemetry.trace import Status
 from opentelemetry.trace import StatusCode as OTelStatusCode
 
 from ...core.drift_sdk import TuskDrift
+from ...core.mode_utils import handle_record_mode
+from ...core.tracing.span_utils import CreateSpanOptions, SpanInfo, SpanUtils
 from ...core.json_schema_helper import JsonSchemaHelper, SchemaMerge
 from ...core.tracing import TdSpanAttributes
 from ...core.types import (
@@ -116,7 +117,6 @@ async def _handle_replay_request(
     from ...core.types import replay_trace_id_context
 
     logger = logging.getLogger(__name__)
-    sdk = TuskDrift.get_instance()
 
     # Extract trace ID from headers (case-insensitive lookup)
     request_headers = _extract_headers(scope)
@@ -143,15 +143,14 @@ async def _handle_replay_request(
     # Set replay trace context using context variable (for CLI communication)
     replay_token = replay_trace_id_context.set(replay_trace_id)
 
-    try:
-        # Get tracer and create span
-        start_time_ns = time.time_ns()
-        route = scope.get("route")
-        route_path = getattr(route, "path", None) if route else None
-        span_name = f"{method} {route_path or raw_path}"
+    start_time_ns = time.time_ns()
+    route = scope.get("route")
+    route_path = getattr(route, "path", None) if route else None
+    span_name = f"{method} {route_path or raw_path}"
 
-        tracer = sdk.get_tracer()
-        span = tracer.start_span(
+    # Create span using SpanUtils
+    span_info = SpanUtils.create_span(
+        CreateSpanOptions(
             name=span_name,
             kind=OTelSpanKind.SERVER,
             attributes={
@@ -160,142 +159,17 @@ async def _handle_replay_request(
                 TdSpanAttributes.INSTRUMENTATION_NAME: "FastAPIInstrumentation",
                 TdSpanAttributes.SUBMODULE_NAME: method,
                 TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
-                TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
+                TdSpanAttributes.IS_PRE_APP_START: False,
                 TdSpanAttributes.IS_ROOT_SPAN: True,
             },
+            is_pre_app_start=False,
         )
-
-        # Make span active
-        ctx = otel_context.get_current()
-        ctx_with_span = set_span_in_context(span, ctx)
-        token = otel_context.attach(ctx_with_span)
-
-        # Set span_kind_context for child spans and socket instrumentation to detect SERVER context
-        span_kind_token = span_kind_context.set(SpanKind.SERVER)
-
-        response_data: dict[str, Any] = {}
-        request_body_parts: list[bytes] = []
-        total_body_size = 0
-        response_body_parts: list[bytes] = []
-        response_body_size = 0
-
-        # Wrap receive to capture request body
-        # No truncation at capture time - span-level 1MB blocking at export handles oversized spans
-        async def wrapped_receive() -> dict[str, Any]:
-            nonlocal total_body_size
-            message = await receive()
-            if message.get("type") == "http.request":
-                body_chunk = message.get("body", b"")
-                if body_chunk:
-                    request_body_parts.append(body_chunk)
-                    total_body_size += len(body_chunk)
-            return message
-
-        # Wrap send to capture response status, headers, and body
-        # No truncation at capture time - span-level 1MB blocking at export handles oversized spans
-        async def wrapped_send(message: dict[str, Any]) -> None:
-            nonlocal response_body_size
-            if message.get("type") == "http.response.start":
-                response_data["status_code"] = message.get("status", 200)
-                response_data["status_message"] = _get_status_message(message.get("status", 200))
-                raw_headers = message.get("headers", [])
-                response_data["headers"] = {
-                    k.decode("utf-8", errors="replace") if isinstance(k, bytes) else k: v.decode(
-                        "utf-8", errors="replace"
-                    )
-                    if isinstance(v, bytes)
-                    else v
-                    for k, v in raw_headers
-                }
-            elif message.get("type") == "http.response.body":
-                body_chunk = message.get("body", b"")
-                if body_chunk:
-                    response_body_parts.append(body_chunk)
-                    response_body_size += len(body_chunk)
-            await send(message)
-
-        await original_call(app, scope, wrapped_receive, wrapped_send)
-        request_body = b"".join(request_body_parts) if request_body_parts else None
-        response_body = b"".join(response_body_parts) if response_body_parts else None
-        _finalize_span(
-            span,
-            scope,
-            response_data,
-            request_body,
-            response_body,
-            start_time_ns,
-            transform_engine,
-        )
-    finally:
-        # Reset context
-        span_kind_context.reset(span_kind_token)
-        replay_trace_id_context.reset(replay_token)
-        otel_context.detach(token)
-        span.end()
-
-
-async def _handle_request(
-    app: Any,
-    scope: Scope,
-    receive: Receive,
-    send: Send,
-    original_call: Callable[..., Any],
-    transform_engine: HttpTransformEngine | None,
-) -> None:
-    """Handle a single FastAPI request by capturing request/response data"""
-    sdk = TuskDrift.get_instance()
-
-    method = scope.get("method", "GET")
-    raw_path = scope.get("path", "/")
-    query_bytes = scope.get("query_string", b"")
-    if isinstance(query_bytes, bytes):
-        query_string = query_bytes.decode("utf-8", errors="replace")
-    else:
-        query_string = str(query_bytes)
-    target_for_drop = f"{raw_path}?{query_string}" if query_string else raw_path
-    headers_for_drop = _extract_headers(scope)
-
-    if transform_engine and transform_engine.should_drop_inbound_request(
-        method,
-        target_for_drop,
-        headers_for_drop,
-    ):
-        return await original_call(app, scope, receive, send)
-
-    # Handle REPLAY mode
-    if sdk.mode == TuskDriftMode.REPLAY:
-        return await _handle_replay_request(
-            app, scope, receive, send, original_call, transform_engine, method, raw_path, target_for_drop
-        )
-
-    # RECORD mode or DISABLED mode
-    start_time_ns = time.time_ns()
-
-    # Get route for span name
-    route = scope.get("route")
-    route_path = getattr(route, "path", None) if route else None
-    span_name = f"{method} {route_path or raw_path}"
-
-    # Create OpenTelemetry span
-    tracer = sdk.get_tracer()
-    span = tracer.start_span(
-        name=span_name,
-        kind=OTelSpanKind.SERVER,
-        attributes={
-            TdSpanAttributes.NAME: span_name,
-            TdSpanAttributes.PACKAGE_NAME: "fastapi",
-            TdSpanAttributes.INSTRUMENTATION_NAME: "FastAPIInstrumentation",
-            TdSpanAttributes.SUBMODULE_NAME: method,
-            TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
-            TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
-            TdSpanAttributes.IS_ROOT_SPAN: True,
-        },
     )
 
-    # Make span active for child spans (e.g., outbound HTTP calls)
-    ctx = otel_context.get_current()
-    ctx_with_span = set_span_in_context(span, ctx)
-    token = otel_context.attach(ctx_with_span)
+    if not span_info:
+        # Failed to create span, just process the request
+        replay_trace_id_context.reset(replay_token)
+        return await original_call(app, scope, receive, send)
 
     # Set span_kind_context for child spans and socket instrumentation to detect SERVER context
     span_kind_token = span_kind_context.set(SpanKind.SERVER)
@@ -307,7 +181,6 @@ async def _handle_request(
     response_body_size = 0
 
     # Wrap receive to capture request body
-    # No truncation at capture time - span-level 1MB blocking at export handles oversized spans
     async def wrapped_receive() -> dict[str, Any]:
         nonlocal total_body_size
         message = await receive()
@@ -319,17 +192,16 @@ async def _handle_request(
         return message
 
     # Wrap send to capture response status, headers, and body
-    # No truncation at capture time - span-level 1MB blocking at export handles oversized spans
     async def wrapped_send(message: dict[str, Any]) -> None:
         nonlocal response_body_size
         if message.get("type") == "http.response.start":
             response_data["status_code"] = message.get("status", 200)
-            # ASGI doesn't provide status message directly, derive from status code
             response_data["status_message"] = _get_status_message(message.get("status", 200))
-            # Convert headers from list of tuples to dict
             raw_headers = message.get("headers", [])
             response_data["headers"] = {
-                k.decode("utf-8", errors="replace") if isinstance(k, bytes) else k: v.decode("utf-8", errors="replace")
+                k.decode("utf-8", errors="replace") if isinstance(k, bytes) else k: v.decode(
+                    "utf-8", errors="replace"
+                )
                 if isinstance(v, bytes)
                 else v
                 for k, v in raw_headers
@@ -342,18 +214,135 @@ async def _handle_request(
         await send(message)
 
     try:
-        await original_call(app, scope, wrapped_receive, wrapped_send)
-        request_body = b"".join(request_body_parts) if request_body_parts else None
-        response_body = b"".join(response_body_parts) if response_body_parts else None
-        _finalize_span(
-            span,
-            scope,
-            response_data,
-            request_body,
-            response_body,
-            start_time_ns,
-            transform_engine,
+        with SpanUtils.with_span(span_info):
+            await original_call(app, scope, wrapped_receive, wrapped_send)
+            request_body = b"".join(request_body_parts) if request_body_parts else None
+            response_body = b"".join(response_body_parts) if response_body_parts else None
+            _finalize_span(
+                span_info,
+                scope,
+                response_data,
+                request_body,
+                response_body,
+                start_time_ns,
+                transform_engine,
+            )
+    finally:
+        # Reset context
+        span_kind_context.reset(span_kind_token)
+        replay_trace_id_context.reset(replay_token)
+        span_info.span.end()
+
+
+async def _record_request(
+    app: Any,
+    scope: Scope,
+    receive: Receive,
+    send: Send,
+    original_call: Callable[..., Any],
+    transform_engine: HttpTransformEngine | None,
+    method: str,
+    raw_path: str,
+    is_pre_app_start: bool,
+) -> None:
+    """Handle request in RECORD mode with span creation using SpanUtils.
+
+    Args:
+        app: FastAPI application instance
+        scope: ASGI scope dictionary
+        receive: ASGI receive callable
+        send: ASGI send callable
+        original_call: Original FastAPI __call__ method
+        transform_engine: HTTP transform engine for request/response transforms
+        method: HTTP method (GET, POST, etc.)
+        raw_path: Request path
+        is_pre_app_start: Whether this request occurred before app was marked ready
+    """
+    start_time_ns = time.time_ns()
+
+    # Get route for span name
+    route = scope.get("route")
+    route_path = getattr(route, "path", None) if route else None
+    span_name = f"{method} {route_path or raw_path}"
+
+    # Create span using SpanUtils
+    span_info = SpanUtils.create_span(
+        CreateSpanOptions(
+            name=span_name,
+            kind=OTelSpanKind.SERVER,
+            attributes={
+                TdSpanAttributes.NAME: span_name,
+                TdSpanAttributes.PACKAGE_NAME: "fastapi",
+                TdSpanAttributes.INSTRUMENTATION_NAME: "FastAPIInstrumentation",
+                TdSpanAttributes.SUBMODULE_NAME: method,
+                TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
+                TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+                TdSpanAttributes.IS_ROOT_SPAN: True,
+            },
+            is_pre_app_start=is_pre_app_start,
         )
+    )
+
+    if not span_info:
+        # Failed to create span, just process the request
+        return await original_call(app, scope, receive, send)
+
+    # Set span_kind_context for child spans and socket instrumentation to detect SERVER context
+    span_kind_token = span_kind_context.set(SpanKind.SERVER)
+
+    response_data: dict[str, Any] = {}
+    request_body_parts: list[bytes] = []
+    total_body_size = 0
+    response_body_parts: list[bytes] = []
+    response_body_size = 0
+
+    # Wrap receive to capture request body
+    async def wrapped_receive() -> dict[str, Any]:
+        nonlocal total_body_size
+        message = await receive()
+        if message.get("type") == "http.request":
+            body_chunk = message.get("body", b"")
+            if body_chunk:
+                request_body_parts.append(body_chunk)
+                total_body_size += len(body_chunk)
+        return message
+
+    # Wrap send to capture response status, headers, and body
+    async def wrapped_send(message: dict[str, Any]) -> None:
+        nonlocal response_body_size
+        if message.get("type") == "http.response.start":
+            response_data["status_code"] = message.get("status", 200)
+            response_data["status_message"] = _get_status_message(message.get("status", 200))
+            raw_headers = message.get("headers", [])
+            response_data["headers"] = {
+                k.decode("utf-8", errors="replace") if isinstance(k, bytes) else k: v.decode(
+                    "utf-8", errors="replace"
+                )
+                if isinstance(v, bytes)
+                else v
+                for k, v in raw_headers
+            }
+        elif message.get("type") == "http.response.body":
+            body_chunk = message.get("body", b"")
+            if body_chunk:
+                response_body_parts.append(body_chunk)
+                response_body_size += len(body_chunk)
+        await send(message)
+
+    try:
+        with SpanUtils.with_span(span_info):
+            await original_call(app, scope, wrapped_receive, wrapped_send)
+            request_body = b"".join(request_body_parts) if request_body_parts else None
+            response_body = b"".join(response_body_parts) if response_body_parts else None
+            _finalize_span(
+                span_info,
+                scope,
+                response_data,
+                request_body,
+                response_body,
+                start_time_ns,
+                transform_engine,
+            )
     except Exception as e:
         response_data["status_code"] = 500
         response_data["error"] = str(e)
@@ -361,7 +350,7 @@ async def _handle_request(
         request_body = b"".join(request_body_parts) if request_body_parts else None
         response_body = b"".join(response_body_parts) if response_body_parts else None
         _finalize_span(
-            span,
+            span_info,
             scope,
             response_data,
             request_body,
@@ -371,14 +360,64 @@ async def _handle_request(
         )
         raise
     finally:
-        # Reset trace context
         span_kind_context.reset(span_kind_token)
-        otel_context.detach(token)
-        span.end()
+        span_info.span.end()
+
+
+async def _handle_request(
+    app: Any,
+    scope: Scope,
+    receive: Receive,
+    send: Send,
+    original_call: Callable[..., Any],
+    transform_engine: HttpTransformEngine | None,
+) -> None:
+    """Handle a single FastAPI request by capturing request/response data."""
+    sdk = TuskDrift.get_instance()
+
+    method = scope.get("method", "GET")
+    raw_path = scope.get("path", "/")
+    query_bytes = scope.get("query_string", b"")
+    if isinstance(query_bytes, bytes):
+        query_string = query_bytes.decode("utf-8", errors="replace")
+    else:
+        query_string = str(query_bytes)
+    target_for_drop = f"{raw_path}?{query_string}" if query_string else raw_path
+    headers_for_drop = _extract_headers(scope)
+
+    # Check if request should be dropped by transform engine
+    if transform_engine and transform_engine.should_drop_inbound_request(
+        method,
+        target_for_drop,
+        headers_for_drop,
+    ):
+        return await original_call(app, scope, receive, send)
+
+    # DISABLED mode - just pass through
+    if sdk.mode == TuskDriftMode.DISABLED:
+        return await original_call(app, scope, receive, send)
+
+    # REPLAY mode - handle trace ID extraction and context setup
+    if sdk.mode == TuskDriftMode.REPLAY:
+        return await _handle_replay_request(
+            app, scope, receive, send, original_call, transform_engine, method, raw_path, target_for_drop
+        )
+
+    # RECORD mode - use handle_record_mode for consistent is_pre_app_start logic
+    result = handle_record_mode(
+        original_function_call=lambda: original_call(app, scope, receive, send),
+        record_mode_handler=lambda is_pre_app_start: _record_request(
+            app, scope, receive, send, original_call, transform_engine, method, raw_path, is_pre_app_start
+        ),
+        span_kind=OTelSpanKind.SERVER,
+    )
+
+    # handle_record_mode returns a coroutine that needs to be awaited
+    return await result
 
 
 def _finalize_span(
-    span: trace.Span,
+    span_info: SpanInfo,
     scope: Scope,
     response_data: dict[str, Any],
     request_body: bytes | None,
@@ -386,7 +425,17 @@ def _finalize_span(
     start_time_ns: int,
     transform_engine: HttpTransformEngine | None,
 ) -> None:
-    """Finalize span with request/response data"""
+    """Finalize span with request/response data.
+
+    Args:
+        span_info: SpanInfo containing trace/span IDs and span reference
+        scope: ASGI scope dictionary
+        response_data: Response data dictionary
+        request_body: Request body bytes
+        response_body: Response body bytes
+        start_time_ns: Start time in nanoseconds
+        transform_engine: HTTP transform engine
+    """
 
     method = scope.get("method", "GET")
     path = scope.get("path", "/")
@@ -451,9 +500,8 @@ def _finalize_span(
     decoded_type = get_decoded_type(content_type)
 
     if should_block_content_type(decoded_type):
-        # Extract trace_id from span
-        span_context = span.get_span_context()
-        trace_id = format(span_context.trace_id, "032x")
+        # Use trace_id from span_info
+        trace_id = span_info.trace_id
 
         blocking_mgr = TraceBlockingManager.get_instance()
         blocking_mgr.block_trace(trace_id, reason=f"binary_content:{decoded_type.name if decoded_type else 'unknown'}")
@@ -480,9 +528,9 @@ def _finalize_span(
     status_code = response_data.get("status_code", 200)
     # Match Node SDK: >= 300 is considered an error (redirects, client errors, server errors)
     if status_code >= 300:
-        span.set_status(Status(OTelStatusCode.ERROR, f"HTTP {status_code}"))
+        span_info.span.set_status(Status(OTelStatusCode.ERROR, f"HTTP {status_code}"))
     else:
-        span.set_status(Status(OTelStatusCode.OK))
+        span_info.span.set_status(Status(OTelStatusCode.OK))
 
     # Build schema merge hints including body encoding
     input_schema_merges = dict(HEADER_SCHEMA_MERGES)
@@ -501,17 +549,17 @@ def _finalize_span(
     output_schema_info = JsonSchemaHelper.generate_schema_and_hash(output_value, output_schema_merges)
 
     # Set span attributes
-    span.set_attribute(TdSpanAttributes.INPUT_VALUE, json.dumps(input_value))
-    span.set_attribute(TdSpanAttributes.OUTPUT_VALUE, json.dumps(output_value))
-    span.set_attribute(TdSpanAttributes.INPUT_SCHEMA, json.dumps(input_schema_info.schema.to_primitive()))
-    span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA, json.dumps(output_schema_info.schema.to_primitive()))
-    span.set_attribute(TdSpanAttributes.INPUT_SCHEMA_HASH, input_schema_info.decoded_schema_hash)
-    span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA_HASH, output_schema_info.decoded_schema_hash)
-    span.set_attribute(TdSpanAttributes.INPUT_VALUE_HASH, input_schema_info.decoded_value_hash)
-    span.set_attribute(TdSpanAttributes.OUTPUT_VALUE_HASH, output_schema_info.decoded_value_hash)
+    span_info.span.set_attribute(TdSpanAttributes.INPUT_VALUE, json.dumps(input_value))
+    span_info.span.set_attribute(TdSpanAttributes.OUTPUT_VALUE, json.dumps(output_value))
+    span_info.span.set_attribute(TdSpanAttributes.INPUT_SCHEMA, json.dumps(input_schema_info.schema.to_primitive()))
+    span_info.span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA, json.dumps(output_schema_info.schema.to_primitive()))
+    span_info.span.set_attribute(TdSpanAttributes.INPUT_SCHEMA_HASH, input_schema_info.decoded_schema_hash)
+    span_info.span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA_HASH, output_schema_info.decoded_schema_hash)
+    span_info.span.set_attribute(TdSpanAttributes.INPUT_VALUE_HASH, input_schema_info.decoded_value_hash)
+    span_info.span.set_attribute(TdSpanAttributes.OUTPUT_VALUE_HASH, output_schema_info.decoded_value_hash)
 
     if transform_metadata:
-        span.set_attribute(TdSpanAttributes.TRANSFORM_METADATA, json.dumps(transform_metadata))
+        span_info.span.set_attribute(TdSpanAttributes.TRANSFORM_METADATA, json.dumps(transform_metadata))
 
 
 def _build_url(scope: Scope) -> str:
