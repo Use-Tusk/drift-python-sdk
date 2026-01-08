@@ -211,13 +211,17 @@ class InstrumentedConnection:
         object.__setattr__(self, "_connection", connection)
         object.__setattr__(self, "_instrumentation", instrumentation)
         object.__setattr__(self, "_sdk", sdk)
+        # Preserve the connection's default cursor_factory (set at connect() time)
+        object.__setattr__(self, "_default_cursor_factory", getattr(connection, "cursor_factory", None))
 
     def cursor(self, name: str | None = None, cursor_factory: Any = None, *args: Any, **kwargs: Any) -> Any:
         """Intercept cursor creation to wrap user-provided cursor_factory."""
-        # Create instrumented cursor factory (wrapping user's factory if provided)
+        # Use cursor_factory from cursor() call, or fall back to connection's default
+        base_factory = cursor_factory if cursor_factory is not None else self._default_cursor_factory
+        # Create instrumented cursor factory (wrapping the base factory)
         wrapped_factory = self._instrumentation._create_cursor_factory(
             self._sdk,
-            cursor_factory,  # This becomes the base class (None uses default)
+            base_factory,
         )
         return self._connection.cursor(*args, name=name, cursor_factory=wrapped_factory, **kwargs)
 
@@ -606,11 +610,12 @@ class Psycopg2Instrumentation(InstrumentationBase):
 
                 # For all other queries (pre-app-start OR within a request trace), get mock
                 # Wrap in {"_batch": ...} to match the recording format
+                # Normalize to list to match RECORD mode and avoid iterator/serialization issues
                 is_pre_app_start = not sdk.app_ready
                 mock_result = self._try_get_mock(
                     sdk,
                     query,
-                    {"_batch": params_list},
+                    {"_batch": list(params_list)},
                     trace_id,
                     span_id,
                     parent_span_id,
@@ -642,9 +647,11 @@ class Psycopg2Instrumentation(InstrumentationBase):
 
             # RECORD mode: Execute real query and record span
             error = None
+            # Convert to list BEFORE executing to avoid iterator exhaustion
+            params_as_list = list(params_list)
 
             try:
-                result = original_executemany(query, params_list)
+                result = original_executemany(query, params_as_list)
                 return result
             except Exception as e:
                 error = e
@@ -656,7 +663,7 @@ class Psycopg2Instrumentation(InstrumentationBase):
                         span,
                         cursor,
                         query,
-                        {"_batch": list(params_list)},
+                        {"_batch": params_as_list},
                         error,
                     )
         finally:

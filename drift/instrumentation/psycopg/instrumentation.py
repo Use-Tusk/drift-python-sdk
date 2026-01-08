@@ -483,9 +483,11 @@ class PsycopgInstrumentation(InstrumentationBase):
             # RECORD mode: Execute real query and record span
             time.time()
             error = None
+            # Convert to list BEFORE executing to avoid iterator exhaustion
+            params_list = list(params_seq)
 
             try:
-                result = original_executemany(query, params_seq, **kwargs)
+                result = original_executemany(query, params_list, **kwargs)
                 return result
             except Exception as e:
                 error = e
@@ -494,7 +496,6 @@ class PsycopgInstrumentation(InstrumentationBase):
                 # Always create span in RECORD mode (including pre-app-start queries)
                 # Pre-app-start queries are marked with is_pre_app_start=true flag
                 if sdk.mode == TuskDriftMode.RECORD:
-                    params_list = list(params_seq)
                     self._finalize_query_span(
                         span,
                         cursor,
