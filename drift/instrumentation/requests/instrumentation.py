@@ -5,12 +5,10 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import time
 from typing import Any
 from urllib.parse import urlparse
 
-from opentelemetry import context as otel_context
-from opentelemetry.trace import Span, Status, set_span_in_context
+from opentelemetry.trace import Span, Status
 from opentelemetry.trace import SpanKind as OTelSpanKind
 from opentelemetry.trace import StatusCode as OTelStatusCode
 
@@ -37,14 +35,15 @@ class RequestDroppedByTransform(Exception):
 from ...core.data_normalization import create_mock_input_value, remove_none_values
 from ...core.drift_sdk import TuskDrift
 from ...core.json_schema_helper import DecodedType, EncodingType, SchemaMerge
+from ...core.mode_utils import handle_record_mode, handle_replay_mode
 from ...core.tracing import TdSpanAttributes
+from ...core.tracing.span_utils import CreateSpanOptions, SpanUtils
 from ...core.types import (
     PackageType,
     SpanKind,
     SpanStatus,
     StatusCode,
     TuskDriftMode,
-    calling_library_context,
 )
 from ..base import InstrumentationBase
 from ..http import HttpSpanData, HttpTransformEngine
@@ -97,6 +96,7 @@ class RequestsInstrumentation(InstrumentationBase):
 
         # Store original method
         original_request = module.Session.request
+        instrumentation_self = self
 
         def patched_request(session_self, method: str, url: str, **kwargs):
             """Patched Session.request method."""
@@ -106,14 +106,69 @@ class RequestsInstrumentation(InstrumentationBase):
             if sdk.mode == TuskDriftMode.DISABLED:
                 return original_request(session_self, method, url, **kwargs)
 
-            # Get tracer and parse URL for span name
-            tracer = sdk.get_tracer()
-            parsed_url = urlparse(url)
-            span_name = f"{method.upper()} {parsed_url.path or '/'}"
+            def original_call():
+                return original_request(session_self, method, url, **kwargs)
 
-            # Start OpenTelemetry span (automatically inherits parent context)
-            logger.debug(f"[RequestsInstrumentation] Creating span for {method.upper()} {url}")
-            span = tracer.start_span(
+            # REPLAY mode: Use handle_replay_mode for proper background request handling
+            if sdk.mode == TuskDriftMode.REPLAY:
+                return handle_replay_mode(
+                    replay_mode_handler=lambda: instrumentation_self._handle_replay(
+                        sdk, session_self, method, url, original_request, **kwargs
+                    ),
+                    no_op_request_handler=lambda: instrumentation_self._get_default_response(url),
+                    is_server_request=False,
+                )
+
+            # RECORD mode: Use handle_record_mode for proper is_pre_app_start handling
+            return handle_record_mode(
+                original_function_call=original_call,
+                record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record(
+                    sdk, session_self, method, url, is_pre_app_start, original_request, **kwargs
+                ),
+                span_kind=OTelSpanKind.CLIENT,
+            )
+
+        # Apply patch
+        module.Session.request = patched_request
+        logger.info("requests.Session.request instrumented")
+
+    def _get_default_response(self, url: str) -> Any:
+        """Return default response for background requests in REPLAY mode.
+
+        Background requests (health checks, metrics, etc.) that happen outside
+        of any trace context should return a default response instead of failing.
+        """
+        import requests
+
+        response = requests.Response()
+        response.status_code = 200
+        response.reason = "OK"
+        response.url = url
+        response._content = b""
+        response.encoding = "utf-8"
+        logger.debug(f"[RequestsInstrumentation] Returning default response for background request to {url}")
+        return response
+
+    def _handle_replay(
+        self,
+        sdk: TuskDrift,
+        session_self: Any,
+        method: str,
+        url: str,
+        original_request: Any,
+        **kwargs,
+    ) -> Any:
+        """Handle request in REPLAY mode.
+
+        Creates a span, fetches mock response, and returns it.
+        Raises RuntimeError if no mock is found.
+        """
+        parsed_url = urlparse(url)
+        span_name = f"{method.upper()} {parsed_url.path or '/'}"
+
+        # Create span using SpanUtils
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
                 name=span_name,
                 kind=OTelSpanKind.CLIENT,
                 attributes={
@@ -124,57 +179,93 @@ class RequestsInstrumentation(InstrumentationBase):
                     TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
                     TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
                 },
+                is_pre_app_start=not sdk.app_ready,
             )
-            logger.debug(f"[RequestsInstrumentation] Span created: {span}")
+        )
 
-            # Make span active
-            ctx = otel_context.get_current()
-            ctx_with_span = set_span_in_context(span, ctx)
-            token = otel_context.attach(ctx_with_span)
+        if not span_info:
+            raise RuntimeError(f"Error creating span in replay mode for {method} {url}")
 
-            try:
-                # Get span IDs for mock requests
-                span_context = span.get_span_context()
-                trace_id = format(span_context.trace_id, "032x")
-                span_id = format(span_context.span_id, "016x")
+        try:
+            with SpanUtils.with_span(span_info):
+                # Use IDs from SpanInfo (already formatted)
+                mock_response = self._try_get_mock(
+                    sdk,
+                    method,
+                    url,
+                    span_info.trace_id,
+                    span_info.span_id,
+                    **kwargs,
+                )
 
-                # REPLAY mode: Try to get mock
-                if sdk.mode == TuskDriftMode.REPLAY:
-                    mock_response = self._try_get_mock(sdk, method, url, trace_id, span_id, **kwargs)
-                    if mock_response is not None:
-                        return mock_response
+                if mock_response is not None:
+                    return mock_response
 
-                # ===== CHECK DROP TRANSFORMS (matches Node SDK) =====
-                # Check BEFORE making the HTTP request to prevent network traffic
+                # No mock found - raise error in REPLAY mode
+                raise RuntimeError(f"No mock found for {method} {url} in REPLAY mode")
+        finally:
+            span_info.span.end()
+
+    def _handle_record(
+        self,
+        sdk: TuskDrift,
+        session_self: Any,
+        method: str,
+        url: str,
+        is_pre_app_start: bool,
+        original_request: Any,
+        **kwargs,
+    ) -> Any:
+        """Handle request in RECORD mode.
+
+        Creates a span, makes the real request, and records the response.
+        """
+        parsed_url = urlparse(url)
+        span_name = f"{method.upper()} {parsed_url.path or '/'}"
+
+        # Create span using SpanUtils
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name=span_name,
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: span_name,
+                    TdSpanAttributes.PACKAGE_NAME: parsed_url.scheme,
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "RequestsInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: method.upper(),
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
+                    TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+                },
+                is_pre_app_start=is_pre_app_start,
+            )
+        )
+
+        if not span_info:
+            # Span creation failed (trace blocked, etc.) - just make the request
+            return original_request(session_self, method, url, **kwargs)
+
+        try:
+            with SpanUtils.with_span(span_info):
+                # Check drop transforms BEFORE making the request
                 if self._transform_engine and self._transform_engine.should_drop_outbound_request(
                     method.upper(), url, kwargs.get("headers", {})
                 ):
                     # Request should be dropped - mark span and raise exception
-                    span.set_attribute(
+                    span_info.span.set_attribute(
                         TdSpanAttributes.OUTPUT_VALUE,
-                        json.dumps(
-                            {
-                                "bodyProcessingError": "dropped",
-                            }
-                        ),
+                        json.dumps({"bodyProcessingError": "dropped"}),
                     )
-                    span.set_status(Status(OTelStatusCode.ERROR, "Dropped by transform"))
-                    span.end()
-
-                    # Raise exception to indicate drop (matches Node SDK behavior)
+                    span_info.span.set_status(Status(OTelStatusCode.ERROR, "Dropped by transform"))
                     raise RequestDroppedByTransform(
                         f"Outbound request to {url} was dropped by transform rule",
                         method.upper(),
                         url,
                     )
 
-                # RECORD mode or mock not found: Make real request
-                start_time_ns = time.time_ns()
+                # Make the real request
                 error = None
                 response = None
 
-                # Set calling_library_context to prevent socket instrumentation warnings
-                calling_lib_token = calling_library_context.set("RequestsInstrumentation")
                 try:
                     response = original_request(session_self, method, url, **kwargs)
                     return response
@@ -182,27 +273,17 @@ class RequestsInstrumentation(InstrumentationBase):
                     error = e
                     raise
                 finally:
-                    calling_library_context.reset(calling_lib_token)
                     # Finalize span with request/response data
-                    (time.time_ns() - start_time_ns) / 1_000_000
                     self._finalize_span(
-                        span,
+                        span_info.span,
                         method,
                         url,
                         response,
                         error,
                         kwargs,
                     )
-            finally:
-                # Detach context and end span
-                otel_context.detach(token)
-                logger.debug(f"[RequestsInstrumentation] Ending span for {method.upper()} {url}")
-                span.end()
-                logger.debug("[RequestsInstrumentation] Span ended")
-
-        # Apply patch
-        module.Session.request = patched_request
-        logger.info("requests.Session.request instrumented")
+        finally:
+            span_info.span.end()
 
     def _encode_body_to_base64(self, body_data: Any) -> tuple[str | None, int]:
         """Encode body data to base64 string.
@@ -380,7 +461,17 @@ class RequestsInstrumentation(InstrumentationBase):
         response.url = url
 
         # Set headers
-        headers = mock_data.get("headers", {})
+        headers = dict(mock_data.get("headers", {}))
+
+        # Remove content-encoding and transfer-encoding headers since the body
+        # was already decompressed when recorded (requests auto-decompresses)
+        headers_to_remove = []
+        for key in headers:
+            if key.lower() in ("content-encoding", "transfer-encoding"):
+                headers_to_remove.append(key)
+        for key in headers_to_remove:
+            del headers[key]
+
         response.headers.update(headers)
 
         # Set body - decode from base64 if needed

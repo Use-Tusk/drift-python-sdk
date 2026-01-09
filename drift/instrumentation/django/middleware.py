@@ -179,7 +179,7 @@ class DriftMiddleware:
 
         start_time_ns = time.time_ns()
 
-        method = request.method
+        method = request.method or ""
         path = request.path
         span_name = f"{method} {path}"
 
@@ -397,7 +397,7 @@ class DriftMiddleware:
             status = SpanStatus(code=StatusCode.OK, message="")
 
         # Django-specific: use route template for span name to avoid cardinality explosion
-        method = request.method
+        method = request.method or ""
         route_template = getattr(request, "_drift_route_template", None)
         if route_template:
             # Use route template (e.g., "users/<int:id>/")
@@ -502,7 +502,7 @@ class DriftMiddleware:
         duration_seconds = duration_ns // 1_000_000_000
         duration_nanos = duration_ns % 1_000_000_000
 
-        method = request.method
+        method = request.method or ""
         route_template = getattr(request, "_drift_route_template", None)
         span_name = f"{method} {route_template}" if route_template else f"{method} {request.path}"
 

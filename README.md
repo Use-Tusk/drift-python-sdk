@@ -27,6 +27,9 @@ pip install tusk-drift-python-sdk[flask]
 
 # FastAPI support
 pip install tusk-drift-python-sdk[fastapi]
+
+# Django support
+pip install tusk-drift-python-sdk[django]
 ```
 
 ## Requirements
