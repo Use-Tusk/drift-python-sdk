@@ -868,6 +868,33 @@ class HttpxInstrumentation(InstrumentationBase):
                 return value
         return None
 
+    def _get_request_body_safely(self, request: Any) -> bytes | None:
+        """Safely get request body content.
+
+        For multipart/streaming requests, the body may not be available
+        until request.read() is called. This method handles the edge cases.
+
+        Args:
+            request: httpx.Request object
+
+        Returns:
+            bytes content or None if unavailable
+        """
+        try:
+            # Check if content is already available (non-streaming requests)
+            if hasattr(request, '_content') and request._content is not None:
+                return request.content
+
+            # For streaming/multipart requests, read the content
+            # This is safe because:
+            # - In REPLAY mode: we're not sending the actual request anyway
+            # - In RECORD mode finalize: the request has already been sent
+            request.read()
+            return request.content
+        except Exception:
+            # Content not available - could be streaming or error
+            return None
+
     def _try_get_mock_from_request_sync(
         self,
         sdk: TuskDrift,
@@ -898,11 +925,12 @@ class HttpxInstrumentation(InstrumentationBase):
             if hasattr(request.url, 'params'):
                 params = dict(request.url.params)
 
-            # Get body from request.content (already bytes)
+            # Get body from request - handle streaming/multipart bodies
             body_base64 = None
             body_size = 0
-            if request.content:
-                body_base64, body_size = self._encode_body_to_base64(request.content)
+            request_body = self._get_request_body_safely(request)
+            if request_body:
+                body_base64, body_size = self._encode_body_to_base64(request_body)
 
             raw_input_value = {
                 "method": method,
@@ -1245,11 +1273,12 @@ class HttpxInstrumentation(InstrumentationBase):
             if hasattr(request.url, 'params'):
                 params = dict(request.url.params)
 
-            # Get request body from request.content (already bytes)
+            # Get request body - handle streaming/multipart bodies
             body_base64 = None
             body_size = 0
-            if request.content:
-                body_base64, body_size = self._encode_body_to_base64(request.content)
+            request_body = self._get_request_body_safely(request)
+            if request_body:
+                body_base64, body_size = self._encode_body_to_base64(request_body)
 
             input_value = {
                 "method": method,
@@ -1610,11 +1639,12 @@ class HttpxInstrumentation(InstrumentationBase):
             if hasattr(request.url, 'params'):
                 params = dict(request.url.params)
 
-            # Get request body from request.content (already bytes)
+            # Get request body - handle streaming/multipart bodies
             body_base64 = None
             body_size = 0
-            if request.content:
-                body_base64, body_size = self._encode_body_to_base64(request.content)
+            request_body = self._get_request_body_safely(request)
+            if request_body:
+                body_base64, body_size = self._encode_body_to_base64(request_body)
 
             input_value = {
                 "method": method,
