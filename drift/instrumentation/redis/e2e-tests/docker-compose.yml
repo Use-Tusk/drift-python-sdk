@@ -24,6 +24,8 @@ services:
       - PYTHONUNBUFFERED=1
     working_dir: /app
     volumes:
+      # Mount SDK source for hot reload (no rebuild needed for SDK changes)
+      - ../../../..:/sdk
       # Mount app source for development
       - ./src:/app/src
       # Mount .tusk folder to persist traces
