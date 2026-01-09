@@ -116,7 +116,7 @@ class TuskDrift:
         effective_api_key = api_key or os.environ.get("TUSK_API_KEY")
 
         if not env:
-            env_from_var = os.environ.get("NODE_ENV") or "development"
+            env_from_var = os.environ.get("ENV") or "development"
             logger.warning(
                 f"Environment not provided in initialization parameters. Using '{env_from_var}' as the environment."
             )

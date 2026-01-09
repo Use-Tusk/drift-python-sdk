@@ -1,0 +1,80 @@
+name: E2E Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'drift/**'
+      - '.github/workflows/e2e.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'drift/**'
+      - '.github/workflows/e2e.yml'
+  workflow_dispatch: {}
+
+jobs:
+  e2e:
+    name: E2E Tests - ${{ matrix.library }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        library: [flask, fastapi, django, redis, requests, httpx, psycopg, psycopg2]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Setup Python
+        run: uv python install 3.12
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
+
+      - name: Install SDK dependencies
+        run: uv sync --all-extras
+
+      - name: Build SDK
+        run: uv build
+
+      - name: Verify SDK build
+        run: |
+          ls -la dist/ || (echo "dist folder not found!" && exit 1)
+          test -f dist/*.whl || (echo "SDK build incomplete!" && exit 1)
+
+      - name: Get latest Tusk CLI version
+        id: tusk-version
+        run: |
+          VERSION=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/Use-Tusk/tusk-drift-cli/releases/latest" \
+            | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Latest Tusk CLI version: $VERSION"
+
+      - name: Run E2E tests for ${{ matrix.library }}
+        env:
+          DOCKER_DEFAULT_PLATFORM: linux/amd64
+          TUSK_CLI_VERSION: ${{ steps.tusk-version.outputs.version }}
+        run: |
+          chmod +x ./drift/instrumentation/${{ matrix.library }}/e2e-tests/run.sh
+          cd ./drift/instrumentation/${{ matrix.library }}/e2e-tests && ./run.sh 8000
+
+      - name: Cleanup Docker resources
+        if: always()
+        run: |
+          # Stop all running containers
+          docker ps -aq | xargs -r docker stop || true
+          docker ps -aq | xargs -r docker rm || true
+          # Clean up volumes
+          docker volume prune -f || true
+          # Clean up networks
+          docker network prune -f || true
