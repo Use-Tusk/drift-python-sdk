@@ -543,7 +543,7 @@ class TuskDrift:
             logger.debug("Replay mode active - ready to serve mocked responses")
         elif self.mode == TuskDriftMode.RECORD:
             logger.debug("Record mode active - capturing inbound requests and responses")
-        
+
         logger.info("App marked as ready")
 
     def collect_span(self, span: CleanSpanData) -> None:
