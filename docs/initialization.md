@@ -57,7 +57,7 @@ Create an initialization file or add the SDK initialization to your application 
     <tr>
       <td><code>env</code></td>
       <td><code>str</code></td>
-      <td><code>os.environ.get("NODE_ENV", "development")</code></td>
+      <td><code>os.environ.get("ENV", "development")</code></td>
       <td>The environment name.</td>
     </tr>
     <tr>
