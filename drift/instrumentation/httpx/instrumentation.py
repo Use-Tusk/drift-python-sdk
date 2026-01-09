@@ -59,13 +59,18 @@ HEADER_SCHEMA_MERGES = {
 class HttpxInstrumentation(InstrumentationBase):
     """Instrumentation for the httpx HTTP client library.
 
-    Patches both sync and async clients:
-    - httpx.Client.request (sync)
-    - httpx.AsyncClient.request (async)
+    Patches both sync and async clients at the send() level:
+    - httpx.Client.send (sync)
+    - httpx.AsyncClient.send (async)
+
+    We patch send() instead of request() because both request() and stream()
+    call send() internally. This ensures we capture all HTTP calls including
+    streaming requests (client.stream()) and direct send() calls.
 
     Supports:
     - Intercept HTTP requests in REPLAY mode and return mocked responses
     - Capture request/response data as CLIENT spans in RECORD mode
+    - Streaming responses via client.stream() and AsyncClient.stream()
     """
 
     def __init__(self, enabled: bool = True, transforms: dict[str, Any] | None = None) -> None:
@@ -122,27 +127,44 @@ class HttpxInstrumentation(InstrumentationBase):
         return response
 
     def _patch_sync_client(self, module: Any) -> None:
-        """Patch httpx.Client.request for sync HTTP calls."""
-        original_request = module.Client.request
+        """Patch httpx.Client.send for sync HTTP calls.
+
+        We patch send() instead of request() because both request() and stream()
+        call send() internally. This ensures we capture all HTTP calls including
+        streaming requests.
+        """
+        original_send = module.Client.send
         instrumentation_self = self
 
-        def patched_request(client_self, method: str, url: Any, **kwargs):
-            """Patched Client.request method."""
-            url_str = str(url)
+        def patched_send(
+            client_self,
+            request,  # httpx.Request object
+            *,
+            stream: bool = False,
+            auth=None,
+            follow_redirects=None,
+        ):
+            """Patched Client.send method."""
+            url_str = str(request.url)
+            method = request.method
             sdk = TuskDrift.get_instance()
 
             # Pass through if SDK is disabled
             if sdk.mode == TuskDriftMode.DISABLED:
-                return original_request(client_self, method, url, **kwargs)
+                return original_send(
+                    client_self, request, stream=stream, auth=auth, follow_redirects=follow_redirects
+                )
 
             def original_call():
-                return original_request(client_self, method, url, **kwargs)
+                return original_send(
+                    client_self, request, stream=stream, auth=auth, follow_redirects=follow_redirects
+                )
 
             # REPLAY mode: Use handle_replay_mode for proper background request handling
             if sdk.mode == TuskDriftMode.REPLAY:
                 return handle_replay_mode(
-                    replay_mode_handler=lambda: instrumentation_self._handle_replay_sync(
-                        sdk, module, method, url_str, **kwargs
+                    replay_mode_handler=lambda: instrumentation_self._handle_replay_send_sync(
+                        sdk, module, request
                     ),
                     no_op_request_handler=lambda: instrumentation_self._get_default_response(module, url_str),
                     is_server_request=False,
@@ -151,15 +173,157 @@ class HttpxInstrumentation(InstrumentationBase):
             # RECORD mode: Use handle_record_mode for proper is_pre_app_start handling
             return handle_record_mode(
                 original_function_call=original_call,
-                record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record_sync(
-                    client_self, method, url_str, is_pre_app_start, original_request, **kwargs
+                record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record_send_sync(
+                    client_self, request, stream, is_pre_app_start, original_send,
+                    auth=auth, follow_redirects=follow_redirects
                 ),
                 span_kind=OTelSpanKind.CLIENT,
             )
 
         # Apply patch
-        module.Client.request = patched_request
-        logger.info("httpx.Client.request instrumented")
+        module.Client.send = patched_send
+        logger.info("httpx.Client.send instrumented")
+
+    def _handle_replay_send_sync(
+        self,
+        sdk: TuskDrift,
+        httpx_module: Any,
+        request: Any,  # httpx.Request object
+    ) -> Any:
+        """Handle send in REPLAY mode (sync).
+
+        Creates a span, fetches mock response from the Request object, and returns it.
+        Raises RuntimeError if no mock is found.
+        """
+        method = request.method
+        url = str(request.url)
+        parsed_url = urlparse(url)
+        span_name = f"{method} {parsed_url.path or '/'}"
+
+        # Create span using SpanUtils
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name=span_name,
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: span_name,
+                    TdSpanAttributes.PACKAGE_NAME: parsed_url.scheme,
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "HttpxInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: method,
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
+                    TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
+                },
+                is_pre_app_start=not sdk.app_ready,
+            )
+        )
+
+        if not span_info:
+            raise RuntimeError(f"Error creating span in replay mode for {method} {url}")
+
+        try:
+            with SpanUtils.with_span(span_info):
+                # Use IDs from SpanInfo (already formatted)
+                mock_response = self._try_get_mock_from_request_sync(
+                    sdk,
+                    httpx_module,
+                    request,
+                    span_info.trace_id,
+                    span_info.span_id,
+                )
+
+                if mock_response is not None:
+                    return mock_response
+
+                # No mock found - raise error in REPLAY mode
+                raise RuntimeError(f"No mock found for {method} {url} in REPLAY mode")
+        finally:
+            span_info.span.end()
+
+    def _handle_record_send_sync(
+        self,
+        client_self: Any,
+        request: Any,  # httpx.Request object
+        stream: bool,
+        is_pre_app_start: bool,
+        original_send: Any,
+        **kwargs,
+    ) -> Any:
+        """Handle send in RECORD mode (sync).
+
+        Creates a span, makes the real request, and records the response.
+        For streaming responses, reads the body to capture it for recording.
+        """
+        method = request.method
+        url = str(request.url)
+        parsed_url = urlparse(url)
+        span_name = f"{method} {parsed_url.path or '/'}"
+
+        # Create span using SpanUtils
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name=span_name,
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: span_name,
+                    TdSpanAttributes.PACKAGE_NAME: parsed_url.scheme,
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "HttpxInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: method,
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
+                    TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+                },
+                is_pre_app_start=is_pre_app_start,
+            )
+        )
+
+        if not span_info:
+            # Span creation failed (trace blocked, etc.) - just make the request
+            return original_send(client_self, request, stream=stream, **kwargs)
+
+        try:
+            with SpanUtils.with_span(span_info):
+                # Check drop transforms BEFORE making the request
+                headers = dict(request.headers)
+                if self._transform_engine and self._transform_engine.should_drop_outbound_request(
+                    method, url, headers
+                ):
+                    # Request should be dropped - mark span and raise exception
+                    span_info.span.set_attribute(
+                        TdSpanAttributes.OUTPUT_VALUE,
+                        json.dumps({"bodyProcessingError": "dropped"}),
+                    )
+                    span_info.span.set_status(Status(OTelStatusCode.ERROR, "Dropped by transform"))
+                    raise RequestDroppedByTransform(
+                        f"Outbound request to {url} was dropped by transform rule",
+                        method,
+                        url,
+                    )
+
+                # Make the real request
+                error = None
+                response = None
+
+                try:
+                    response = original_send(client_self, request, stream=stream, **kwargs)
+
+                    # For streaming responses, we need to read the body to capture it
+                    # This is necessary for recording the response data
+                    if stream and response is not None:
+                        response.read()
+
+                    return response
+                except Exception as e:
+                    error = e
+                    raise
+                finally:
+                    # Finalize span with request/response data
+                    self._finalize_span_from_request(
+                        span_info.span,
+                        request,
+                        response,
+                        error,
+                    )
+        finally:
+            span_info.span.end()
 
     def _handle_replay_sync(
         self,
@@ -297,28 +461,45 @@ class HttpxInstrumentation(InstrumentationBase):
             span_info.span.end()
 
     def _patch_async_client(self, module: Any) -> None:
-        """Patch httpx.AsyncClient.request for async HTTP calls."""
-        original_request = module.AsyncClient.request
+        """Patch httpx.AsyncClient.send for async HTTP calls.
+
+        We patch send() instead of request() because both request() and stream()
+        call send() internally. This ensures we capture all HTTP calls including
+        streaming requests.
+        """
+        original_send = module.AsyncClient.send
         instrumentation_self = self
 
-        async def patched_request(client_self, method: str, url: Any, **kwargs):
-            """Patched AsyncClient.request method."""
-            url_str = str(url)
+        async def patched_send(
+            client_self,
+            request,  # httpx.Request object
+            *,
+            stream: bool = False,
+            auth=None,
+            follow_redirects=None,
+        ):
+            """Patched AsyncClient.send method."""
+            url_str = str(request.url)
+            method = request.method
             sdk = TuskDrift.get_instance()
 
             # Pass through if SDK is disabled
             if sdk.mode == TuskDriftMode.DISABLED:
-                return await original_request(client_self, method, url, **kwargs)
+                return await original_send(
+                    client_self, request, stream=stream, auth=auth, follow_redirects=follow_redirects
+                )
 
             async def original_call():
-                return await original_request(client_self, method, url, **kwargs)
+                return await original_send(
+                    client_self, request, stream=stream, auth=auth, follow_redirects=follow_redirects
+                )
 
             # REPLAY mode: Use handle_replay_mode for proper background request handling
             # handle_replay_mode returns coroutine which we await
             if sdk.mode == TuskDriftMode.REPLAY:
                 return await handle_replay_mode(
-                    replay_mode_handler=lambda: instrumentation_self._handle_replay_async(
-                        sdk, module, method, url_str, **kwargs
+                    replay_mode_handler=lambda: instrumentation_self._handle_replay_send_async(
+                        sdk, module, request
                     ),
                     no_op_request_handler=lambda: instrumentation_self._get_default_response(module, url_str),
                     is_server_request=False,
@@ -328,15 +509,161 @@ class HttpxInstrumentation(InstrumentationBase):
             # handle_record_mode returns coroutine which we await
             return await handle_record_mode(
                 original_function_call=original_call,
-                record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record_async(
-                    client_self, method, url_str, is_pre_app_start, original_request, **kwargs
+                record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record_send_async(
+                    client_self, request, stream, is_pre_app_start, original_send,
+                    auth=auth, follow_redirects=follow_redirects
                 ),
                 span_kind=OTelSpanKind.CLIENT,
             )
 
         # Apply patch
-        module.AsyncClient.request = patched_request
-        logger.info("httpx.AsyncClient.request instrumented")
+        module.AsyncClient.send = patched_send
+        logger.info("httpx.AsyncClient.send instrumented")
+
+    async def _handle_replay_send_async(
+        self,
+        sdk: TuskDrift,
+        httpx_module: Any,
+        request: Any,  # httpx.Request object
+    ) -> Any:
+        """Handle send in REPLAY mode (async).
+
+        Creates a span, fetches mock response from the Request object, and returns it.
+        Raises RuntimeError if no mock is found.
+
+        Note: Uses sync mock lookup because async httpx in Flask runs via
+        asyncio.run() which creates nested event loop issues with async SDK calls.
+        """
+        method = request.method
+        url = str(request.url)
+        parsed_url = urlparse(url)
+        span_name = f"{method} {parsed_url.path or '/'}"
+
+        # Create span using SpanUtils
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name=span_name,
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: span_name,
+                    TdSpanAttributes.PACKAGE_NAME: parsed_url.scheme,
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "HttpxInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: method,
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
+                    TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
+                },
+                is_pre_app_start=not sdk.app_ready,
+            )
+        )
+
+        if not span_info:
+            raise RuntimeError(f"Error creating span in replay mode for {method} {url}")
+
+        try:
+            with SpanUtils.with_span(span_info):
+                # Use sync mock lookup to avoid nested event loop issues
+                # (Flask uses asyncio.run() which doesn't play well with nested async SDK calls)
+                mock_response = self._try_get_mock_from_request_sync(
+                    sdk,
+                    httpx_module,
+                    request,
+                    span_info.trace_id,
+                    span_info.span_id,
+                )
+
+                if mock_response is not None:
+                    return mock_response
+
+                # No mock found - raise error in REPLAY mode
+                raise RuntimeError(f"No mock found for {method} {url} in REPLAY mode")
+        finally:
+            span_info.span.end()
+
+    async def _handle_record_send_async(
+        self,
+        client_self: Any,
+        request: Any,  # httpx.Request object
+        stream: bool,
+        is_pre_app_start: bool,
+        original_send: Any,
+        **kwargs,
+    ) -> Any:
+        """Handle send in RECORD mode (async).
+
+        Creates a span, makes the real request, and records the response.
+        For streaming responses, reads the body to capture it for recording.
+        """
+        method = request.method
+        url = str(request.url)
+        parsed_url = urlparse(url)
+        span_name = f"{method} {parsed_url.path or '/'}"
+
+        # Create span using SpanUtils
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name=span_name,
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: span_name,
+                    TdSpanAttributes.PACKAGE_NAME: parsed_url.scheme,
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "HttpxInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: method,
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
+                    TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+                },
+                is_pre_app_start=is_pre_app_start,
+            )
+        )
+
+        if not span_info:
+            # Span creation failed (trace blocked, etc.) - just make the request
+            return await original_send(client_self, request, stream=stream, **kwargs)
+
+        try:
+            with SpanUtils.with_span(span_info):
+                # Check drop transforms BEFORE making the request
+                headers = dict(request.headers)
+                if self._transform_engine and self._transform_engine.should_drop_outbound_request(
+                    method, url, headers
+                ):
+                    # Request should be dropped - mark span and raise exception
+                    span_info.span.set_attribute(
+                        TdSpanAttributes.OUTPUT_VALUE,
+                        json.dumps({"bodyProcessingError": "dropped"}),
+                    )
+                    span_info.span.set_status(Status(OTelStatusCode.ERROR, "Dropped by transform"))
+                    raise RequestDroppedByTransform(
+                        f"Outbound request to {url} was dropped by transform rule",
+                        method,
+                        url,
+                    )
+
+                # Make the real request
+                error = None
+                response = None
+
+                try:
+                    response = await original_send(client_self, request, stream=stream, **kwargs)
+
+                    # For streaming responses, we need to read the body to capture it
+                    # This is necessary for recording the response data
+                    if stream and response is not None:
+                        await response.aread()
+
+                    return response
+                except Exception as e:
+                    error = e
+                    raise
+                finally:
+                    # Finalize span with request/response data
+                    await self._finalize_span_from_request_async(
+                        span_info.span,
+                        request,
+                        response,
+                        error,
+                    )
+        finally:
+            span_info.span.end()
 
     async def _handle_replay_async(
         self,
@@ -540,6 +867,102 @@ class HttpxInstrumentation(InstrumentationBase):
             if key.lower() == "content-type":
                 return value
         return None
+
+    def _try_get_mock_from_request_sync(
+        self,
+        sdk: TuskDrift,
+        httpx_module: Any,
+        request: Any,  # httpx.Request object
+        trace_id: str,
+        span_id: str,
+    ) -> Any:
+        """Try to get a mocked response from CLI using Request object (sync version).
+
+        This method extracts request data from the httpx.Request object rather than
+        from kwargs. Used by the send() patch which receives a pre-built Request.
+
+        Returns:
+            Mocked response object if found, None otherwise
+        """
+        try:
+            method = request.method
+            url = str(request.url)
+            parsed_url = urlparse(url)
+
+            # Extract headers from Request
+            headers = dict(request.headers)
+
+            # Extract query params from URL
+            # httpx.URL has a .params attribute that returns QueryParams
+            params = {}
+            if hasattr(request.url, 'params'):
+                params = dict(request.url.params)
+
+            # Get body from request.content (already bytes)
+            body_base64 = None
+            body_size = 0
+            if request.content:
+                body_base64, body_size = self._encode_body_to_base64(request.content)
+
+            raw_input_value = {
+                "method": method,
+                "url": url,
+                "protocol": parsed_url.scheme,
+                "hostname": parsed_url.hostname,
+                "port": parsed_url.port,
+                "path": parsed_url.path or "/",
+                "headers": headers,
+                "query": params,
+            }
+
+            # Add body fields only if body exists
+            if body_base64 is not None:
+                raw_input_value["body"] = body_base64
+                raw_input_value["bodySize"] = body_size
+
+            input_value = create_mock_input_value(raw_input_value)
+
+            # Create schema merge hints for input
+            input_schema_merges = {
+                "headers": SchemaMerge(match_importance=0.0),
+            }
+            if body_base64 is not None:
+                request_content_type = self._get_content_type_header(headers)
+                input_schema_merges["body"] = SchemaMerge(
+                    encoding=EncodingType.BASE64,
+                    decoded_type=self._get_decoded_type_from_content_type(request_content_type),
+                )
+
+            # Use centralized mock finding utility
+            from ...core.mock_utils import find_mock_response_sync
+
+            mock_response_output = find_mock_response_sync(
+                sdk=sdk,
+                trace_id=trace_id,
+                span_id=span_id,
+                name=f"{method} {parsed_url.path or '/'}",
+                package_name=parsed_url.scheme,
+                package_type=PackageType.HTTP,
+                instrumentation_name="HttpxInstrumentation",
+                submodule_name=method,
+                input_value=input_value,
+                kind=SpanKind.CLIENT,
+                input_schema_merges=input_schema_merges,
+            )
+
+            if not mock_response_output or not mock_response_output.found:
+                logger.debug(f"No mock found for {method} {url} (trace_id={trace_id})")
+                return None
+
+            # Create mocked response object
+            if mock_response_output.response is None:
+                logger.debug(f"Mock found but response data is None for {method} {url}")
+                return None
+            return self._create_mock_response(httpx_module, mock_response_output.response, method, url)
+
+        except Exception as e:
+            logger.error(f"Error getting mock for request {request.method} {request.url}: {e}")
+            return None
 
     def _try_get_mock_sync(
         self,
@@ -791,6 +1214,187 @@ class HttpxInstrumentation(InstrumentationBase):
         logger.debug(f"Created mock httpx response: {status_code} for {url}")
         return response
 
+    def _finalize_span_from_request(
+        self,
+        span: Span,
+        request: Any,  # httpx.Request object
+        response: Any,
+        error: Exception | None,
+    ) -> None:
+        """Finalize span with request/response data, extracting info from Request object.
+
+        This method is used by the send() patch which receives a pre-built Request object
+        rather than separate method/url/kwargs.
+
+        Args:
+            span: The OpenTelemetry span to finalize
+            request: The httpx.Request object
+            response: Response object (if successful)
+            error: Exception (if failed)
+        """
+        try:
+            method = request.method
+            url = str(request.url)
+            parsed_url = urlparse(url)
+
+            # ===== BUILD INPUT VALUE =====
+            headers = dict(request.headers)
+
+            # Extract query params from URL
+            params = {}
+            if hasattr(request.url, 'params'):
+                params = dict(request.url.params)
+
+            # Get request body from request.content (already bytes)
+            body_base64 = None
+            body_size = 0
+            if request.content:
+                body_base64, body_size = self._encode_body_to_base64(request.content)
+
+            input_value = {
+                "method": method,
+                "url": url,
+                "protocol": parsed_url.scheme,
+                "hostname": parsed_url.hostname,
+                "port": parsed_url.port,
+                "path": parsed_url.path or "/",
+                "headers": headers,
+                "query": params,
+            }
+
+            # Add body fields only if body exists
+            if body_base64 is not None:
+                input_value["body"] = body_base64
+                input_value["bodySize"] = body_size
+
+            # ===== BUILD OUTPUT VALUE =====
+            output_value = {}
+            status = SpanStatus(code=StatusCode.OK, message="")
+            response_body_base64 = None
+
+            if error:
+                output_value = {
+                    "errorName": type(error).__name__,
+                    "errorMessage": str(error),
+                }
+                status = SpanStatus(code=StatusCode.ERROR, message=str(error))
+            elif response:
+                # Extract response data
+                response_headers = dict(response.headers)
+                response_body_size = 0
+
+                try:
+                    # Get response content (httpx Response has .content property)
+                    response_bytes = response.content
+                    response_body_base64, response_body_size = self._encode_body_to_base64(response_bytes)
+                except Exception:
+                    response_body_base64 = None
+                    response_body_size = 0
+
+                output_value = {
+                    "statusCode": response.status_code,
+                    "statusMessage": response.reason_phrase or "",
+                    "headers": response_headers,
+                }
+
+                # Add body fields only if body exists
+                if response_body_base64 is not None:
+                    output_value["body"] = response_body_base64
+                    output_value["bodySize"] = response_body_size
+
+                if response.status_code >= 400:
+                    status = SpanStatus(
+                        code=StatusCode.ERROR,
+                        message=f"HTTP {response.status_code}",
+                    )
+
+                # Check if response content type should block the trace
+                from ...core.content_type_utils import get_decoded_type, should_block_content_type
+                from ...core.trace_blocking_manager import TraceBlockingManager
+
+                response_content_type = response_headers.get("content-type") or response_headers.get("Content-Type")
+                decoded_type = get_decoded_type(response_content_type)
+
+                if should_block_content_type(decoded_type):
+                    span_context = span.get_span_context()
+                    trace_id = format(span_context.trace_id, "032x")
+
+                    blocking_mgr = TraceBlockingManager.get_instance()
+                    blocking_mgr.block_trace(
+                        trace_id, reason=f"outbound_binary:{decoded_type.name if decoded_type else 'unknown'}"
+                    )
+                    logger.warning(
+                        f"Blocking trace {trace_id} - outbound request returned binary response: {response_content_type}"
+                    )
+                    return
+            else:
+                output_value = {}
+
+            # ===== APPLY TRANSFORMS =====
+            transform_metadata = None
+            if self._transform_engine:
+                span_data = HttpSpanData(
+                    kind=SpanKind.CLIENT,
+                    input_value=input_value,
+                    output_value=output_value,
+                )
+                self._transform_engine.apply_transforms(span_data)
+
+                input_value = span_data.input_value or input_value
+                output_value = span_data.output_value or output_value
+                transform_metadata = span_data.transform_metadata
+
+            # ===== CREATE SCHEMA MERGE HINTS =====
+            request_content_type = self._get_content_type_header(headers)
+            response_content_type = None
+            if response and hasattr(response, "headers"):
+                response_content_type = self._get_content_type_header(dict(response.headers))
+
+            input_schema_merges = {
+                "headers": SchemaMerge(match_importance=0.0),
+            }
+            if body_base64 is not None:
+                input_schema_merges["body"] = SchemaMerge(
+                    encoding=EncodingType.BASE64,
+                    decoded_type=self._get_decoded_type_from_content_type(request_content_type),
+                )
+
+            output_schema_merges = {
+                "headers": SchemaMerge(match_importance=0.0),
+            }
+            if response_body_base64 is not None:
+                output_schema_merges["body"] = SchemaMerge(
+                    encoding=EncodingType.BASE64,
+                    decoded_type=self._get_decoded_type_from_content_type(response_content_type),
+                )
+
+            # ===== SET SPAN ATTRIBUTES =====
+            normalized_input = remove_none_values(input_value)
+            normalized_output = remove_none_values(output_value)
+            span.set_attribute(TdSpanAttributes.INPUT_VALUE, json.dumps(normalized_input))
+            span.set_attribute(TdSpanAttributes.OUTPUT_VALUE, json.dumps(normalized_output))
+
+            from ..wsgi.utilities import _schema_merges_to_dict
+
+            input_schema_merges_dict = _schema_merges_to_dict(input_schema_merges)
+            output_schema_merges_dict = _schema_merges_to_dict(output_schema_merges)
+
+            span.set_attribute(TdSpanAttributes.INPUT_SCHEMA_MERGES, json.dumps(input_schema_merges_dict))
+            span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA_MERGES, json.dumps(output_schema_merges_dict))
+
+            if transform_metadata:
+                span.set_attribute(TdSpanAttributes.TRANSFORM_METADATA, json.dumps(transform_metadata))
+
+            # Set status
+            if status.code == StatusCode.ERROR:
+                span.set_status(Status(OTelStatusCode.ERROR, status.message))
+            else:
+                span.set_status(Status(OTelStatusCode.OK))
+
+        except Exception as e:
+            logger.error(f"Error finalizing span for {request.method} {request.url}: {e}")
+            span.set_status(Status(OTelStatusCode.ERROR, str(e)))
+
     def _finalize_span(
         self,
         span: Span,
@@ -973,6 +1577,185 @@ class HttpxInstrumentation(InstrumentationBase):
 
         except Exception as e:
             logger.error(f"Error finalizing span for {method} {url}: {e}")
+            span.set_status(Status(OTelStatusCode.ERROR, str(e)))
+
+    async def _finalize_span_from_request_async(
+        self,
+        span: Span,
+        request: Any,  # httpx.Request object
+        response: Any,
+        error: Exception | None,
+    ) -> None:
+        """Finalize span with request/response data, extracting info from Request object (async).
+
+        This method is used by the async send() patch which receives a pre-built Request object
+        rather than separate method/url/kwargs.
+
+        Args:
+            span: The OpenTelemetry span to finalize
+            request: The httpx.Request object
+            response: Response object (if successful)
+            error: Exception (if failed)
+        """
+        try:
+            method = request.method
+            url = str(request.url)
+            parsed_url = urlparse(url)
+
+            # ===== BUILD INPUT VALUE =====
+            headers = dict(request.headers)
+
+            # Extract query params from URL
+            params = {}
+            if hasattr(request.url, 'params'):
+                params = dict(request.url.params)
+
+            # Get request body from request.content (already bytes)
+            body_base64 = None
+            body_size = 0
+            if request.content:
+                body_base64, body_size = self._encode_body_to_base64(request.content)
+
+            input_value = {
+                "method": method,
+                "url": url,
+                "protocol": parsed_url.scheme,
+                "hostname": parsed_url.hostname,
+                "port": parsed_url.port,
+                "path": parsed_url.path or "/",
+                "headers": headers,
+                "query": params,
+            }
+
+            # Add body fields only if body exists
+            if body_base64 is not None:
+                input_value["body"] = body_base64
+                input_value["bodySize"] = body_size
+
+            # ===== BUILD OUTPUT VALUE =====
+            output_value = {}
+            status = SpanStatus(code=StatusCode.OK, message="")
+            response_body_base64 = None
+
+            if error:
+                output_value = {
+                    "errorName": type(error).__name__,
+                    "errorMessage": str(error),
+                }
+                status = SpanStatus(code=StatusCode.ERROR, message=str(error))
+            elif response:
+                response_headers = dict(response.headers)
+                response_body_size = 0
+
+                try:
+                    # For async responses, content should already be read
+                    response_bytes = response.content
+                    response_body_base64, response_body_size = self._encode_body_to_base64(response_bytes)
+                except Exception:
+                    response_body_base64 = None
+                    response_body_size = 0
+
+                output_value = {
+                    "statusCode": response.status_code,
+                    "statusMessage": response.reason_phrase or "",
+                    "headers": response_headers,
+                }
+
+                if response_body_base64 is not None:
+                    output_value["body"] = response_body_base64
+                    output_value["bodySize"] = response_body_size
+
+                if response.status_code >= 400:
+                    status = SpanStatus(
+                        code=StatusCode.ERROR,
+                        message=f"HTTP {response.status_code}",
+                    )
+
+                # Check if response content type should block the trace
+                from ...core.content_type_utils import get_decoded_type, should_block_content_type
+                from ...core.trace_blocking_manager import TraceBlockingManager
+
+                response_content_type = response_headers.get("content-type") or response_headers.get("Content-Type")
+                decoded_type = get_decoded_type(response_content_type)
+
+                if should_block_content_type(decoded_type):
+                    span_context = span.get_span_context()
+                    trace_id = format(span_context.trace_id, "032x")
+
+                    blocking_mgr = TraceBlockingManager.get_instance()
+                    blocking_mgr.block_trace(
+                        trace_id, reason=f"outbound_binary:{decoded_type.name if decoded_type else 'unknown'}"
+                    )
+                    logger.warning(
+                        f"Blocking trace {trace_id} - outbound request returned binary response: {response_content_type}"
+                    )
+                    return
+            else:
+                output_value = {}
+
+            # ===== APPLY TRANSFORMS =====
+            transform_metadata = None
+            if self._transform_engine:
+                span_data = HttpSpanData(
+                    kind=SpanKind.CLIENT,
+                    input_value=input_value,
+                    output_value=output_value,
+                )
+                self._transform_engine.apply_transforms(span_data)
+
+                input_value = span_data.input_value or input_value
+                output_value = span_data.output_value or output_value
+                transform_metadata = span_data.transform_metadata
+
+            # ===== CREATE SCHEMA MERGE HINTS =====
+            request_content_type = self._get_content_type_header(headers)
+            response_content_type = None
+            if response and hasattr(response, "headers"):
+                response_content_type = self._get_content_type_header(dict(response.headers))
+
+            input_schema_merges = {
+                "headers": SchemaMerge(match_importance=0.0),
+            }
+            if body_base64 is not None:
+                input_schema_merges["body"] = SchemaMerge(
+                    encoding=EncodingType.BASE64,
+                    decoded_type=self._get_decoded_type_from_content_type(request_content_type),
+                )
+
+            output_schema_merges = {
+                "headers": SchemaMerge(match_importance=0.0),
+            }
+            if response_body_base64 is not None:
+                output_schema_merges["body"] = SchemaMerge(
+                    encoding=EncodingType.BASE64,
+                    decoded_type=self._get_decoded_type_from_content_type(response_content_type),
+                )
+
+            # ===== SET SPAN ATTRIBUTES =====
+            normalized_input = remove_none_values(input_value)
+            normalized_output = remove_none_values(output_value)
+            span.set_attribute(TdSpanAttributes.INPUT_VALUE, json.dumps(normalized_input))
+            span.set_attribute(TdSpanAttributes.OUTPUT_VALUE, json.dumps(normalized_output))
+
+            from ..wsgi.utilities import _schema_merges_to_dict
+
+            input_schema_merges_dict = _schema_merges_to_dict(input_schema_merges)
+            output_schema_merges_dict = _schema_merges_to_dict(output_schema_merges)
+
+            span.set_attribute(TdSpanAttributes.INPUT_SCHEMA_MERGES, json.dumps(input_schema_merges_dict))
+            span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA_MERGES, json.dumps(output_schema_merges_dict))
+
+            if transform_metadata:
+                span.set_attribute(TdSpanAttributes.TRANSFORM_METADATA, json.dumps(transform_metadata))
+
+            # Set status
+            if status.code == StatusCode.ERROR:
+                span.set_status(Status(OTelStatusCode.ERROR, status.message))
+            else:
+                span.set_status(Status(OTelStatusCode.OK))
+
+        except Exception as e:
+            logger.error(f"Error finalizing async span for {request.method} {request.url}: {e}")
             span.set_status(Status(OTelStatusCode.ERROR, str(e)))
 
     async def _finalize_span_async(

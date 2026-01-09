@@ -361,6 +361,106 @@ def async_chain():
         return jsonify({"error": str(e)}), 500
 
 
+# =============================================================================
+# BUG HUNTING TESTS - Confirmed Instrumentation Bugs
+# These endpoints expose bugs in the httpx instrumentation
+# =============================================================================
+
+
+@app.route("/test/streaming", methods=["GET"])
+def test_streaming():
+    """Test 5: Streaming response using client.stream() context manager."""
+    try:
+        with httpx.Client() as client:
+            with client.stream("GET", "https://jsonplaceholder.typicode.com/posts/6") as response:
+                # Read the streaming response
+                content = response.read()
+                data = response.json()
+                return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/toplevel-stream", methods=["GET"])
+def test_toplevel_stream():
+    """Test 6: Top-level httpx.stream() context manager."""
+    try:
+        with httpx.stream("GET", "https://jsonplaceholder.typicode.com/posts/7") as response:
+            content = response.read()
+            data = response.json()
+            return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/multipart-files", methods=["POST"])
+def test_multipart_files():
+    """Test 7: Multipart file upload using files= parameter."""
+    try:
+        # Create in-memory file-like content
+        files = {"file": ("test.txt", b"Hello, World!", "text/plain")}
+        with httpx.Client() as client:
+            # Use httpbin.org which echoes back file uploads
+            response = client.post(
+                "https://httpbin.org/post",
+                files=files,
+            )
+            result = response.json()
+            return jsonify({"uploaded": True, "files": result.get("files", {})})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/follow-redirects", methods=["GET"])
+def test_follow_redirects():
+    """Test 12: Following HTTP redirects."""
+    try:
+        with httpx.Client(follow_redirects=True) as client:
+            # httpbin.org/redirect/2 will redirect twice before returning
+            response = client.get("https://httpbin.org/redirect/2")
+            return jsonify({
+                "final_url": str(response.url),
+                "status_code": response.status_code,
+                "redirect_count": len(response.history),
+            })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/async-send", methods=["GET"])
+def test_async_send():
+    """Test 14: AsyncClient.send() method - bypasses AsyncClient.request()."""
+
+    async def fetch():
+        async with httpx.AsyncClient() as client:
+            req = client.build_request("GET", "https://jsonplaceholder.typicode.com/posts/10")
+            response = await client.send(req)
+            return response.json()
+
+    try:
+        result = asyncio.run(fetch())
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/async-stream", methods=["GET"])
+def test_async_stream():
+    """Test 15: Async streaming response using AsyncClient.stream()."""
+
+    async def fetch():
+        async with httpx.AsyncClient() as client:
+            async with client.stream("GET", "https://jsonplaceholder.typicode.com/posts/11") as response:
+                await response.aread()
+                return response.json()
+
+    try:
+        result = asyncio.run(fetch())
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     sdk.mark_app_as_ready()
     app.run(host="0.0.0.0", port=8000, debug=False)
