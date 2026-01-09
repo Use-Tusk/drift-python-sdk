@@ -37,7 +37,7 @@ from ...core.drift_sdk import TuskDrift
 from ...core.json_schema_helper import DecodedType, EncodingType, SchemaMerge
 from ...core.mode_utils import handle_record_mode, handle_replay_mode
 from ...core.tracing import TdSpanAttributes
-from ...core.tracing.span_utils import CreateSpanOptions, SpanUtils
+from ...core.tracing.span_utils import CreateSpanOptions, SpanInfo, SpanUtils
 from ...core.types import (
     PackageType,
     SpanKind,
@@ -181,21 +181,15 @@ class HttpxInstrumentation(InstrumentationBase):
 
             # Pass through if SDK is disabled
             if sdk.mode == TuskDriftMode.DISABLED:
-                return original_send(
-                    client_self, request, stream=stream, auth=auth, follow_redirects=follow_redirects
-                )
+                return original_send(client_self, request, stream=stream, auth=auth, follow_redirects=follow_redirects)
 
             def original_call():
-                return original_send(
-                    client_self, request, stream=stream, auth=auth, follow_redirects=follow_redirects
-                )
+                return original_send(client_self, request, stream=stream, auth=auth, follow_redirects=follow_redirects)
 
             # REPLAY mode: Use handle_replay_mode for proper background request handling
             if sdk.mode == TuskDriftMode.REPLAY:
                 return handle_replay_mode(
-                    replay_mode_handler=lambda: instrumentation_self._handle_replay_send_sync(
-                        sdk, module, request
-                    ),
+                    replay_mode_handler=lambda: instrumentation_self._handle_replay_send_sync(sdk, module, request),
                     no_op_request_handler=lambda: instrumentation_self._get_default_response(module, url_str),
                     is_server_request=False,
                 )
@@ -204,8 +198,13 @@ class HttpxInstrumentation(InstrumentationBase):
             return handle_record_mode(
                 original_function_call=original_call,
                 record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record_send_sync(
-                    client_self, request, stream, is_pre_app_start, original_send,
-                    auth=auth, follow_redirects=follow_redirects
+                    client_self,
+                    request,
+                    stream,
+                    is_pre_app_start,
+                    original_send,
+                    auth=auth,
+                    follow_redirects=follow_redirects,
                 ),
                 span_kind=OTelSpanKind.CLIENT,
             )
@@ -277,9 +276,7 @@ class HttpxInstrumentation(InstrumentationBase):
             with SpanUtils.with_span(span_info):
                 # Check drop transforms BEFORE making the request
                 headers = dict(request.headers)
-                if self._transform_engine and self._transform_engine.should_drop_outbound_request(
-                    method, url, headers
-                ):
+                if self._transform_engine and self._transform_engine.should_drop_outbound_request(method, url, headers):
                     # Request should be dropped - mark span and raise exception
                     span_info.span.set_attribute(
                         TdSpanAttributes.OUTPUT_VALUE,
@@ -357,9 +354,7 @@ class HttpxInstrumentation(InstrumentationBase):
             # handle_replay_mode returns coroutine which we await
             if sdk.mode == TuskDriftMode.REPLAY:
                 return await handle_replay_mode(
-                    replay_mode_handler=lambda: instrumentation_self._handle_replay_send_async(
-                        sdk, module, request
-                    ),
+                    replay_mode_handler=lambda: instrumentation_self._handle_replay_send_async(sdk, module, request),
                     no_op_request_handler=lambda: instrumentation_self._get_default_response(module, url_str),
                     is_server_request=False,
                 )
@@ -369,8 +364,13 @@ class HttpxInstrumentation(InstrumentationBase):
             return await handle_record_mode(
                 original_function_call=original_call,
                 record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record_send_async(
-                    client_self, request, stream, is_pre_app_start, original_send,
-                    auth=auth, follow_redirects=follow_redirects
+                    client_self,
+                    request,
+                    stream,
+                    is_pre_app_start,
+                    original_send,
+                    auth=auth,
+                    follow_redirects=follow_redirects,
                 ),
                 span_kind=OTelSpanKind.CLIENT,
             )
@@ -418,9 +418,7 @@ class HttpxInstrumentation(InstrumentationBase):
             with SpanUtils.with_span(span_info):
                 # Check drop transforms BEFORE making the request
                 headers = dict(request.headers)
-                if self._transform_engine and self._transform_engine.should_drop_outbound_request(
-                    method, url, headers
-                ):
+                if self._transform_engine and self._transform_engine.should_drop_outbound_request(method, url, headers):
                     # Request should be dropped - mark span and raise exception
                     span_info.span.set_attribute(
                         TdSpanAttributes.OUTPUT_VALUE,
@@ -538,7 +536,7 @@ class HttpxInstrumentation(InstrumentationBase):
         """
         try:
             # Check if content is already available (non-streaming requests)
-            if hasattr(request, '_content') and request._content is not None:
+            if hasattr(request, "_content") and request._content is not None:
                 return request.content
 
             # For streaming/multipart requests, read the content
@@ -578,7 +576,7 @@ class HttpxInstrumentation(InstrumentationBase):
             # Extract query params from URL
             # httpx.URL has a .params attribute that returns QueryParams
             params = {}
-            if hasattr(request.url, 'params'):
+            if hasattr(request.url, "params"):
                 params = dict(request.url.params)
 
             # Get body from request - handle streaming/multipart bodies
@@ -701,9 +699,7 @@ class HttpxInstrumentation(InstrumentationBase):
             # Create minimal placeholder Response objects for history
             # These represent the intermediate redirect responses
             for i in range(history_count):
-                redirect_request = httpx_module.Request(
-                    method.upper(), url if i == 0 else f"redirect_{i}"
-                )
+                redirect_request = httpx_module.Request(method.upper(), url if i == 0 else f"redirect_{i}")
                 redirect_response = httpx_module.Response(
                     status_code=302,  # Standard redirect status
                     content=b"",
@@ -753,7 +749,7 @@ class HttpxInstrumentation(InstrumentationBase):
 
             # Extract query params from URL
             params = {}
-            if hasattr(request.url, 'params'):
+            if hasattr(request.url, "params"):
                 params = dict(request.url.params)
 
             # Get request body - handle streaming/multipart bodies

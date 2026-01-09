@@ -418,11 +418,13 @@ def test_follow_redirects():
         with httpx.Client(follow_redirects=True) as client:
             # httpbin.org/redirect/2 will redirect twice before returning
             response = client.get("https://httpbin.org/redirect/2")
-            return jsonify({
-                "final_url": str(response.url),
-                "status_code": response.status_code,
-                "redirect_count": len(response.history),
-            })
+            return jsonify(
+                {
+                    "final_url": str(response.url),
+                    "status_code": response.status_code,
+                    "redirect_count": len(response.history),
+                }
+            )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
