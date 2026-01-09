@@ -465,7 +465,17 @@ class RequestsInstrumentation(InstrumentationBase):
         response.url = url
 
         # Set headers
-        headers = mock_data.get("headers", {})
+        headers = dict(mock_data.get("headers", {}))
+
+        # Remove content-encoding and transfer-encoding headers since the body
+        # was already decompressed when recorded (requests auto-decompresses)
+        headers_to_remove = []
+        for key in headers:
+            if key.lower() in ("content-encoding", "transfer-encoding"):
+                headers_to_remove.append(key)
+        for key in headers_to_remove:
+            del headers[key]
+
         response.headers.update(headers)
 
         # Set body - decode from base64 if needed
