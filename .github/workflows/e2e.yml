@@ -60,6 +60,16 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Latest Tusk CLI version: $VERSION"
 
+      - name: Build base image
+        env:
+          DOCKER_DEFAULT_PLATFORM: linux/amd64
+        run: |
+          docker build \
+            --build-arg TUSK_CLI_VERSION=${{ steps.tusk-version.outputs.version }} \
+            -t python-e2e-base:latest \
+            -f drift/instrumentation/e2e_common/Dockerfile.base \
+            .
+
       - name: Run E2E tests for ${{ matrix.library }}
         env:
           DOCKER_DEFAULT_PLATFORM: linux/amd64
