@@ -252,7 +252,7 @@ class TuskDrift:
         atexit.register(instance.shutdown)
 
         cls._initialized = True
-        logger.info("SDK initialized successfully")
+        logger.info("SDK initialized in %s mode", instance.mode)
 
         return instance
 
@@ -543,6 +543,8 @@ class TuskDrift:
             logger.debug("Replay mode active - ready to serve mocked responses")
         elif self.mode == TuskDriftMode.RECORD:
             logger.debug("Record mode active - capturing inbound requests and responses")
+
+        logger.info("App marked as ready")
 
     def collect_span(self, span: CleanSpanData) -> None:
         """[DEPRECATED] Collect and export a span.
