@@ -136,9 +136,8 @@ class SocketInstrumentation(InstrumentationBase):
 
         # Detect unpatched dependency:
         # - Must be in a SERVER span (inbound request context)
-        # - Must NOT be from an instrumented library (calling_library is set)
-        # Examples: ProtobufCommunicator, HttpxInstrumentation, RequestsInstrumentation
-        if span_kind == SpanKind.SERVER and calling_library is None:
+        # - Must NOT be from ProtobufCommunicator
+        if span_kind == SpanKind.SERVER and calling_library != "ProtobufCommunicator":
             self._log_unpatched_dependency(method_name, socket_self)
 
     def _log_unpatched_dependency(self, method_name: str, socket_self: Any) -> None:

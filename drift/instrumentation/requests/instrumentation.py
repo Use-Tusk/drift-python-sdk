@@ -44,7 +44,6 @@ from ...core.types import (
     SpanStatus,
     StatusCode,
     TuskDriftMode,
-    calling_library_context,
 )
 from ..base import InstrumentationBase
 from ..http import HttpSpanData, HttpTransformEngine
@@ -267,8 +266,6 @@ class RequestsInstrumentation(InstrumentationBase):
                 error = None
                 response = None
 
-                # Set calling_library_context to prevent socket instrumentation warnings
-                calling_lib_token = calling_library_context.set("RequestsInstrumentation")
                 try:
                     response = original_request(session_self, method, url, **kwargs)
                     return response
@@ -276,7 +273,6 @@ class RequestsInstrumentation(InstrumentationBase):
                     error = e
                     raise
                 finally:
-                    calling_library_context.reset(calling_lib_token)
                     # Finalize span with request/response data
                     self._finalize_span(
                         span_info.span,

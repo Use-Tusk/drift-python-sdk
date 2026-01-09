@@ -397,7 +397,7 @@ class DriftMiddleware:
             status = SpanStatus(code=StatusCode.OK, message="")
 
         # Django-specific: use route template for span name to avoid cardinality explosion
-        method = request.method
+        method = request.method or ""
         route_template = getattr(request, "_drift_route_template", None)
         if route_template:
             # Use route template (e.g., "users/<int:id>/")
