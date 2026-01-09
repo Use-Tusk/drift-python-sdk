@@ -1229,17 +1229,38 @@ class HttpxInstrumentation(InstrumentationBase):
         else:
             content = json.dumps(body).encode("utf-8")
 
+        # Determine final URL - use from mock data if present (for redirect handling)
+        final_url = mock_data.get("finalUrl", url)
+
+        # Build history list if redirects were recorded
+        history = []
+        history_count = int(mock_data.get("historyCount", 0))
+        if history_count > 0:
+            # Create minimal placeholder Response objects for history
+            # These represent the intermediate redirect responses
+            for i in range(history_count):
+                redirect_request = httpx_module.Request(
+                    method.upper(), url if i == 0 else f"redirect_{i}"
+                )
+                redirect_response = httpx_module.Response(
+                    status_code=302,  # Standard redirect status
+                    content=b"",
+                    request=redirect_request,
+                )
+                history.append(redirect_response)
+
         # Create httpx.Response
-        # httpx.Response requires a request object
-        request = httpx_module.Request(method.upper(), url)
+        # httpx.Response requires a request object - use final URL so response.url is correct
+        request = httpx_module.Request(method.upper(), final_url)
         response = httpx_module.Response(
             status_code=status_code,
             headers=headers,
             content=content,
             request=request,
+            history=history,
         )
 
-        logger.debug(f"Created mock httpx response: {status_code} for {url}")
+        logger.debug(f"Created mock httpx response: {status_code} for {final_url}")
         return response
 
     def _finalize_span_from_request(
@@ -1330,6 +1351,14 @@ class HttpxInstrumentation(InstrumentationBase):
                 if response_body_base64 is not None:
                     output_value["body"] = response_body_base64
                     output_value["bodySize"] = response_body_size
+
+                # Capture redirect information for proper replay
+                final_url = str(response.url)
+                if final_url != url:  # Only store if redirects occurred
+                    output_value["finalUrl"] = final_url
+
+                if response.history:
+                    output_value["historyCount"] = len(response.history)
 
                 if response.status_code >= 400:
                     status = SpanStatus(
@@ -1514,6 +1543,14 @@ class HttpxInstrumentation(InstrumentationBase):
                 if response_body_base64 is not None:
                     output_value["body"] = response_body_base64
                     output_value["bodySize"] = response_body_size
+
+                # Capture redirect information for proper replay
+                final_url = str(response.url)
+                if final_url != url:  # Only store if redirects occurred
+                    output_value["finalUrl"] = final_url
+
+                if response.history:
+                    output_value["historyCount"] = len(response.history)
 
                 if response.status_code >= 400:
                     status = SpanStatus(

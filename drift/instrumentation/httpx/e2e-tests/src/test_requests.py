@@ -100,28 +100,16 @@ if __name__ == "__main__":
     # Async sequential chained requests
     make_request("GET", "/api/async/chain")
 
-    # ==========================================================================
-    # Bug Hunting Tests - Confirmed Instrumentation Bugs
-    # These tests expose bugs in the httpx instrumentation
-    # ==========================================================================
-    print("\n--- Bug Hunting Tests (Confirmed Bugs) ---\n")
-
-    # BUG: Streaming response - triggers unpatched socket calls during replay
     make_request("GET", "/test/streaming")
 
-    # BUG: Top-level stream - triggers unpatched socket calls during replay
     make_request("GET", "/test/toplevel-stream")
 
-    # BUG: Multipart file upload - triggers unpatched socket calls during replay
     make_request("POST", "/test/multipart-files")
 
-    # BUG: Follow redirects - replay returns wrong final_url and redirect_count
-    make_request("GET", "/test/follow-redirects")
-
-    # BUG: AsyncClient.send() - triggers unpatched socket calls during replay
     make_request("GET", "/test/async-send")
 
-    # BUG: Async streaming - triggers unpatched socket calls during replay
     make_request("GET", "/test/async-stream")
+
+    make_request("GET", "/test/follow-redirects")
 
     print("\nAll requests completed successfully")
