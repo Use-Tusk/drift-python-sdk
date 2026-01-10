@@ -259,6 +259,54 @@ class HttpxInstrumentation(InstrumentationBase):
             logger.warning(f"Error applying auth flow in replay mode: {e}")
             return request
 
+    def _fire_request_hooks(self, client: Any, request: Any) -> None:
+        """Fire request event hooks if present on client.
+
+        In REPLAY mode, we need to manually fire hooks since original_send()
+        is not called and hooks normally run inside _send_handling_redirects().
+
+        Args:
+            client: httpx Client instance (may be None)
+            request: httpx.Request object to pass to hooks
+        """
+        if client is None:
+            return
+
+        event_hooks = getattr(client, "_event_hooks", None)
+        if not event_hooks:
+            return
+
+        request_hooks = event_hooks.get("request", [])
+        for hook in request_hooks:
+            try:
+                hook(request)
+            except Exception as e:
+                logger.warning(f"Error firing request hook in REPLAY mode: {e}")
+
+    def _fire_response_hooks(self, client: Any, response: Any) -> None:
+        """Fire response event hooks if present on client.
+
+        In REPLAY mode, we need to manually fire hooks since original_send()
+        is not called and hooks normally run inside _send_handling_redirects().
+
+        Args:
+            client: httpx Client instance (may be None)
+            response: httpx.Response object to pass to hooks
+        """
+        if client is None:
+            return
+
+        event_hooks = getattr(client, "_event_hooks", None)
+        if not event_hooks:
+            return
+
+        response_hooks = event_hooks.get("response", [])
+        for hook in response_hooks:
+            try:
+                hook(response)
+            except Exception as e:
+                logger.warning(f"Error firing response hook in REPLAY mode: {e}")
+
     def _patch_sync_client(self, module: Any) -> None:
         """Patch httpx.Client.send for sync HTTP calls.
 
@@ -337,6 +385,10 @@ class HttpxInstrumentation(InstrumentationBase):
         if auth is not None:
             request = self._apply_auth_to_request_sync(request, auth, httpx_module, client)
 
+        # Fire request hooks to modify request before mock lookup
+        # This matches RECORD behavior where hooks run before the request is sent
+        self._fire_request_hooks(client, request)
+
         method = request.method
         url = str(request.url)
 
@@ -356,6 +408,9 @@ class HttpxInstrumentation(InstrumentationBase):
                 )
 
                 if mock_response is not None:
+                    # Fire response hooks on mock response
+                    # This matches RECORD behavior where hooks run after response
+                    self._fire_response_hooks(client, mock_response)
                     return mock_response
 
                 # No mock found - raise error in REPLAY mode

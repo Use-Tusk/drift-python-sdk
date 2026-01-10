@@ -477,6 +477,143 @@ def test_basic_auth():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/test/event-hooks", methods=["GET"])
+def test_event_hooks():
+    """BUG: Event hooks don't run in REPLAY mode.
+
+    Root cause: In REPLAY mode, the patched send() returns a mock response
+    immediately without calling original_send(). Event hooks run inside
+    _send_handling_redirects() which is never called in REPLAY mode.
+
+    During RECORD:
+    - Hooks run and modify request (add X-Hook-Added header)
+    - Trace saved with hook-added header
+
+    During REPLAY:
+    - Hooks NEVER RUN (original_send not called)
+    - Mock lookup uses original request (no hook-added header)
+    - No match found
+
+    See BUG_TRACKING.md Test 11 for full analysis.
+    """
+    try:
+        request_headers_captured = []
+        response_headers_captured = []
+
+        def log_request(request):
+            request_headers_captured.append(dict(request.headers))
+            request.headers["X-Hook-Added"] = "true"
+
+        def log_response(response):
+            response_headers_captured.append(dict(response.headers))
+
+        with httpx.Client(event_hooks={"request": [log_request], "response": [log_response]}) as client:
+            response = client.get("https://httpbin.org/headers")
+            result = response.json()
+            return jsonify({
+                "hook_header_present": "X-Hook-Added" in result.get("headers", {}),
+                "request_captured": len(request_headers_captured) > 0,
+                "response_captured": len(response_headers_captured) > 0,
+            })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/response-hook-only", methods=["GET"])
+def test_response_hook_only():
+    """BUG: Response hooks don't fire in REPLAY mode.
+
+    Root cause: Same as /test/event-hooks - in REPLAY mode, original_send()
+    is never called, so response hooks never execute. The mock response is
+    returned directly without going through _send_handling_redirects().
+
+    This affects applications using response hooks for:
+    - Logging/metrics collection
+    - Response validation
+    - Cache updates
+    - Session management
+
+    See BUG_TRACKING.md Test 14 for full analysis.
+    """
+    try:
+        response_data_captured = []
+
+        def capture_response(response):
+            response_data_captured.append({
+                "status": response.status_code,
+                "url": str(response.url),
+            })
+
+        with httpx.Client(event_hooks={"response": [capture_response]}) as client:
+            response = client.get("https://httpbin.org/get")
+            return jsonify({
+                "captured": len(response_data_captured) > 0,
+                "response_status": response.status_code,
+            })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/request-hook-modify-url", methods=["GET"])
+def test_request_hook_modify_url():
+    """BUG: Request hooks that modify headers don't work in REPLAY mode.
+
+    Root cause: Same as /test/event-hooks - hooks don't run in REPLAY mode.
+    The hook adds X-Hook-Tried-Url-Modify header which is captured during
+    RECORD but not present during REPLAY.
+
+    See BUG_TRACKING.md Test 18 for full analysis.
+    """
+    try:
+        def add_query_param(request):
+            request.headers["X-Hook-Tried-Url-Modify"] = "true"
+            return request
+
+        with httpx.Client(event_hooks={"request": [add_query_param]}) as client:
+            response = client.get("https://httpbin.org/get?original=param")
+            result = response.json()
+            return jsonify({
+                "headers": result.get("headers", {}),
+                "args": result.get("args", {}),
+            })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# =============================================================================
+# Bug Hunting Tests - Endpoints that expose instrumentation bugs
+# Only bug-exposing endpoints are kept; passing tests have been removed.
+# See BUG_TRACKING.md for full details on each bug.
+# =============================================================================
+
+
+@app.route("/test/digest-auth", methods=["GET"])
+def test_digest_auth():
+    """BUG: DigestAuth fails in REPLAY mode.
+
+    Root cause: DigestAuth requires a challenge-response flow:
+    1. Initial request without auth -> 401 with WWW-Authenticate
+    2. Second request with Digest auth based on challenge
+
+    During RECORD, httpx handles this internally and the instrumentation
+    captures the final authenticated request. During REPLAY, the
+    instrumentation's _apply_auth_to_request_sync() only runs next()
+    once on the auth flow generator, getting only the unauthenticated
+    request. The mock lookup fails because it's looking for the
+    unauthenticated request but the trace has the authenticated one.
+
+    See BUG_TRACKING.md Test 1 for full analysis.
+    """
+    try:
+        with httpx.Client() as client:
+            auth = httpx.DigestAuth("digestuser", "digestpass")
+            response = client.get(
+                "https://httpbin.org/digest-auth/auth/digestuser/digestpass",
+                auth=auth,
+            )
+            return jsonify(response.json())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     sdk.mark_app_as_ready()
