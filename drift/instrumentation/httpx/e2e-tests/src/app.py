@@ -557,6 +557,7 @@ def test_digest_auth():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 @app.route("/test/async-hooks", methods=["GET"])
 def test_async_hooks():
     """Test: AsyncClient with async event hooks."""
@@ -592,15 +593,13 @@ def test_async_hooks():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# =============================================================================
-# Bug Hunting Tests - Confirmed Instrumentation Bugs
-# =============================================================================
 
 @app.route("/test/file-like-body", methods=["POST"])
 def test_file_like_body():
     """Test: Request body from file-like object (BytesIO)."""
     try:
         import io
+
         file_content = b'{"title": "File Body", "body": "From BytesIO", "userId": 1}'
         file_obj = io.BytesIO(file_content)
 
@@ -611,10 +610,12 @@ def test_file_like_body():
                 headers={"Content-Type": "application/json"},
             )
             result = response.json()
-            return jsonify({
-                "posted_data": result.get("data", ""),
-                "content_type": result.get("headers", {}).get("Content-Type", ""),
-            })
+            return jsonify(
+                {
+                    "posted_data": result.get("data", ""),
+                    "content_type": result.get("headers", {}).get("Content-Type", ""),
+                }
+            )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

@@ -122,8 +122,6 @@ if __name__ == "__main__":
 
     make_request("GET", "/test/async-hooks")
 
-    # BUG 2: File-like body not captured in RECORD mode
-    # BytesIO streams are consumed before instrumentation can capture them
     make_request("POST", "/test/file-like-body")
 
     print("\nAll requests completed successfully")

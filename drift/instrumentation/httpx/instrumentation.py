@@ -407,6 +407,10 @@ class HttpxInstrumentation(InstrumentationBase):
                         url,
                     )
 
+                # Pre-capture request body before send - file-like objects (BytesIO, etc.)
+                # get consumed when httpx sends the request, so we must capture first
+                pre_captured_body = self._get_request_body_safely(request)
+
                 # Make the real request
                 error = None
                 response = None
@@ -430,6 +434,7 @@ class HttpxInstrumentation(InstrumentationBase):
                         request,
                         response,
                         error,
+                        pre_captured_body,
                     )
         finally:
             span_info.span.end()
@@ -590,6 +595,10 @@ class HttpxInstrumentation(InstrumentationBase):
                         url,
                     )
 
+                # Pre-capture request body before send - file-like objects (BytesIO, etc.)
+                # get consumed when httpx sends the request, so we must capture first
+                pre_captured_body = self._get_request_body_safely(request)
+
                 # Make the real request
                 error = None
                 response = None
@@ -613,6 +622,7 @@ class HttpxInstrumentation(InstrumentationBase):
                         request,
                         response,
                         error,
+                        pre_captured_body,
                     )
         finally:
             span_info.span.end()
@@ -893,6 +903,7 @@ class HttpxInstrumentation(InstrumentationBase):
         request: Any,  # httpx.Request object
         response: Any,
         error: Exception | None,
+        pre_captured_body: bytes | None = None,
     ) -> None:
         """Finalize span with request/response data, extracting info from Request object.
 
@@ -904,6 +915,8 @@ class HttpxInstrumentation(InstrumentationBase):
             request: The httpx.Request object
             response: Response object (if successful)
             error: Exception (if failed)
+            pre_captured_body: Pre-captured request body bytes (for file-like objects
+                that get consumed during send)
         """
         try:
             method = request.method
@@ -928,10 +941,13 @@ class HttpxInstrumentation(InstrumentationBase):
             if hasattr(request.url, "params"):
                 params = dict(request.url.params)
 
-            # Get request body - handle streaming/multipart bodies
+            # Get request body - use pre-captured if available (for file-like objects
+            # that get consumed during send), otherwise try to read from request
             body_base64 = None
             body_size = 0
-            request_body = self._get_request_body_safely(request)
+            request_body = (
+                pre_captured_body if pre_captured_body is not None else self._get_request_body_safely(request)
+            )
             if request_body:
                 body_base64, body_size = self._encode_body_to_base64(request_body)
 
@@ -1093,9 +1109,10 @@ class HttpxInstrumentation(InstrumentationBase):
         request: Any,  # httpx.Request object
         response: Any,
         error: Exception | None,
+        pre_captured_body: bytes | None = None,
     ) -> None:
         """Finalize span with request/response data (async version).
 
         Delegates to sync version since no async operations are needed.
         """
-        self._finalize_span_from_request(span, request, response, error)
+        self._finalize_span_from_request(span, request, response, error, pre_captured_body)
