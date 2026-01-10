@@ -100,4 +100,28 @@ if __name__ == "__main__":
     # Async sequential chained requests
     make_request("GET", "/api/async/chain")
 
+    make_request("GET", "/test/streaming")
+
+    make_request("GET", "/test/toplevel-stream")
+
+    make_request("POST", "/test/multipart-files")
+
+    make_request("GET", "/test/async-send")
+
+    make_request("GET", "/test/async-stream")
+
+    make_request("GET", "/test/follow-redirects")
+
+    make_request("GET", "/test/basic-auth")
+
+    make_request("GET", "/test/event-hooks")
+
+    make_request("GET", "/test/request-hook-modify-url")
+
+    make_request("GET", "/test/digest-auth")
+
+    make_request("GET", "/test/async-hooks")
+
+    make_request("POST", "/test/file-like-body")
+
     print("\nAll requests completed successfully")

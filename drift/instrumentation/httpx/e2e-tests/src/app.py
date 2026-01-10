@@ -361,6 +361,265 @@ def async_chain():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/test/streaming", methods=["GET"])
+def test_streaming():
+    """Test 5: Streaming response using client.stream() context manager."""
+    try:
+        with httpx.Client() as client:
+            with client.stream("GET", "https://jsonplaceholder.typicode.com/posts/6") as response:
+                # Read the streaming response
+                content = response.read()
+                data = response.json()
+                return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/toplevel-stream", methods=["GET"])
+def test_toplevel_stream():
+    """Test 6: Top-level httpx.stream() context manager."""
+    try:
+        with httpx.stream("GET", "https://jsonplaceholder.typicode.com/posts/7") as response:
+            content = response.read()
+            data = response.json()
+            return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/multipart-files", methods=["POST"])
+def test_multipart_files():
+    """Test 7: Multipart file upload using files= parameter."""
+    try:
+        # Create in-memory file-like content
+        files = {"file": ("test.txt", b"Hello, World!", "text/plain")}
+        with httpx.Client() as client:
+            # Use httpbin.org which echoes back file uploads
+            response = client.post(
+                "https://httpbin.org/post",
+                files=files,
+            )
+            result = response.json()
+            return jsonify({"uploaded": True, "files": result.get("files", {})})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/follow-redirects", methods=["GET"])
+def test_follow_redirects():
+    """Test 12: Following HTTP redirects."""
+    try:
+        with httpx.Client(follow_redirects=True) as client:
+            # httpbin.org/redirect/2 will redirect twice before returning
+            response = client.get("https://httpbin.org/redirect/2")
+            return jsonify(
+                {
+                    "final_url": str(response.url),
+                    "status_code": response.status_code,
+                    "redirect_count": len(response.history),
+                }
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/async-send", methods=["GET"])
+def test_async_send():
+    """Test 14: AsyncClient.send() method - bypasses AsyncClient.request()."""
+
+    async def fetch():
+        async with httpx.AsyncClient() as client:
+            req = client.build_request("GET", "https://jsonplaceholder.typicode.com/posts/10")
+            response = await client.send(req)
+            return response.json()
+
+    try:
+        result = asyncio.run(fetch())
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/async-stream", methods=["GET"])
+def test_async_stream():
+    """Test 15: Async streaming response using AsyncClient.stream()."""
+
+    async def fetch():
+        async with httpx.AsyncClient() as client:
+            async with client.stream("GET", "https://jsonplaceholder.typicode.com/posts/11") as response:
+                await response.aread()
+                return response.json()
+
+    try:
+        result = asyncio.run(fetch())
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/basic-auth", methods=["GET"])
+def test_basic_auth():
+    try:
+        with httpx.Client() as client:
+            # httpbin.org/basic-auth/{user}/{passwd} returns 200 if auth succeeds
+            response = client.get(
+                "https://httpbin.org/basic-auth/testuser/testpass",
+                auth=("testuser", "testpass"),
+            )
+            return jsonify(response.json())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/event-hooks", methods=["GET"])
+def test_event_hooks():
+    try:
+        request_headers_captured = []
+        response_headers_captured = []
+
+        def log_request(request):
+            request_headers_captured.append(dict(request.headers))
+            request.headers["X-Hook-Added"] = "true"
+
+        def log_response(response):
+            response_headers_captured.append(dict(response.headers))
+
+        with httpx.Client(event_hooks={"request": [log_request], "response": [log_response]}) as client:
+            response = client.get("https://httpbin.org/headers")
+            result = response.json()
+            return jsonify(
+                {
+                    "hook_header_present": "X-Hook-Added" in result.get("headers", {}),
+                    "request_captured": len(request_headers_captured) > 0,
+                    "response_captured": len(response_headers_captured) > 0,
+                }
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/response-hook-only", methods=["GET"])
+def test_response_hook_only():
+    try:
+        response_data_captured = []
+
+        def capture_response(response):
+            response_data_captured.append(
+                {
+                    "status": response.status_code,
+                    "url": str(response.url),
+                }
+            )
+
+        with httpx.Client(event_hooks={"response": [capture_response]}) as client:
+            response = client.get("https://httpbin.org/get")
+            return jsonify(
+                {
+                    "captured": len(response_data_captured) > 0,
+                    "response_status": response.status_code,
+                }
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/request-hook-modify-url", methods=["GET"])
+def test_request_hook_modify_url():
+    try:
+
+        def add_query_param(request):
+            request.headers["X-Hook-Tried-Url-Modify"] = "true"
+            return request
+
+        with httpx.Client(event_hooks={"request": [add_query_param]}) as client:
+            response = client.get("https://httpbin.org/get?original=param")
+            result = response.json()
+            return jsonify(
+                {
+                    "headers": result.get("headers", {}),
+                    "args": result.get("args", {}),
+                }
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/digest-auth", methods=["GET"])
+def test_digest_auth():
+    try:
+        with httpx.Client() as client:
+            auth = httpx.DigestAuth("digestuser", "digestpass")
+            response = client.get(
+                "https://httpbin.org/digest-auth/auth/digestuser/digestpass",
+                auth=auth,
+            )
+            return jsonify(response.json())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/async-hooks", methods=["GET"])
+def test_async_hooks():
+    """Test: AsyncClient with async event hooks."""
+
+    async def fetch():
+        request_count = [0]
+        response_count = [0]
+
+        async def async_request_hook(request):
+            request_count[0] += 1
+            request.headers["X-Async-Hook"] = "true"
+
+        async def async_response_hook(response):
+            response_count[0] += 1
+
+        async with httpx.AsyncClient(
+            event_hooks={
+                "request": [async_request_hook],
+                "response": [async_response_hook],
+            }
+        ) as client:
+            response = await client.get("https://httpbin.org/headers")
+            result = response.json()
+            return {
+                "request_hook_called": request_count[0] > 0,
+                "response_hook_called": response_count[0] > 0,
+                "async_hook_header_present": "X-Async-Hook" in result.get("headers", {}),
+            }
+
+    try:
+        result = asyncio.run(fetch())
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/file-like-body", methods=["POST"])
+def test_file_like_body():
+    """Test: Request body from file-like object (BytesIO)."""
+    try:
+        import io
+
+        file_content = b'{"title": "File Body", "body": "From BytesIO", "userId": 1}'
+        file_obj = io.BytesIO(file_content)
+
+        with httpx.Client() as client:
+            response = client.post(
+                "https://httpbin.org/post",
+                content=file_obj,
+                headers={"Content-Type": "application/json"},
+            )
+            result = response.json()
+            return jsonify(
+                {
+                    "posted_data": result.get("data", ""),
+                    "content_type": result.get("headers", {}).get("Content-Type", ""),
+                }
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     sdk.mark_app_as_ready()
     app.run(host="0.0.0.0", port=8000, debug=False)
