@@ -70,4 +70,6 @@ if __name__ == "__main__":
     # Text response handling
     make_request("GET", "/api/text-response")
 
+    make_request("GET", "/test/session-send-direct")
+
     print("\nAll requests completed successfully")

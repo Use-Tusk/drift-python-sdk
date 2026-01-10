@@ -261,6 +261,25 @@ def text_response():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/test/session-send-direct", methods=["GET"])
+def session_send_direct():
+    try:
+        session = requests.Session()
+
+        # Create a PreparedRequest manually
+        req = requests.Request("GET", "https://jsonplaceholder.typicode.com/posts/2")
+        prepared = session.prepare_request(req)
+
+        # Call send() directly - bypasses request() method
+        response = session.send(prepared, timeout=10)
+
+        return jsonify({
+            "status_code": response.status_code,
+            "data": response.json(),
+            "test": "session-send-direct"
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     sdk.mark_app_as_ready()
