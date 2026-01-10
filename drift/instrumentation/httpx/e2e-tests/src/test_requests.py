@@ -118,13 +118,6 @@ if __name__ == "__main__":
 
     make_request("GET", "/test/request-hook-modify-url")
 
-    # ==========================================================================
-    # Bug Hunting Tests - Only bug-exposing endpoints
-    # See BUG_TRACKING.md for details on each confirmed bug.
-    # ==========================================================================
-    print("\n--- Bug Hunting Tests (Expected to fail in REPLAY) ---\n")
-
-    # BUG 1: DigestAuth fails - challenge-response not handled in replay
     make_request("GET", "/test/digest-auth")
 
     print("\nAll requests completed successfully")

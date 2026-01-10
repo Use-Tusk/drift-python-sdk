@@ -156,109 +156,6 @@ class HttpxInstrumentation(InstrumentationBase):
             )
         )
 
-    def _build_auth_from_param(self, auth: Any, httpx_module: Any) -> Any:
-        """Convert auth parameter to an httpx Auth object.
-
-        Mirrors httpx's BaseClient._build_auth() logic:
-        - tuple -> BasicAuth(username, password)
-        - Auth instance -> pass through
-        - callable -> FunctionAuth(func)
-
-        Args:
-            auth: Auth parameter (tuple, callable, Auth instance, or None)
-            httpx_module: The httpx module (for accessing Auth classes)
-
-        Returns:
-            httpx.Auth instance or None
-        """
-        if auth is None:
-            return None
-
-        # Tuple -> BasicAuth (username, password)
-        if isinstance(auth, tuple):
-            return httpx_module.BasicAuth(username=auth[0], password=auth[1])
-
-        # Check if it's an Auth subclass
-        try:
-            if hasattr(httpx_module, "Auth") and isinstance(auth, httpx_module.Auth):
-                return auth
-        except TypeError:
-            # isinstance check failed, try duck typing
-            if hasattr(auth, "sync_auth_flow") and hasattr(auth, "auth_flow"):
-                return auth
-
-        # Callable -> FunctionAuth
-        if callable(auth):
-            return httpx_module.FunctionAuth(func=auth)
-
-        return None
-
-    def _apply_auth_to_request_sync(
-        self,
-        request: Any,
-        auth: Any,
-        httpx_module: Any,
-        client: Any = None,
-    ) -> Any:
-        """Apply auth flow to request to add Authorization header.
-
-        Runs the auth flow generator to get the modified request.
-        For BasicAuth/FunctionAuth, this adds the Authorization header.
-        For complex auth (DigestAuth), only gets the first request.
-
-        Args:
-            request: httpx.Request object
-            auth: Auth parameter (tuple, callable, Auth instance, USE_CLIENT_DEFAULT, or None)
-            httpx_module: The httpx module
-            client: The httpx Client instance (needed to resolve USE_CLIENT_DEFAULT)
-
-        Returns:
-            Modified request with auth headers applied (for simple auth types)
-        """
-        # Handle USE_CLIENT_DEFAULT sentinel - get auth from client's default
-        # httpx uses this when auth is set on the client, not the request
-        if client is not None and auth is not None:
-            # Check if auth is USE_CLIENT_DEFAULT (a sentinel class instance)
-            auth_type_name = type(auth).__name__
-            if auth_type_name == "UseClientDefault":
-                # Get the client's default auth
-                auth = getattr(client, "_auth", None)
-
-        # Convert auth param to Auth object
-        auth_obj = self._build_auth_from_param(auth, httpx_module)
-
-        # Check for URL-embedded credentials if no explicit auth
-        if auth_obj is None:
-            try:
-                username = request.url.username
-                password = request.url.password
-                if username or password:
-                    auth_obj = httpx_module.BasicAuth(
-                        username=username or "",
-                        password=password or "",
-                    )
-            except Exception:
-                pass
-
-        if auth_obj is None:
-            return request
-
-        try:
-            # Get the sync auth flow generator
-            auth_flow = auth_obj.sync_auth_flow(request)
-
-            # Get the first (and for BasicAuth/FunctionAuth, only) request
-            # This modifies the request in-place for BasicAuth (adds Authorization header)
-            modified_request = next(auth_flow)
-
-            # Close the generator to clean up
-            auth_flow.close()
-
-            return modified_request
-        except Exception as e:
-            logger.warning(f"Error applying auth flow in replay mode: {e}")
-            return request
-
     def _fire_request_hooks(self, client: Any, request: Any) -> None:
         """Fire request event hooks if present on client.
 
@@ -371,20 +268,19 @@ class HttpxInstrumentation(InstrumentationBase):
         sdk: TuskDrift,
         httpx_module: Any,
         request: Any,  # httpx.Request object
-        auth: Any = None,  # Auth parameter to apply before mock lookup
-        client: Any = None,  # Client instance (needed to resolve USE_CLIENT_DEFAULT)
+        auth: Any = None,  # Auth parameter (unused - auth headers stripped for matching)
+        client: Any = None,  # Client instance
     ) -> Any:
         """Handle send in REPLAY mode (sync).
 
-        Creates a span, applies auth to get modified request, fetches mock response.
+        Creates a span, fetches mock response.
         Raises RuntimeError if no mock is found.
-        """
-        # Apply auth flow to get request with Authorization header
-        # This is needed because during RECORD, auth is applied by httpx internally,
-        # but during REPLAY we skip httpx and need to apply it ourselves
-        if auth is not None:
-            request = self._apply_auth_to_request_sync(request, auth, httpx_module, client)
 
+        Note: Auth is NOT applied in REPLAY mode. Instead, we strip auth-related
+        headers (Authorization, Cookie) from the input value in both RECORD and
+        REPLAY modes to ensure consistent matching. This handles multi-step auth
+        flows like DigestAuth where we can't simulate the full challenge-response.
+        """
         # Fire request hooks to modify request before mock lookup
         # This matches RECORD behavior where hooks run before the request is sent
         self._fire_request_hooks(client, request)
@@ -554,16 +450,15 @@ class HttpxInstrumentation(InstrumentationBase):
         sdk: TuskDrift,
         httpx_module: Any,
         request: Any,  # httpx.Request object
-        auth: Any = None,  # Auth parameter to apply before mock lookup
-        client: Any = None,  # Client instance (needed to resolve USE_CLIENT_DEFAULT)
+        auth: Any = None,  # Auth parameter (unused - auth headers stripped for matching)
+        client: Any = None,  # Client instance
     ) -> Any:
         """Handle send in REPLAY mode (async).
 
         Delegates to sync version since mock lookup uses sync operations
         to avoid nested event loop issues with Flask's asyncio.run().
 
-        Note: Auth is applied synchronously since the auth flow for simple auth types
-        (BasicAuth, FunctionAuth) does not require async operations.
+        Note: Auth is not applied - see _handle_replay_send_sync for rationale.
         """
         return self._handle_replay_send_sync(sdk, httpx_module, request, auth=auth, client=client)
 
@@ -747,6 +642,13 @@ class HttpxInstrumentation(InstrumentationBase):
 
             # Extract headers from Request
             headers = dict(request.headers)
+            # Strip auth-related headers to ensure consistent matching between
+            # RECORD and REPLAY modes. This matches the behavior in
+            # _finalize_span_from_request() which strips Authorization and Cookie.
+            headers.pop("authorization", None)
+            headers.pop("Authorization", None)
+            headers.pop("cookie", None)
+            headers.pop("Cookie", None)
 
             # Extract query params from URL
             # httpx.URL has a .params attribute that returns QueryParams
@@ -921,6 +823,16 @@ class HttpxInstrumentation(InstrumentationBase):
 
             # ===== BUILD INPUT VALUE =====
             headers = dict(request.headers)
+            # Strip auth-related headers to ensure consistent matching between
+            # RECORD and REPLAY modes. During RECORD, httpx may apply auth internally
+            # (especially for multi-step auth like DigestAuth), modifying the request
+            # in-place. DigestAuth also adds cookies from the 401 response to the
+            # retry request. By excluding these headers from the input value, we
+            # ensure mock matching works regardless of auth state.
+            headers.pop("authorization", None)
+            headers.pop("Authorization", None)
+            headers.pop("cookie", None)
+            headers.pop("Cookie", None)
 
             # Extract query params from URL
             params = {}
