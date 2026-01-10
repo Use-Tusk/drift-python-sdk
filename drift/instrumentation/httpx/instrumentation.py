@@ -156,6 +156,109 @@ class HttpxInstrumentation(InstrumentationBase):
             )
         )
 
+    def _build_auth_from_param(self, auth: Any, httpx_module: Any) -> Any:
+        """Convert auth parameter to an httpx Auth object.
+
+        Mirrors httpx's BaseClient._build_auth() logic:
+        - tuple -> BasicAuth(username, password)
+        - Auth instance -> pass through
+        - callable -> FunctionAuth(func)
+
+        Args:
+            auth: Auth parameter (tuple, callable, Auth instance, or None)
+            httpx_module: The httpx module (for accessing Auth classes)
+
+        Returns:
+            httpx.Auth instance or None
+        """
+        if auth is None:
+            return None
+
+        # Tuple -> BasicAuth (username, password)
+        if isinstance(auth, tuple):
+            return httpx_module.BasicAuth(username=auth[0], password=auth[1])
+
+        # Check if it's an Auth subclass
+        try:
+            if hasattr(httpx_module, "Auth") and isinstance(auth, httpx_module.Auth):
+                return auth
+        except TypeError:
+            # isinstance check failed, try duck typing
+            if hasattr(auth, "sync_auth_flow") and hasattr(auth, "auth_flow"):
+                return auth
+
+        # Callable -> FunctionAuth
+        if callable(auth):
+            return httpx_module.FunctionAuth(func=auth)
+
+        return None
+
+    def _apply_auth_to_request_sync(
+        self,
+        request: Any,
+        auth: Any,
+        httpx_module: Any,
+        client: Any = None,
+    ) -> Any:
+        """Apply auth flow to request to add Authorization header.
+
+        Runs the auth flow generator to get the modified request.
+        For BasicAuth/FunctionAuth, this adds the Authorization header.
+        For complex auth (DigestAuth), only gets the first request.
+
+        Args:
+            request: httpx.Request object
+            auth: Auth parameter (tuple, callable, Auth instance, USE_CLIENT_DEFAULT, or None)
+            httpx_module: The httpx module
+            client: The httpx Client instance (needed to resolve USE_CLIENT_DEFAULT)
+
+        Returns:
+            Modified request with auth headers applied (for simple auth types)
+        """
+        # Handle USE_CLIENT_DEFAULT sentinel - get auth from client's default
+        # httpx uses this when auth is set on the client, not the request
+        if client is not None and auth is not None:
+            # Check if auth is USE_CLIENT_DEFAULT (a sentinel class instance)
+            auth_type_name = type(auth).__name__
+            if auth_type_name == "UseClientDefault":
+                # Get the client's default auth
+                auth = getattr(client, "_auth", None)
+
+        # Convert auth param to Auth object
+        auth_obj = self._build_auth_from_param(auth, httpx_module)
+
+        # Check for URL-embedded credentials if no explicit auth
+        if auth_obj is None:
+            try:
+                username = request.url.username
+                password = request.url.password
+                if username or password:
+                    auth_obj = httpx_module.BasicAuth(
+                        username=username or "",
+                        password=password or "",
+                    )
+            except Exception:
+                pass
+
+        if auth_obj is None:
+            return request
+
+        try:
+            # Get the sync auth flow generator
+            auth_flow = auth_obj.sync_auth_flow(request)
+
+            # Get the first (and for BasicAuth/FunctionAuth, only) request
+            # This modifies the request in-place for BasicAuth (adds Authorization header)
+            modified_request = next(auth_flow)
+
+            # Close the generator to clean up
+            auth_flow.close()
+
+            return modified_request
+        except Exception as e:
+            logger.warning(f"Error applying auth flow in replay mode: {e}")
+            return request
+
     def _patch_sync_client(self, module: Any) -> None:
         """Patch httpx.Client.send for sync HTTP calls.
 
@@ -189,7 +292,9 @@ class HttpxInstrumentation(InstrumentationBase):
             # REPLAY mode: Use handle_replay_mode for proper background request handling
             if sdk.mode == TuskDriftMode.REPLAY:
                 return handle_replay_mode(
-                    replay_mode_handler=lambda: instrumentation_self._handle_replay_send_sync(sdk, module, request),
+                    replay_mode_handler=lambda: instrumentation_self._handle_replay_send_sync(
+                        sdk, module, request, auth=auth, client=client_self
+                    ),
                     no_op_request_handler=lambda: instrumentation_self._get_default_response(module, url_str),
                     is_server_request=False,
                 )
@@ -218,12 +323,20 @@ class HttpxInstrumentation(InstrumentationBase):
         sdk: TuskDrift,
         httpx_module: Any,
         request: Any,  # httpx.Request object
+        auth: Any = None,  # Auth parameter to apply before mock lookup
+        client: Any = None,  # Client instance (needed to resolve USE_CLIENT_DEFAULT)
     ) -> Any:
         """Handle send in REPLAY mode (sync).
 
-        Creates a span, fetches mock response from the Request object, and returns it.
+        Creates a span, applies auth to get modified request, fetches mock response.
         Raises RuntimeError if no mock is found.
         """
+        # Apply auth flow to get request with Authorization header
+        # This is needed because during RECORD, auth is applied by httpx internally,
+        # but during REPLAY we skip httpx and need to apply it ourselves
+        if auth is not None:
+            request = self._apply_auth_to_request_sync(request, auth, httpx_module, client)
+
         method = request.method
         url = str(request.url)
 
@@ -354,7 +467,9 @@ class HttpxInstrumentation(InstrumentationBase):
             # handle_replay_mode returns coroutine which we await
             if sdk.mode == TuskDriftMode.REPLAY:
                 return await handle_replay_mode(
-                    replay_mode_handler=lambda: instrumentation_self._handle_replay_send_async(sdk, module, request),
+                    replay_mode_handler=lambda: instrumentation_self._handle_replay_send_async(
+                        sdk, module, request, auth=auth, client=client_self
+                    ),
                     no_op_request_handler=lambda: instrumentation_self._get_default_response(module, url_str),
                     is_server_request=False,
                 )
@@ -384,13 +499,18 @@ class HttpxInstrumentation(InstrumentationBase):
         sdk: TuskDrift,
         httpx_module: Any,
         request: Any,  # httpx.Request object
+        auth: Any = None,  # Auth parameter to apply before mock lookup
+        client: Any = None,  # Client instance (needed to resolve USE_CLIENT_DEFAULT)
     ) -> Any:
         """Handle send in REPLAY mode (async).
 
         Delegates to sync version since mock lookup uses sync operations
         to avoid nested event loop issues with Flask's asyncio.run().
+
+        Note: Auth is applied synchronously since the auth flow for simple auth types
+        (BasicAuth, FunctionAuth) does not require async operations.
         """
-        return self._handle_replay_send_sync(sdk, httpx_module, request)
+        return self._handle_replay_send_sync(sdk, httpx_module, request, auth=auth, client=client)
 
     async def _handle_record_send_async(
         self,

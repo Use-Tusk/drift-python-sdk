@@ -112,4 +112,6 @@ if __name__ == "__main__":
 
     make_request("GET", "/test/follow-redirects")
 
+    make_request("GET", "/test/basic-auth")
+
     print("\nAll requests completed successfully")

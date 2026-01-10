@@ -360,13 +360,6 @@ def async_chain():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
-# =============================================================================
-# BUG HUNTING TESTS - Confirmed Instrumentation Bugs
-# These endpoints expose bugs in the httpx instrumentation
-# =============================================================================
-
-
 @app.route("/test/streaming", methods=["GET"])
 def test_streaming():
     """Test 5: Streaming response using client.stream() context manager."""
@@ -459,6 +452,28 @@ def test_async_stream():
     try:
         result = asyncio.run(fetch())
         return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/test/basic-auth", methods=["GET"])
+def test_basic_auth():
+    """BUG: HTTP Basic Authentication fails in REPLAY mode.
+
+    Root cause: During REPLAY, the instrumentation intercepts the request BEFORE
+    the auth flow runs, so the Authorization header is missing. But during RECORD,
+    the auth flow runs and modifies the request IN PLACE before the span is finalized,
+    so the header is captured. This causes a mismatch during replay.
+
+    See BUG_TRACKING.md for full analysis.
+    """
+    try:
+        with httpx.Client() as client:
+            # httpbin.org/basic-auth/{user}/{passwd} returns 200 if auth succeeds
+            response = client.get(
+                "https://httpbin.org/basic-auth/testuser/testpass",
+                auth=("testuser", "testpass"),
+            )
+            return jsonify(response.json())
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
