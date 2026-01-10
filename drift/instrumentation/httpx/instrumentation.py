@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import inspect
 import json
 import logging
 from typing import Any
@@ -201,6 +202,60 @@ class HttpxInstrumentation(InstrumentationBase):
         for hook in response_hooks:
             try:
                 hook(response)
+            except Exception as e:
+                logger.warning(f"Error firing response hook in REPLAY mode: {e}")
+
+    async def _fire_request_hooks_async(self, client: Any, request: Any) -> None:
+        """Fire request event hooks if present on client (async version).
+
+        In REPLAY mode with AsyncClient, hooks may be async functions that need
+        to be awaited. This method checks if the hook returns a coroutine and
+        awaits it if necessary.
+
+        Args:
+            client: httpx AsyncClient instance (may be None)
+            request: httpx.Request object to pass to hooks
+        """
+        if client is None:
+            return
+
+        event_hooks = getattr(client, "_event_hooks", None)
+        if not event_hooks:
+            return
+
+        request_hooks = event_hooks.get("request", [])
+        for hook in request_hooks:
+            try:
+                result = hook(request)
+                if inspect.iscoroutine(result):
+                    await result
+            except Exception as e:
+                logger.warning(f"Error firing request hook in REPLAY mode: {e}")
+
+    async def _fire_response_hooks_async(self, client: Any, response: Any) -> None:
+        """Fire response event hooks if present on client (async version).
+
+        In REPLAY mode with AsyncClient, hooks may be async functions that need
+        to be awaited. This method checks if the hook returns a coroutine and
+        awaits it if necessary.
+
+        Args:
+            client: httpx AsyncClient instance (may be None)
+            response: httpx.Response object to pass to hooks
+        """
+        if client is None:
+            return
+
+        event_hooks = getattr(client, "_event_hooks", None)
+        if not event_hooks:
+            return
+
+        response_hooks = event_hooks.get("response", [])
+        for hook in response_hooks:
+            try:
+                result = hook(response)
+                if inspect.iscoroutine(result):
+                    await result
             except Exception as e:
                 logger.warning(f"Error firing response hook in REPLAY mode: {e}")
 
@@ -453,12 +508,48 @@ class HttpxInstrumentation(InstrumentationBase):
     ) -> Any:
         """Handle send in REPLAY mode (async).
 
-        Delegates to sync version since mock lookup uses sync operations
-        to avoid nested event loop issues with Flask's asyncio.run().
+        Creates a span, fetches mock response. Uses async hook methods to properly
+        await async event hooks that may be registered with AsyncClient.
 
-        Note: Auth is not applied - see _handle_replay_send_sync for rationale.
+        Note: Auth is NOT applied in REPLAY mode. Instead, we strip auth-related
+        headers (Authorization, Cookie) from the input value in both RECORD and
+        REPLAY modes to ensure consistent matching. This handles multi-step auth
+        flows like DigestAuth where we can't simulate the full challenge-response.
         """
-        return self._handle_replay_send_sync(sdk, httpx_module, request, auth=auth, client=client)
+        # Fire request hooks to modify request before mock lookup
+        # This matches RECORD behavior where hooks run before the request is sent
+        # Use async version to properly await async hooks
+        await self._fire_request_hooks_async(client, request)
+
+        method = request.method
+        url = str(request.url)
+
+        span_info = self._create_client_span(method, url, not sdk.app_ready)
+        if not span_info:
+            raise RuntimeError(f"Error creating span in replay mode for {method} {url}")
+
+        try:
+            with SpanUtils.with_span(span_info):
+                # Use IDs from SpanInfo (already formatted)
+                mock_response = self._try_get_mock_from_request_sync(
+                    sdk,
+                    httpx_module,
+                    request,
+                    span_info.trace_id,
+                    span_info.span_id,
+                )
+
+                if mock_response is not None:
+                    # Fire response hooks on mock response
+                    # This matches RECORD behavior where hooks run after response
+                    # Use async version to properly await async hooks
+                    await self._fire_response_hooks_async(client, mock_response)
+                    return mock_response
+
+                # No mock found - raise error in REPLAY mode
+                raise RuntimeError(f"No mock found for {method} {url} in REPLAY mode")
+        finally:
+            span_info.span.end()
 
     async def _handle_record_send_async(
         self,

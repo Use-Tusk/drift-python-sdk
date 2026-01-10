@@ -557,6 +557,67 @@ def test_digest_auth():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/test/async-hooks", methods=["GET"])
+def test_async_hooks():
+    """Test: AsyncClient with async event hooks."""
+
+    async def fetch():
+        request_count = [0]
+        response_count = [0]
+
+        async def async_request_hook(request):
+            request_count[0] += 1
+            request.headers["X-Async-Hook"] = "true"
+
+        async def async_response_hook(response):
+            response_count[0] += 1
+
+        async with httpx.AsyncClient(
+            event_hooks={
+                "request": [async_request_hook],
+                "response": [async_response_hook],
+            }
+        ) as client:
+            response = await client.get("https://httpbin.org/headers")
+            result = response.json()
+            return {
+                "request_hook_called": request_count[0] > 0,
+                "response_hook_called": response_count[0] > 0,
+                "async_hook_header_present": "X-Async-Hook" in result.get("headers", {}),
+            }
+
+    try:
+        result = asyncio.run(fetch())
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# =============================================================================
+# Bug Hunting Tests - Confirmed Instrumentation Bugs
+# =============================================================================
+
+@app.route("/test/file-like-body", methods=["POST"])
+def test_file_like_body():
+    """Test: Request body from file-like object (BytesIO)."""
+    try:
+        import io
+        file_content = b'{"title": "File Body", "body": "From BytesIO", "userId": 1}'
+        file_obj = io.BytesIO(file_content)
+
+        with httpx.Client() as client:
+            response = client.post(
+                "https://httpbin.org/post",
+                content=file_obj,
+                headers={"Content-Type": "application/json"},
+            )
+            result = response.json()
+            return jsonify({
+                "posted_data": result.get("data", ""),
+                "content_type": result.get("headers", {}).get("Content-Type", ""),
+            })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 if __name__ == "__main__":
     sdk.mark_app_as_ready()
