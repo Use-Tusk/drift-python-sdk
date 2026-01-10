@@ -224,7 +224,6 @@ class HttpxInstrumentation(InstrumentationBase):
         ):
             """Patched Client.send method."""
             url_str = str(request.url)
-            method = request.method
             sdk = TuskDrift.get_instance()
 
             # Pass through if SDK is disabled
@@ -400,7 +399,6 @@ class HttpxInstrumentation(InstrumentationBase):
         ):
             """Patched AsyncClient.send method."""
             url_str = str(request.url)
-            method = request.method
             sdk = TuskDrift.get_instance()
 
             # Pass through if SDK is disabled
