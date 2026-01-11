@@ -281,6 +281,65 @@ def session_send_direct():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/test/streaming-iter-lines", methods=["GET"])
+def test_streaming_iter_lines():
+    """Test streaming response using iter_lines."""
+    try:
+        response = requests.get(
+            "https://httpbin.org/stream/5",  # Returns 5 JSON lines
+            stream=True,
+            timeout=10
+        )
+        # Consume the stream using iter_lines
+        lines = []
+        for line in response.iter_lines():
+            if line:
+                lines.append(line.decode('utf-8'))
+
+        return jsonify({
+            "test": "streaming-iter-lines",
+            "status_code": response.status_code,
+            "lines_received": len(lines)
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
+# ============ BUG DETECTION TESTS ============
+# These tests expose bugs in the requests instrumentation during REPLAY mode.
+# Keep only tests that expose confirmed bugs.
+
+# BUG 4: Response hooks are not called in REPLAY mode
+# dispatch_hook() is not called when returning mock response
+@app.route("/test/response-hooks", methods=["GET"])
+def test_response_hooks():
+    """Test response hooks that modify response - EXPOSES BUG."""
+    try:
+        hook_called = {"value": False}
+        hook_status = {"value": 0}
+
+        def response_hook(response, *args, **kwargs):
+            hook_called["value"] = True
+            hook_status["value"] = response.status_code
+            return response
+
+        response = requests.get(
+            "https://httpbin.org/get",
+            hooks={"response": response_hook},
+            timeout=10
+        )
+
+        return jsonify({
+            "test": "response-hooks",
+            "status_code": response.status_code,
+            "hook_called": hook_called["value"],
+            "hook_status": hook_status["value"]
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     sdk.mark_app_as_ready()
     app.run(host="0.0.0.0", port=8000, debug=False)

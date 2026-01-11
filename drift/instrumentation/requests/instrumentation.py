@@ -165,6 +165,7 @@ class RequestsInstrumentation(InstrumentationBase):
         response.url = url
         response._content = b""
         response.encoding = "utf-8"
+        response._content_consumed = True
         logger.debug(f"[RequestsInstrumentation] Returning default response for background request to {url}")
         return response
 
@@ -581,6 +582,10 @@ class RequestsInstrumentation(InstrumentationBase):
             response._content = json.dumps(body).encode("utf-8")
 
         response.encoding = "utf-8"
+
+        # Mark content as consumed so iter_content() uses cached _content
+        # instead of trying to stream from raw (which is None in mock responses)
+        response._content_consumed = True
 
         logger.debug(f"Created mock response: {response.status_code} for {url}")
         return response
