@@ -74,11 +74,6 @@ if __name__ == "__main__":
 
     make_request("GET", "/test/streaming-iter-lines")
 
-    # ============ BUG DETECTION TESTS ============
-    # These tests expose confirmed bugs in the requests instrumentation
-    print("\n=== Bug Detection Tests ===\n")
-
-    # BUG 4: Response hooks are not called in REPLAY mode
     make_request("GET", "/test/response-hooks")
 
     print("\nAll requests completed successfully")

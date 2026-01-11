@@ -132,7 +132,7 @@ class RequestsInstrumentation(InstrumentationBase):
             if sdk.mode == TuskDriftMode.REPLAY:
                 return handle_replay_mode(
                     replay_mode_handler=lambda: instrumentation_self._handle_replay_send(
-                        sdk, request
+                        sdk, request, **kwargs
                     ),
                     no_op_request_handler=lambda: instrumentation_self._get_default_response(url),
                     is_server_request=False,
@@ -264,6 +264,7 @@ class RequestsInstrumentation(InstrumentationBase):
         self,
         sdk: TuskDrift,
         prepared_request: Any,
+        **kwargs,
     ) -> Any:
         """Handle send() in REPLAY mode.
 
@@ -271,10 +272,8 @@ class RequestsInstrumentation(InstrumentationBase):
 
         Args:
             sdk: TuskDrift instance
-            session_self: Session instance
             prepared_request: PreparedRequest object
-            original_send: Original Session.send method
-            **kwargs: Additional send() kwargs
+            **kwargs: Additional send() kwargs (timeout, verify, cert, proxies, etc.)
         """
         method = prepared_request.method
         url = prepared_request.url
@@ -317,6 +316,10 @@ class RequestsInstrumentation(InstrumentationBase):
                 )
 
                 if mock_response is not None:
+                    # Dispatch response hooks (matches Session.send() behavior)
+                    # This ensures hooks registered via hooks={"response": callback} are called
+                    from requests.hooks import dispatch_hook
+                    mock_response = dispatch_hook("response", prepared_request.hooks, mock_response, **kwargs)
                     return mock_response
 
                 # No mock found - raise error in REPLAY mode

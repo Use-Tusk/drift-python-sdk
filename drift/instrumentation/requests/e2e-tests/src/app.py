@@ -304,17 +304,9 @@ def test_streaming_iter_lines():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
-
-# ============ BUG DETECTION TESTS ============
-# These tests expose bugs in the requests instrumentation during REPLAY mode.
-# Keep only tests that expose confirmed bugs.
-
-# BUG 4: Response hooks are not called in REPLAY mode
-# dispatch_hook() is not called when returning mock response
 @app.route("/test/response-hooks", methods=["GET"])
 def test_response_hooks():
-    """Test response hooks that modify response - EXPOSES BUG."""
+    """Test response hooks that modify response."""
     try:
         hook_called = {"value": False}
         hook_status = {"value": 0}
