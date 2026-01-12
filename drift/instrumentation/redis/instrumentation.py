@@ -137,6 +137,33 @@ class RedisInstrumentation(InstrumentationBase):
 
                 async_redis_class.execute_command = patched_async_execute_command
                 logger.debug("redis.asyncio.Redis.execute_command instrumented")
+
+            # Patch async Pipeline.execute
+            try:
+                from redis.asyncio.client import Pipeline as AsyncPipeline
+
+                if hasattr(AsyncPipeline, "execute"):
+                    original_async_pipeline_execute = AsyncPipeline.execute
+
+                    async def patched_async_pipeline_execute(pipeline_self, *args, **kwargs):
+                        """Patched async Pipeline.execute method."""
+                        sdk = TuskDrift.get_instance()
+
+                        if sdk.mode == TuskDriftMode.DISABLED:
+                            return await original_async_pipeline_execute(pipeline_self, *args, **kwargs)
+
+                        return await instrumentation._traced_async_pipeline_execute(
+                            pipeline_self,
+                            original_async_pipeline_execute,
+                            sdk,
+                            args,
+                            kwargs,
+                        )
+
+                    AsyncPipeline.execute = patched_async_pipeline_execute
+                    logger.debug("redis.asyncio.client.Pipeline.execute instrumented")
+            except ImportError:
+                logger.debug("redis.asyncio.client.Pipeline not available")
         except ImportError:
             logger.debug("redis.asyncio not available")
 
@@ -371,6 +398,83 @@ class RedisInstrumentation(InstrumentationBase):
             ),
             span_kind=OTelSpanKind.CLIENT,
         )
+
+    async def _traced_async_pipeline_execute(
+        self, pipeline: Any, original_execute: Any, sdk: TuskDrift, args: tuple, kwargs: dict
+    ) -> Any:
+        """Traced async Pipeline.execute method."""
+        if sdk.mode == TuskDriftMode.DISABLED:
+            return await original_execute(pipeline, *args, **kwargs)
+
+        # Get commands from pipeline
+        command_stack = self._get_pipeline_commands(pipeline)
+        command_str = self._format_pipeline_commands(command_stack)
+
+        if sdk.mode == TuskDriftMode.REPLAY:
+            return handle_replay_mode(
+                replay_mode_handler=lambda: self._replay_pipeline_execute(sdk, command_str, command_stack),
+                no_op_request_handler=lambda: [],  # Empty list for pipeline
+                is_server_request=False,
+            )
+
+        # RECORD mode with async execution
+        return await self._record_async_pipeline_execute(
+            pipeline, original_execute, sdk, args, kwargs, command_str, command_stack
+        )
+
+    async def _record_async_pipeline_execute(
+        self,
+        pipeline: Any,
+        original_execute: Any,
+        sdk: TuskDrift,
+        args: tuple,
+        kwargs: dict,
+        command_str: str,
+        command_stack: list,
+    ) -> Any:
+        """Handle async RECORD mode for pipeline execute."""
+        is_pre_app_start = not sdk.app_ready
+        span_name = "redis.pipeline"
+
+        # Create span using SpanUtils
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name=span_name,
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: span_name,
+                    TdSpanAttributes.PACKAGE_NAME: "redis",
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "RedisInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: "pipeline",
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.REDIS.name,
+                    TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+                },
+                is_pre_app_start=is_pre_app_start,
+            )
+        )
+
+        if not span_info:
+            # Fallback to original call if span creation fails
+            return await original_execute(pipeline, *args, **kwargs)
+
+        error = None
+        result = None
+
+        with SpanUtils.with_span(span_info):
+            try:
+                result = await original_execute(pipeline, *args, **kwargs)
+                return result
+            except Exception as e:
+                error = e
+                raise
+            finally:
+                self._finalize_pipeline_span(
+                    span_info.span,
+                    command_str,
+                    command_stack,
+                    result if error is None else None,
+                    error,
+                )
 
     def _replay_pipeline_execute(self, sdk: TuskDrift, command_str: str, command_stack: list) -> Any:
         """Handle REPLAY mode for pipeline execute."""
