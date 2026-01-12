@@ -194,8 +194,11 @@ class RedisInstrumentation(InstrumentationBase):
             raise RuntimeError("Error creating span in replay mode")
 
         with SpanUtils.with_span(span_info):
+            # Build input_value using shared helper
+            input_value = self._build_command_input_value(command_str, args)
+
             mock_result = self._try_get_mock(
-                sdk, command_name, command_str, args, span_info.trace_id, span_info.span_id, span_info.parent_span_id
+                sdk, command_name, input_value, span_info.trace_id, span_info.span_id, span_info.parent_span_id
             )
 
             if mock_result is None:
@@ -394,11 +397,13 @@ class RedisInstrumentation(InstrumentationBase):
             raise RuntimeError("Error creating span in replay mode")
 
         with SpanUtils.with_span(span_info):
+            # Build input_value the same way as _finalize_pipeline_span
+            input_value = self._build_pipeline_input_value(command_str, command_stack)
+
             mock_result = self._try_get_mock(
                 sdk,
                 "pipeline",
-                command_str,
-                command_stack,
+                input_value,
                 span_info.trace_id,
                 span_info.span_id,
                 span_info.parent_span_id,
@@ -516,25 +521,35 @@ class RedisInstrumentation(InstrumentationBase):
 
         return "PIPELINE: " + " ".join(commands)
 
+    def _build_command_input_value(self, command_str: str, args: tuple) -> dict[str, Any]:
+        """Build input_value for single commands (used by both record and replay)."""
+        input_value: dict[str, Any] = {"command": command_str.strip()}
+        if args is not None:
+            input_value["arguments"] = self._serialize_args(args)
+        return input_value
+
+    def _build_pipeline_input_value(self, command_str: str, command_stack: list) -> dict[str, Any]:
+        """Build input_value for pipeline operations (used by both record and replay)."""
+        serialized_commands = [
+            self._serialize_args(cmd.args if hasattr(cmd, "args") else cmd[0])
+            for cmd in command_stack
+        ]
+        return {
+            "command": command_str,
+            "commands": serialized_commands,
+        }
+
     def _try_get_mock(
         self,
         sdk: TuskDrift,
         command_name: str,
-        command_str: str,
-        args: Any,
+        input_value: dict[str, Any],
         trace_id: str,
         span_id: str,
         parent_span_id: str | None,
     ) -> dict[str, Any] | None:
         """Try to get a mocked response from CLI."""
         try:
-            # Build input value
-            input_value = {
-                "command": command_str.strip(),
-            }
-            if args is not None:
-                input_value["arguments"] = self._serialize_args(args)
-
             # Generate schema and hashes for CLI matching
             input_result = JsonSchemaHelper.generate_schema_and_hash(input_value, {})
 
@@ -577,6 +592,7 @@ class RedisInstrumentation(InstrumentationBase):
                 outbound_span=mock_span,
             )
 
+            command_str = input_value.get("command", "")
             logger.debug(f"Requesting mock from CLI for command: {command_str[:50]}...")
             mock_response_output = sdk.request_mock_sync(mock_request)
             logger.debug(f"CLI returned: found={mock_response_output.found}")
@@ -601,12 +617,8 @@ class RedisInstrumentation(InstrumentationBase):
     ) -> None:
         """Finalize span with command data."""
         try:
-            # Build input value
-            input_value = {
-                "command": command.strip(),
-            }
-            if args is not None:
-                input_value["arguments"] = self._serialize_args(args)
+            # Build input value using shared helper
+            input_value = self._build_command_input_value(command, args)
 
             # Build output value
             output_value = {}
@@ -653,14 +665,8 @@ class RedisInstrumentation(InstrumentationBase):
     ) -> None:
         """Finalize span with pipeline data."""
         try:
-            # Build input value
-            serialized_commands = [
-                self._serialize_args(cmd.args if hasattr(cmd, "args") else cmd[0]) for cmd in command_stack
-            ]
-            input_value: dict[str, Any] = {
-                "command": command_str,
-                "commands": serialized_commands,
-            }
+            # Build input value using shared helper
+            input_value = self._build_pipeline_input_value(command_str, command_stack)
 
             # Build output value
             output_value = {}

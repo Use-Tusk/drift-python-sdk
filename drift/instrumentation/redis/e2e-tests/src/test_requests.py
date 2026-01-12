@@ -49,4 +49,10 @@ if __name__ == "__main__":
     make_request("DELETE", "/redis/delete/test_key")
     make_request("DELETE", "/redis/delete/counter")
 
+    make_request("GET", "/test/mget-mset")
+
+    # Pipeline operations
+    make_request("GET", "/test/pipeline-basic")
+    make_request("GET", "/test/pipeline-no-transaction")
+
     print("\nAll requests completed successfully")

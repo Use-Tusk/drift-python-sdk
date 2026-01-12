@@ -88,6 +88,52 @@ def redis_keys(pattern):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/test/mget-mset", methods=["GET"])
+def test_mget_mset():
+    """Test MGET/MSET - multiple key operations."""
+    try:
+        # MSET multiple keys
+        redis_client.mset({"test:mset:key1": "value1", "test:mset:key2": "value2", "test:mset:key3": "value3"})
+        # MGET multiple keys
+        result = redis_client.mget(["test:mset:key1", "test:mset:key2", "test:mset:key3", "test:mset:nonexistent"])
+        # Clean up
+        redis_client.delete("test:mset:key1", "test:mset:key2", "test:mset:key3")
+        return jsonify({"success": True, "result": result})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/test/pipeline-basic", methods=["GET"])
+def test_pipeline_basic():
+    """Test basic pipeline operations."""
+    try:
+        pipe = redis_client.pipeline()
+        pipe.set("test:pipe:key1", "value1")
+        pipe.set("test:pipe:key2", "value2")
+        pipe.get("test:pipe:key1")
+        pipe.get("test:pipe:key2")
+        results = pipe.execute()
+        # Clean up
+        redis_client.delete("test:pipe:key1", "test:pipe:key2")
+        return jsonify({"success": True, "results": results})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/pipeline-no-transaction", methods=["GET"])
+def test_pipeline_no_transaction():
+    """Test pipeline with transaction=False."""
+    try:
+        pipe = redis_client.pipeline(transaction=False)
+        pipe.set("test:pipe:notx:key1", "value1")
+        pipe.incr("test:pipe:notx:counter")
+        pipe.get("test:pipe:notx:key1")
+        results = pipe.execute()
+        # Clean up
+        redis_client.delete("test:pipe:notx:key1", "test:pipe:notx:counter")
+        return jsonify({"success": True, "results": results})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 if __name__ == "__main__":
     sdk.mark_app_as_ready()
