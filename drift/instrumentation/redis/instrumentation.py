@@ -817,9 +817,10 @@ class RedisInstrumentation(InstrumentationBase):
         """Serialize a single value for JSON."""
         if isinstance(value, bytes):
             try:
-                return value.decode("utf-8")
+                decoded = value.decode("utf-8")
+                return {"__bytes__": True, "encoding": "utf8", "value": decoded}
             except UnicodeDecodeError:
-                return value.hex()
+                return {"__bytes__": True, "encoding": "hex", "value": value.hex()}
         elif isinstance(value, (str, int, float, bool, type(None))):
             return value
         elif isinstance(value, (list, tuple)):
@@ -835,6 +836,24 @@ class RedisInstrumentation(InstrumentationBase):
         """Serialize Redis response for recording."""
         return self._serialize_value(response)
 
+    def _deserialize_value(self, value: Any) -> Any:
+        """Deserialize a value, converting typed wrappers back to original types."""
+        if isinstance(value, dict):
+            # Check for bytes wrapper
+            if value.get("__bytes__") is True:
+                encoding = value.get("encoding")
+                data = value.get("value", "")
+                if encoding == "utf8":
+                    return data.encode("utf-8")
+                elif encoding == "hex":
+                    return bytes.fromhex(data)
+                return data  # fallback
+            # Recursively deserialize dict values
+            return {k: self._deserialize_value(v) for k, v in value.items()}
+        elif isinstance(value, list):
+            return [self._deserialize_value(v) for v in value]
+        return value
+
     def _deserialize_response(self, mock_data: dict[str, Any]) -> Any:
         """Deserialize mocked response data from CLI.
 
@@ -845,9 +864,9 @@ class RedisInstrumentation(InstrumentationBase):
 
         if isinstance(mock_data, dict):
             if "result" in mock_data:
-                return mock_data["result"]
+                return self._deserialize_value(mock_data["result"])
             elif "results" in mock_data:
-                return mock_data["results"]
+                return [self._deserialize_value(r) for r in mock_data["results"]]
 
         logger.warning(f"Could not deserialize mock_data structure: {mock_data}")
         return None

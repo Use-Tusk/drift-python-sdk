@@ -134,6 +134,79 @@ def test_pipeline_no_transaction():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/test/async-pipeline", methods=["GET"])
+def test_async_pipeline():
+    """Test async pipeline operations using asyncio."""
+    import asyncio
+    import redis.asyncio as aioredis
+
+    async def run_async_pipeline():
+        # Create async Redis client
+        async_client = aioredis.Redis(
+            host=os.getenv("REDIS_HOST", "redis"),
+            port=int(os.getenv("REDIS_PORT", "6379")),
+            db=0,
+            decode_responses=True
+        )
+
+        try:
+            # Create async pipeline
+            pipe = async_client.pipeline()
+            pipe.set("test:async:pipe:key1", "async_value1")
+            pipe.set("test:async:pipe:key2", "async_value2")
+            pipe.get("test:async:pipe:key1")
+            pipe.get("test:async:pipe:key2")
+            results = await pipe.execute()
+
+            # Clean up
+            await async_client.delete("test:async:pipe:key1", "test:async:pipe:key2")
+
+            return results
+        finally:
+            await async_client.aclose()
+
+    try:
+        results = asyncio.run(run_async_pipeline())
+        return jsonify({
+            "success": True,
+            "results": results
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/test/binary-data", methods=["GET"])
+def test_binary_data():
+    """Test binary data that cannot be decoded as UTF-8."""
+    try:
+        # Create a Redis client without decode_responses for binary data
+        binary_client = redis.Redis(
+            host=os.getenv("REDIS_HOST", "redis"),
+            port=int(os.getenv("REDIS_PORT", "6379")),
+            db=0,
+            decode_responses=False
+        )
+
+        # Binary data that cannot be decoded as UTF-8
+        binary_value = bytes([0x80, 0x81, 0x82, 0xFF, 0xFE, 0xFD])
+
+        # Set binary data
+        binary_client.set("test:binary:key", binary_value)
+
+        # Get binary data back
+        retrieved = binary_client.get("test:binary:key")
+
+        # Clean up
+        binary_client.delete("test:binary:key")
+
+        return jsonify({
+            "success": True,
+            "original_hex": binary_value.hex(),
+            "retrieved_hex": retrieved.hex() if retrieved else None,
+            "match": binary_value == retrieved
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 if __name__ == "__main__":
     sdk.mark_app_as_ready()

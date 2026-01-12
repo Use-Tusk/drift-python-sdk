@@ -55,4 +55,10 @@ if __name__ == "__main__":
     make_request("GET", "/test/pipeline-basic")
     make_request("GET", "/test/pipeline-no-transaction")
 
+    # Async Pipeline operations
+    make_request("GET", "/test/async-pipeline")
+
+    # Binary data handling
+    make_request("GET", "/test/binary-data")
+
     print("\nAll requests completed successfully")
