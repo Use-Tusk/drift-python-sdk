@@ -1,7 +1,7 @@
 {
-  "sdkVersion": "0.1.7",
+  "sdkVersion": "0.1.8",
   "language": "python",
-  "generatedAt": "2026-01-08T03:20:43.212927Z",
+  "generatedAt": "2026-01-12T06:00:46.673401Z",
   "instrumentations": [
     {
       "packageName": "django",
