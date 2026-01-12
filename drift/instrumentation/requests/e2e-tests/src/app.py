@@ -261,6 +261,7 @@ def text_response():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 @app.route("/test/session-send-direct", methods=["GET"])
 def session_send_direct():
     try:
@@ -273,13 +274,10 @@ def session_send_direct():
         # Call send() directly - bypasses request() method
         response = session.send(prepared, timeout=10)
 
-        return jsonify({
-            "status_code": response.status_code,
-            "data": response.json(),
-            "test": "session-send-direct"
-        })
+        return jsonify({"status_code": response.status_code, "data": response.json(), "test": "session-send-direct"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/test/streaming-iter-lines", methods=["GET"])
 def test_streaming_iter_lines():
@@ -288,21 +286,20 @@ def test_streaming_iter_lines():
         response = requests.get(
             "https://httpbin.org/stream/5",  # Returns 5 JSON lines
             stream=True,
-            timeout=10
+            timeout=10,
         )
         # Consume the stream using iter_lines
         lines = []
         for line in response.iter_lines():
             if line:
-                lines.append(line.decode('utf-8'))
+                lines.append(line.decode("utf-8"))
 
-        return jsonify({
-            "test": "streaming-iter-lines",
-            "status_code": response.status_code,
-            "lines_received": len(lines)
-        })
+        return jsonify(
+            {"test": "streaming-iter-lines", "status_code": response.status_code, "lines_received": len(lines)}
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/test/response-hooks", methods=["GET"])
 def test_response_hooks():
@@ -316,18 +313,16 @@ def test_response_hooks():
             hook_status["value"] = response.status_code
             return response
 
-        response = requests.get(
-            "https://httpbin.org/get",
-            hooks={"response": response_hook},
-            timeout=10
-        )
+        response = requests.get("https://httpbin.org/get", hooks={"response": response_hook}, timeout=10)
 
-        return jsonify({
-            "test": "response-hooks",
-            "status_code": response.status_code,
-            "hook_called": hook_called["value"],
-            "hook_status": hook_status["value"]
-        })
+        return jsonify(
+            {
+                "test": "response-hooks",
+                "status_code": response.status_code,
+                "hook_called": hook_called["value"],
+                "hook_status": hook_status["value"],
+            }
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
