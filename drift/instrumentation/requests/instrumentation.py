@@ -59,9 +59,13 @@ HEADER_SCHEMA_MERGES = {
 class RequestsInstrumentation(InstrumentationBase):
     """Instrumentation for the requests HTTP client library.
 
-    Patches requests.Session.request to:
+    Patches requests.Session.send() to:
     - Intercept HTTP requests in REPLAY mode and return mocked responses
     - Capture request/response data as CLIENT spans in RECORD mode
+
+    We patch send() instead of request() because all HTTP calls flow through
+    send(), including session.get(), session.post(), session.request(), and
+    direct session.send(PreparedRequest) calls. This ensures complete coverage.
     """
 
     def __init__(self, enabled: bool = True, transforms: dict[str, Any] | None = None) -> None:
@@ -89,32 +93,45 @@ class RequestsInstrumentation(InstrumentationBase):
         return None
 
     def patch(self, module: Any) -> None:
-        """Patch the requests module."""
+        """Patch the requests module.
+
+        Patches Session.send() instead of Session.request() because all requests
+        (including session.get(), session.post(), session.request(), and direct
+        session.send() calls) flow through send(). This ensures complete coverage
+        including direct PreparedRequest usage.
+        """
         if not hasattr(module, "Session"):
             logger.warning("requests.Session not found, skipping instrumentation")
             return
 
         # Store original method
-        original_request = module.Session.request
+        original_send = module.Session.send
         instrumentation_self = self
 
-        def patched_request(session_self, method: str, url: str, **kwargs):
-            """Patched Session.request method."""
+        def patched_send(session_self, request, **kwargs):
+            """Patched Session.send method.
+
+            Args:
+                session_self: Session instance
+                request: PreparedRequest object
+                **kwargs: Additional args (timeout, verify, cert, proxies, etc.)
+            """
             sdk = TuskDrift.get_instance()
 
             # Pass through if SDK is disabled
             if sdk.mode == TuskDriftMode.DISABLED:
-                return original_request(session_self, method, url, **kwargs)
+                return original_send(session_self, request, **kwargs)
+
+            # Extract URL for default response handler
+            url = request.url
 
             def original_call():
-                return original_request(session_self, method, url, **kwargs)
+                return original_send(session_self, request, **kwargs)
 
             # REPLAY mode: Use handle_replay_mode for proper background request handling
             if sdk.mode == TuskDriftMode.REPLAY:
                 return handle_replay_mode(
-                    replay_mode_handler=lambda: instrumentation_self._handle_replay(
-                        sdk, session_self, method, url, original_request, **kwargs
-                    ),
+                    replay_mode_handler=lambda: instrumentation_self._handle_replay_send(sdk, request, **kwargs),
                     no_op_request_handler=lambda: instrumentation_self._get_default_response(url),
                     is_server_request=False,
                 )
@@ -122,15 +139,15 @@ class RequestsInstrumentation(InstrumentationBase):
             # RECORD mode: Use handle_record_mode for proper is_pre_app_start handling
             return handle_record_mode(
                 original_function_call=original_call,
-                record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record(
-                    sdk, session_self, method, url, is_pre_app_start, original_request, **kwargs
+                record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record_send(
+                    session_self, request, is_pre_app_start, original_send, **kwargs
                 ),
                 span_kind=OTelSpanKind.CLIENT,
             )
 
         # Apply patch
-        module.Session.request = patched_request
-        logger.info("requests.Session.request instrumented")
+        module.Session.send = patched_send
+        logger.info("requests.Session.send instrumented")
 
     def _get_default_response(self, url: str) -> Any:
         """Return default response for background requests in REPLAY mode.
@@ -146,23 +163,117 @@ class RequestsInstrumentation(InstrumentationBase):
         response.url = url
         response._content = b""
         response.encoding = "utf-8"
+        response._content_consumed = True
         logger.debug(f"[RequestsInstrumentation] Returning default response for background request to {url}")
         return response
 
-    def _handle_replay(
+    def _handle_record_send(
         self,
-        sdk: TuskDrift,
         session_self: Any,
-        method: str,
-        url: str,
-        original_request: Any,
+        prepared_request: Any,
+        is_pre_app_start: bool,
+        original_send: Any,
         **kwargs,
     ) -> Any:
-        """Handle request in REPLAY mode.
+        """Handle send() in RECORD mode.
 
-        Creates a span, fetches mock response, and returns it.
-        Raises RuntimeError if no mock is found.
+        Similar to _handle_record but works with PreparedRequest objects.
+
+        Args:
+            session_self: Session instance
+            prepared_request: PreparedRequest object
+            is_pre_app_start: Whether this is before app start
+            original_send: Original Session.send method
+            **kwargs: Additional send() kwargs (timeout, verify, etc.)
         """
+        method = prepared_request.method
+        url = prepared_request.url
+        parsed_url = urlparse(url)
+        span_name = f"{method.upper()} {parsed_url.path or '/'}"
+
+        # Create span using SpanUtils
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name=span_name,
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: span_name,
+                    TdSpanAttributes.PACKAGE_NAME: parsed_url.scheme,
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "RequestsInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: method.upper(),
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
+                    TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+                },
+                is_pre_app_start=is_pre_app_start,
+            )
+        )
+
+        if not span_info:
+            # Span creation failed (trace blocked, etc.) - just make the request
+            return original_send(session_self, prepared_request, **kwargs)
+
+        # Extract kwargs from PreparedRequest for _finalize_span
+        request_kwargs = self._extract_kwargs_from_prepared_request(prepared_request)
+
+        try:
+            with SpanUtils.with_span(span_info):
+                # Check drop transforms BEFORE making the request
+                headers = request_kwargs.get("headers", {})
+                if self._transform_engine and self._transform_engine.should_drop_outbound_request(
+                    method.upper(), url, headers
+                ):
+                    # Request should be dropped - mark span and raise exception
+                    span_info.span.set_attribute(
+                        TdSpanAttributes.OUTPUT_VALUE,
+                        json.dumps({"bodyProcessingError": "dropped"}),
+                    )
+                    span_info.span.set_status(Status(OTelStatusCode.ERROR, "Dropped by transform"))
+                    raise RequestDroppedByTransform(
+                        f"Outbound request to {url} was dropped by transform rule",
+                        method.upper(),
+                        url,
+                    )
+
+                # Make the real request
+                error = None
+                response = None
+
+                try:
+                    response = original_send(session_self, prepared_request, **kwargs)
+                    return response
+                except Exception as e:
+                    error = e
+                    raise
+                finally:
+                    # Finalize span with request/response data
+                    self._finalize_span(
+                        span_info.span,
+                        method,
+                        url,
+                        response,
+                        error,
+                        request_kwargs,
+                    )
+        finally:
+            span_info.span.end()
+
+    def _handle_replay_send(
+        self,
+        sdk: TuskDrift,
+        prepared_request: Any,
+        **kwargs,
+    ) -> Any:
+        """Handle send() in REPLAY mode.
+
+        Similar to _handle_replay but works with PreparedRequest objects.
+
+        Args:
+            sdk: TuskDrift instance
+            prepared_request: PreparedRequest object
+            **kwargs: Additional send() kwargs (timeout, verify, cert, proxies, etc.)
+        """
+        method = prepared_request.method
+        url = prepared_request.url
         parsed_url = urlparse(url)
         span_name = f"{method.upper()} {parsed_url.path or '/'}"
 
@@ -186,6 +297,9 @@ class RequestsInstrumentation(InstrumentationBase):
         if not span_info:
             raise RuntimeError(f"Error creating span in replay mode for {method} {url}")
 
+        # Extract kwargs from PreparedRequest for _try_get_mock
+        request_kwargs = self._extract_kwargs_from_prepared_request(prepared_request)
+
         try:
             with SpanUtils.with_span(span_info):
                 # Use IDs from SpanInfo (already formatted)
@@ -195,93 +309,19 @@ class RequestsInstrumentation(InstrumentationBase):
                     url,
                     span_info.trace_id,
                     span_info.span_id,
-                    **kwargs,
+                    **request_kwargs,
                 )
 
                 if mock_response is not None:
+                    # Dispatch response hooks (matches Session.send() behavior)
+                    # This ensures hooks registered via hooks={"response": callback} are called
+                    from requests.hooks import dispatch_hook
+
+                    mock_response = dispatch_hook("response", prepared_request.hooks, mock_response, **kwargs)
                     return mock_response
 
                 # No mock found - raise error in REPLAY mode
                 raise RuntimeError(f"No mock found for {method} {url} in REPLAY mode")
-        finally:
-            span_info.span.end()
-
-    def _handle_record(
-        self,
-        sdk: TuskDrift,
-        session_self: Any,
-        method: str,
-        url: str,
-        is_pre_app_start: bool,
-        original_request: Any,
-        **kwargs,
-    ) -> Any:
-        """Handle request in RECORD mode.
-
-        Creates a span, makes the real request, and records the response.
-        """
-        parsed_url = urlparse(url)
-        span_name = f"{method.upper()} {parsed_url.path or '/'}"
-
-        # Create span using SpanUtils
-        span_info = SpanUtils.create_span(
-            CreateSpanOptions(
-                name=span_name,
-                kind=OTelSpanKind.CLIENT,
-                attributes={
-                    TdSpanAttributes.NAME: span_name,
-                    TdSpanAttributes.PACKAGE_NAME: parsed_url.scheme,
-                    TdSpanAttributes.INSTRUMENTATION_NAME: "RequestsInstrumentation",
-                    TdSpanAttributes.SUBMODULE_NAME: method.upper(),
-                    TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
-                    TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
-                },
-                is_pre_app_start=is_pre_app_start,
-            )
-        )
-
-        if not span_info:
-            # Span creation failed (trace blocked, etc.) - just make the request
-            return original_request(session_self, method, url, **kwargs)
-
-        try:
-            with SpanUtils.with_span(span_info):
-                # Check drop transforms BEFORE making the request
-                if self._transform_engine and self._transform_engine.should_drop_outbound_request(
-                    method.upper(), url, kwargs.get("headers", {})
-                ):
-                    # Request should be dropped - mark span and raise exception
-                    span_info.span.set_attribute(
-                        TdSpanAttributes.OUTPUT_VALUE,
-                        json.dumps({"bodyProcessingError": "dropped"}),
-                    )
-                    span_info.span.set_status(Status(OTelStatusCode.ERROR, "Dropped by transform"))
-                    raise RequestDroppedByTransform(
-                        f"Outbound request to {url} was dropped by transform rule",
-                        method.upper(),
-                        url,
-                    )
-
-                # Make the real request
-                error = None
-                response = None
-
-                try:
-                    response = original_request(session_self, method, url, **kwargs)
-                    return response
-                except Exception as e:
-                    error = e
-                    raise
-                finally:
-                    # Finalize span with request/response data
-                    self._finalize_span(
-                        span_info.span,
-                        method,
-                        url,
-                        response,
-                        error,
-                        kwargs,
-                    )
         finally:
             span_info.span.end()
 
@@ -348,6 +388,51 @@ class RequestsInstrumentation(InstrumentationBase):
             if key.lower() == "content-type":
                 return value
         return None
+
+    def _extract_kwargs_from_prepared_request(self, prepared_request: Any) -> dict[str, Any]:
+        """Extract kwargs-compatible dict from PreparedRequest.
+
+        Converts a PreparedRequest object into a kwargs dict that can be used
+        with existing methods like _try_get_mock and _finalize_span.
+
+        Args:
+            prepared_request: requests.PreparedRequest object
+
+        Returns:
+            Dict with headers, params, and data/json keys
+        """
+        from urllib.parse import parse_qs
+
+        parsed = urlparse(prepared_request.url)
+
+        # Parse query params from URL (already encoded in PreparedRequest.url)
+        params = {}
+        if parsed.query:
+            params = {k: v[0] if len(v) == 1 else v for k, v in parse_qs(parsed.query).items()}
+
+        kwargs: dict[str, Any] = {
+            "headers": dict(prepared_request.headers) if prepared_request.headers else {},
+            "params": params,
+        }
+
+        # Handle body - PreparedRequest.body can be bytes, str, or None
+        body = prepared_request.body
+        if body is not None:
+            content_type = self._get_content_type_header(kwargs["headers"])
+            if content_type and "application/json" in content_type.lower():
+                try:
+                    if isinstance(body, bytes):
+                        kwargs["json"] = json.loads(body.decode("utf-8"))
+                    elif isinstance(body, str):
+                        kwargs["json"] = json.loads(body)
+                    else:
+                        kwargs["data"] = body
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    kwargs["data"] = body
+            else:
+                kwargs["data"] = body
+
+        return kwargs
 
     def _try_get_mock(
         self,
@@ -498,6 +583,10 @@ class RequestsInstrumentation(InstrumentationBase):
             response._content = json.dumps(body).encode("utf-8")
 
         response.encoding = "utf-8"
+
+        # Mark content as consumed so iter_content() uses cached _content
+        # instead of trying to stream from raw (which is None in mock responses)
+        response._content_consumed = True
 
         logger.debug(f"Created mock response: {response.status_code} for {url}")
         return response
