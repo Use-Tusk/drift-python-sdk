@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from types import ModuleType
 from typing import Any
 
@@ -11,22 +10,15 @@ from opentelemetry.trace import SpanKind as OTelSpanKind
 from opentelemetry.trace import Status
 from opentelemetry.trace import StatusCode as OTelStatusCode
 
-from ...core.communication.types import MockRequestInput
 from ...core.drift_sdk import TuskDrift
 from ...core.json_schema_helper import JsonSchemaHelper
 from ...core.mode_utils import handle_record_mode, handle_replay_mode
 from ...core.tracing import TdSpanAttributes
 from ...core.tracing.span_utils import CreateSpanOptions, SpanUtils
 from ...core.types import (
-    CleanSpanData,
-    Duration,
     PackageType,
     SpanKind,
-    SpanStatus,
-    StatusCode,
-    Timestamp,
     TuskDriftMode,
-    replay_trace_id_context,
 )
 from ..base import InstrumentationBase
 from ..utils.psycopg_utils import deserialize_db_value
@@ -386,7 +378,7 @@ class PsycopgInstrumentation(InstrumentationBase):
 
         with SpanUtils.with_span(span_info):
             mock_result = self._try_get_mock(
-                sdk, query_str, params, span_info.trace_id, span_info.span_id, span_info.parent_span_id
+                sdk, query_str, params, span_info.trace_id, span_info.span_id
             )
 
             if mock_result is None:
@@ -503,7 +495,7 @@ class PsycopgInstrumentation(InstrumentationBase):
 
         with SpanUtils.with_span(span_info):
             mock_result = self._try_get_mock(
-                sdk, query_str, {"_batch": params_list}, span_info.trace_id, span_info.span_id, span_info.parent_span_id
+                sdk, query_str, {"_batch": params_list}, span_info.trace_id, span_info.span_id
             )
 
             if mock_result is None:
@@ -668,7 +660,7 @@ class PsycopgInstrumentation(InstrumentationBase):
 
         with SpanUtils.with_span(span_info):
             mock_result = self._try_get_mock(
-                sdk, query_str, params, span_info.trace_id, span_info.span_id, span_info.parent_span_id
+                sdk, query_str, params, span_info.trace_id, span_info.span_id
             )
 
             if mock_result is None:
@@ -780,7 +772,6 @@ class PsycopgInstrumentation(InstrumentationBase):
         params: Any,
         trace_id: str,
         span_id: str,
-        parent_span_id: str | None,
     ) -> dict[str, Any] | None:
         """Try to get a mocked response from CLI.
 
@@ -795,56 +786,24 @@ class PsycopgInstrumentation(InstrumentationBase):
             if params is not None:
                 input_value["parameters"] = params
 
-            # Generate schema and hashes for CLI matching
-            input_result = JsonSchemaHelper.generate_schema_and_hash(input_value, {})
+            # Use centralized mock finding utility
+            from ...core.mock_utils import find_mock_response_sync
 
-            # Create mock span for matching
-            timestamp_ms = time.time() * 1000
-            timestamp_seconds = int(timestamp_ms // 1000)
-            timestamp_nanos = int((timestamp_ms % 1000) * 1_000_000)
-
-            # Create mock span for matching
-            # NOTE: Schemas must be None to avoid betterproto map serialization issues
-            # The CLI only needs the hashes for matching anyway, not the full schemas
-            mock_span = CleanSpanData(
+            mock_response_output = find_mock_response_sync(
+                sdk=sdk,
                 trace_id=trace_id,
                 span_id=span_id,
-                parent_span_id=parent_span_id or "",
                 name="psycopg.query",
                 package_name="psycopg",
                 package_type=PackageType.PG,
                 instrumentation_name="PsycopgInstrumentation",
                 submodule_name="query",
                 input_value=input_value,
-                output_value=None,
-                input_schema=None,  # type: ignore - Must be None to avoid betterproto serialization issues
-                output_schema=None,  # type: ignore - Must be None to avoid betterproto serialization issues
-                input_schema_hash=input_result.decoded_schema_hash,
-                output_schema_hash="",
-                input_value_hash=input_result.decoded_value_hash,
-                output_value_hash="",
-                stack_trace="",  # Empty in REPLAY mode
                 kind=SpanKind.CLIENT,
-                status=SpanStatus(code=StatusCode.OK, message=""),
-                timestamp=Timestamp(seconds=timestamp_seconds, nanos=timestamp_nanos),
-                duration=Duration(seconds=0, nanos=0),
-                is_root_span=False,
                 is_pre_app_start=not sdk.app_ready,
             )
 
-            # Request mock from CLI
-            replay_trace_id = replay_trace_id_context.get()
-
-            mock_request = MockRequestInput(
-                test_id=replay_trace_id or "",
-                outbound_span=mock_span,
-            )
-
-            logger.debug(f"Requesting mock from CLI for query: {query[:50]}...")
-            mock_response_output = sdk.request_mock_sync(mock_request)
-            logger.debug(f"CLI returned: found={mock_response_output.found}")
-
-            if not mock_response_output.found:
+            if not mock_response_output or not mock_response_output.found:
                 logger.debug(f"No mock found for psycopg query: {query[:100]}")
                 return None
 
