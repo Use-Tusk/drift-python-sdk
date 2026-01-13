@@ -61,4 +61,6 @@ if __name__ == "__main__":
     # Binary data handling
     make_request("GET", "/test/binary-data")
 
+    make_request("GET", "/test/transaction-watch")
+
     print("\nAll requests completed successfully")

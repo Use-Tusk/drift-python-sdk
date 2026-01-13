@@ -207,6 +207,43 @@ def test_binary_data():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/test/transaction-watch", methods=["GET"])
+def test_transaction_watch():
+    """Test transaction with WATCH pattern.
+
+    This tests whether WATCH/MULTI/EXEC transaction pattern works correctly.
+    """
+    try:
+        # Set initial value
+        redis_client.set("test:watch:counter", "10")
+
+        # Start a watched transaction
+        pipe = redis_client.pipeline(transaction=True)
+        pipe.watch("test:watch:counter")
+
+        # Get current value (this happens outside the transaction)
+        current = int(redis_client.get("test:watch:counter"))
+
+        # Start the transaction
+        pipe.multi()
+        pipe.set("test:watch:counter", str(current + 5))
+        pipe.get("test:watch:counter")
+
+        # Execute
+        results = pipe.execute()
+
+        # Clean up
+        redis_client.delete("test:watch:counter")
+
+        return jsonify({
+            "success": True,
+            "initial_value": 10,
+            "expected_final": 15,
+            "results": results
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 if __name__ == "__main__":
     sdk.mark_app_as_ready()

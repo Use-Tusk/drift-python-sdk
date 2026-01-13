@@ -108,6 +108,29 @@ class RedisInstrumentation(InstrumentationBase):
 
                 Pipeline.execute = patched_pipeline_execute
                 logger.debug("redis.client.Pipeline.execute instrumented")
+
+            # Patch Pipeline.immediate_execute_command for WATCH and other immediate commands
+            if hasattr(Pipeline, "immediate_execute_command"):
+                original_immediate = Pipeline.immediate_execute_command
+                self._original_pipeline_immediate_execute = original_immediate
+
+                def patched_pipeline_immediate_execute(pipeline_self, *args, **kwargs):
+                    """Patched Pipeline.immediate_execute_command method."""
+                    sdk = TuskDrift.get_instance()
+
+                    if sdk.mode == TuskDriftMode.DISABLED:
+                        return original_immediate(pipeline_self, *args, **kwargs)
+
+                    return instrumentation._traced_pipeline_immediate_execute(
+                        pipeline_self,
+                        original_immediate,
+                        sdk,
+                        args,
+                        kwargs,
+                    )
+
+                Pipeline.immediate_execute_command = patched_pipeline_immediate_execute
+                logger.debug("redis.client.Pipeline.immediate_execute_command instrumented")
         except ImportError:
             logger.debug("redis.client.Pipeline not available")
 
@@ -162,6 +185,28 @@ class RedisInstrumentation(InstrumentationBase):
 
                     AsyncPipeline.execute = patched_async_pipeline_execute
                     logger.debug("redis.asyncio.client.Pipeline.execute instrumented")
+
+                # Patch async Pipeline.immediate_execute_command for WATCH and other immediate commands
+                if hasattr(AsyncPipeline, "immediate_execute_command"):
+                    original_async_immediate = AsyncPipeline.immediate_execute_command
+
+                    async def patched_async_pipeline_immediate_execute(pipeline_self, *args, **kwargs):
+                        """Patched async Pipeline.immediate_execute_command method."""
+                        sdk = TuskDrift.get_instance()
+
+                        if sdk.mode == TuskDriftMode.DISABLED:
+                            return await original_async_immediate(pipeline_self, *args, **kwargs)
+
+                        return await instrumentation._traced_async_pipeline_immediate_execute(
+                            pipeline_self,
+                            original_async_immediate,
+                            sdk,
+                            args,
+                            kwargs,
+                        )
+
+                    AsyncPipeline.immediate_execute_command = patched_async_pipeline_immediate_execute
+                    logger.debug("redis.asyncio.client.Pipeline.immediate_execute_command instrumented")
             except ImportError:
                 logger.debug("redis.asyncio.client.Pipeline not available")
         except ImportError:
@@ -194,6 +239,58 @@ class RedisInstrumentation(InstrumentationBase):
                 redis_client, original_execute, sdk, args, kwargs, command_name, command_str, is_pre_app_start
             ),
             span_kind=OTelSpanKind.CLIENT,
+        )
+
+    def _traced_pipeline_immediate_execute(
+        self, pipeline: Any, original_execute: Any, sdk: TuskDrift, args: tuple, kwargs: dict
+    ) -> Any:
+        """Traced Pipeline.immediate_execute_command method for WATCH and other immediate commands."""
+        if sdk.mode == TuskDriftMode.DISABLED:
+            return original_execute(pipeline, *args, **kwargs)
+
+        command_name = args[0] if args else "UNKNOWN"
+        command_str = self._format_command(args)
+
+        def original_call():
+            return original_execute(pipeline, *args, **kwargs)
+
+        if sdk.mode == TuskDriftMode.REPLAY:
+            return handle_replay_mode(
+                replay_mode_handler=lambda: self._replay_execute_command(sdk, command_name, command_str, args),
+                no_op_request_handler=lambda: self._get_default_response(command_name),
+                is_server_request=False,
+            )
+
+        # RECORD mode
+        return handle_record_mode(
+            original_function_call=original_call,
+            record_mode_handler=lambda is_pre_app_start: self._record_execute_command(
+                pipeline, original_execute, sdk, args, kwargs, command_name, command_str, is_pre_app_start
+            ),
+            span_kind=OTelSpanKind.CLIENT,
+        )
+
+    async def _traced_async_pipeline_immediate_execute(
+        self, pipeline: Any, original_execute: Any, sdk: TuskDrift, args: tuple, kwargs: dict
+    ) -> Any:
+        """Traced async Pipeline.immediate_execute_command method for WATCH and other immediate commands."""
+        if sdk.mode == TuskDriftMode.DISABLED:
+            return await original_execute(pipeline, *args, **kwargs)
+
+        command_name = args[0] if args else "UNKNOWN"
+        command_str = self._format_command(args)
+
+        # For REPLAY mode, use sync mocking (mocks are retrieved synchronously)
+        if sdk.mode == TuskDriftMode.REPLAY:
+            return handle_replay_mode(
+                replay_mode_handler=lambda: self._replay_execute_command(sdk, command_name, command_str, args),
+                no_op_request_handler=lambda: self._get_default_response(command_name),
+                is_server_request=False,
+            )
+
+        # RECORD mode with async execution
+        return await self._record_async_execute_command(
+            pipeline, original_execute, sdk, args, kwargs, command_name, command_str
         )
 
     def _replay_execute_command(self, sdk: TuskDrift, command_name: str, command_str: str, args: tuple) -> Any:
