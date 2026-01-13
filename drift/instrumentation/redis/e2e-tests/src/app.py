@@ -141,6 +141,7 @@ def test_pipeline_no_transaction():
 def test_async_pipeline():
     """Test async pipeline operations using asyncio."""
     import asyncio
+
     import redis.asyncio as aioredis
 
     async def run_async_pipeline():
