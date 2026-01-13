@@ -199,13 +199,6 @@ def test_copy_to():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# =============================================================================
-# BUG HUNTING TEST ENDPOINTS
-# These endpoints expose confirmed bugs in the psycopg instrumentation.
-# See BUG_TRACKING.md for detailed analysis.
-# =============================================================================
-
-
 @app.route("/test/multiple-queries")
 def test_multiple_queries():
     """Test multiple queries in same connection.

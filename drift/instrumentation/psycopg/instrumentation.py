@@ -604,6 +604,17 @@ class PsycopgInstrumentation(InstrumentationBase):
         kwargs: dict,
     ) -> Any:
         """Handle RECORD mode for execute - create span and execute query."""
+        # Reset cursor state from any previous execute() on this cursor.
+        # This ensures fetch methods work correctly for multiple queries on the same cursor.
+        # We must restore original fetch methods so _finalize_query_span can call the real
+        # psycopg fetchall() method, not our patched version from a previous query.
+        if hasattr(cursor, '_tusk_original_fetchone'):
+            cursor.fetchone = cursor._tusk_original_fetchone
+            cursor.fetchmany = cursor._tusk_original_fetchmany
+            cursor.fetchall = cursor._tusk_original_fetchall
+            cursor._tusk_rows = None
+            cursor._tusk_index = 0
+
         span_info = SpanUtils.create_span(
             CreateSpanOptions(
                 name="psycopg.query",
@@ -1401,6 +1412,13 @@ class PsycopgInstrumentation(InstrumentationBase):
                                 result = cursor._tusk_rows[cursor._tusk_index :]  # pyright: ignore[reportAttributeAccessIssue]
                                 cursor._tusk_index = len(cursor._tusk_rows)  # pyright: ignore[reportAttributeAccessIssue]
                                 return result
+
+                            # Save original fetch methods before patching (only if not already saved)
+                            # These will be restored at the start of the next execute() call
+                            if not hasattr(cursor, '_tusk_original_fetchone'):
+                                cursor._tusk_original_fetchone = cursor.fetchone  # pyright: ignore[reportAttributeAccessIssue]
+                                cursor._tusk_original_fetchmany = cursor.fetchmany  # pyright: ignore[reportAttributeAccessIssue]
+                                cursor._tusk_original_fetchall = cursor.fetchall  # pyright: ignore[reportAttributeAccessIssue]
 
                             cursor.fetchone = patched_fetchone  # pyright: ignore[reportAttributeAccessIssue]
                             cursor.fetchmany = patched_fetchmany  # pyright: ignore[reportAttributeAccessIssue]
