@@ -241,6 +241,13 @@ class TuskDrift:
                     "Continuing with SDK initialization. Mock responses will not be available until CLI is running."
                 )
 
+            # # TEMPORARY: Hardcoded time travel for testing
+            # from drift.instrumentation.datetime import start_time_travel
+            # # Unix timestamp: seconds + nanos/1e9 + 60 seconds
+            # timestamp = 1768272255.864658
+            # start_time_travel(timestamp)
+            # logger.info(f"HARDCODED time travel to unix timestamp: {timestamp}")
+
         install_hooks()
 
         instance._init_auto_instrumentations()
@@ -466,6 +473,13 @@ class TuskDrift:
                 logger.debug("Socket instrumentation initialized (REPLAY mode - unpatched dependency detection)")
             except Exception as e:
                 logger.debug(f"Socket instrumentation initialization failed: {e}")
+            
+            try:
+                from ..instrumentation.kinde import KindeInstrumentation
+                _ = KindeInstrumentation(enabled=True)
+                logger.debug("Kinde instrumentation initialized (REPLAY mode - auth token validation)")
+            except Exception as e:
+                logger.debug(f"Kinde instrumentation initialization failed: {e}")
 
     def create_env_vars_snapshot(self) -> None:
         """Create a span capturing all environment variables.

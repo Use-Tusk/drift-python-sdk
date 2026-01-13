@@ -281,9 +281,6 @@ def _update_time_travel(
         mock_response: The mock response containing the timestamp
         replay_trace_id: The replay trace ID for this session
     """
-    if not replay_trace_id:
-        return
-
     try:
         from drift.instrumentation.datetime import start_time_travel
 
