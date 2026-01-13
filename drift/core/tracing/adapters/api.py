@@ -239,9 +239,8 @@ def _dict_to_struct(data: dict[str, Any]) -> Struct:
     def value_to_proto(val: Any) -> Value:
         """Convert a Python value to protobuf Value."""
         if val is None:
-            from betterproto.lib.google.protobuf import NullValue
-
-            return Value(null_value=NullValue.NULL_VALUE)  # type: ignore[arg-type]
+            # betterproto 2.0.0b7 uses integer 0 for null value (NullValue.NULL_VALUE doesn't exist)
+            return Value(null_value=0)  # type: ignore[arg-type]
         elif isinstance(val, bool):
             return Value(bool_value=val)
         elif isinstance(val, (int, float)):

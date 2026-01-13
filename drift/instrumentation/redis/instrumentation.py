@@ -108,6 +108,29 @@ class RedisInstrumentation(InstrumentationBase):
 
                 Pipeline.execute = patched_pipeline_execute
                 logger.debug("redis.client.Pipeline.execute instrumented")
+
+            # Patch Pipeline.immediate_execute_command for WATCH and other immediate commands
+            if hasattr(Pipeline, "immediate_execute_command"):
+                original_immediate = Pipeline.immediate_execute_command
+                self._original_pipeline_immediate_execute = original_immediate
+
+                def patched_pipeline_immediate_execute(pipeline_self, *args, **kwargs):
+                    """Patched Pipeline.immediate_execute_command method."""
+                    sdk = TuskDrift.get_instance()
+
+                    if sdk.mode == TuskDriftMode.DISABLED:
+                        return original_immediate(pipeline_self, *args, **kwargs)
+
+                    return instrumentation._traced_pipeline_immediate_execute(
+                        pipeline_self,
+                        original_immediate,
+                        sdk,
+                        args,
+                        kwargs,
+                    )
+
+                Pipeline.immediate_execute_command = patched_pipeline_immediate_execute
+                logger.debug("redis.client.Pipeline.immediate_execute_command instrumented")
         except ImportError:
             logger.debug("redis.client.Pipeline not available")
 
@@ -137,6 +160,55 @@ class RedisInstrumentation(InstrumentationBase):
 
                 async_redis_class.execute_command = patched_async_execute_command
                 logger.debug("redis.asyncio.Redis.execute_command instrumented")
+
+            # Patch async Pipeline.execute
+            try:
+                from redis.asyncio.client import Pipeline as AsyncPipeline
+
+                if hasattr(AsyncPipeline, "execute"):
+                    original_async_pipeline_execute = AsyncPipeline.execute
+
+                    async def patched_async_pipeline_execute(pipeline_self, *args, **kwargs):
+                        """Patched async Pipeline.execute method."""
+                        sdk = TuskDrift.get_instance()
+
+                        if sdk.mode == TuskDriftMode.DISABLED:
+                            return await original_async_pipeline_execute(pipeline_self, *args, **kwargs)
+
+                        return await instrumentation._traced_async_pipeline_execute(
+                            pipeline_self,
+                            original_async_pipeline_execute,
+                            sdk,
+                            args,
+                            kwargs,
+                        )
+
+                    AsyncPipeline.execute = patched_async_pipeline_execute
+                    logger.debug("redis.asyncio.client.Pipeline.execute instrumented")
+
+                # Patch async Pipeline.immediate_execute_command for WATCH and other immediate commands
+                if hasattr(AsyncPipeline, "immediate_execute_command"):
+                    original_async_immediate = AsyncPipeline.immediate_execute_command
+
+                    async def patched_async_pipeline_immediate_execute(pipeline_self, *args, **kwargs):
+                        """Patched async Pipeline.immediate_execute_command method."""
+                        sdk = TuskDrift.get_instance()
+
+                        if sdk.mode == TuskDriftMode.DISABLED:
+                            return await original_async_immediate(pipeline_self, *args, **kwargs)
+
+                        return await instrumentation._traced_async_pipeline_immediate_execute(
+                            pipeline_self,
+                            original_async_immediate,
+                            sdk,
+                            args,
+                            kwargs,
+                        )
+
+                    AsyncPipeline.immediate_execute_command = patched_async_pipeline_immediate_execute
+                    logger.debug("redis.asyncio.client.Pipeline.immediate_execute_command instrumented")
+            except ImportError:
+                logger.debug("redis.asyncio.client.Pipeline not available")
         except ImportError:
             logger.debug("redis.asyncio not available")
 
@@ -169,6 +241,58 @@ class RedisInstrumentation(InstrumentationBase):
             span_kind=OTelSpanKind.CLIENT,
         )
 
+    def _traced_pipeline_immediate_execute(
+        self, pipeline: Any, original_execute: Any, sdk: TuskDrift, args: tuple, kwargs: dict
+    ) -> Any:
+        """Traced Pipeline.immediate_execute_command method for WATCH and other immediate commands."""
+        if sdk.mode == TuskDriftMode.DISABLED:
+            return original_execute(pipeline, *args, **kwargs)
+
+        command_name = args[0] if args else "UNKNOWN"
+        command_str = self._format_command(args)
+
+        def original_call():
+            return original_execute(pipeline, *args, **kwargs)
+
+        if sdk.mode == TuskDriftMode.REPLAY:
+            return handle_replay_mode(
+                replay_mode_handler=lambda: self._replay_execute_command(sdk, command_name, command_str, args),
+                no_op_request_handler=lambda: self._get_default_response(command_name),
+                is_server_request=False,
+            )
+
+        # RECORD mode
+        return handle_record_mode(
+            original_function_call=original_call,
+            record_mode_handler=lambda is_pre_app_start: self._record_execute_command(
+                pipeline, original_execute, sdk, args, kwargs, command_name, command_str, is_pre_app_start
+            ),
+            span_kind=OTelSpanKind.CLIENT,
+        )
+
+    async def _traced_async_pipeline_immediate_execute(
+        self, pipeline: Any, original_execute: Any, sdk: TuskDrift, args: tuple, kwargs: dict
+    ) -> Any:
+        """Traced async Pipeline.immediate_execute_command method for WATCH and other immediate commands."""
+        if sdk.mode == TuskDriftMode.DISABLED:
+            return await original_execute(pipeline, *args, **kwargs)
+
+        command_name = args[0] if args else "UNKNOWN"
+        command_str = self._format_command(args)
+
+        # For REPLAY mode, use sync mocking (mocks are retrieved synchronously)
+        if sdk.mode == TuskDriftMode.REPLAY:
+            return handle_replay_mode(
+                replay_mode_handler=lambda: self._replay_execute_command(sdk, command_name, command_str, args),
+                no_op_request_handler=lambda: self._get_default_response(command_name),
+                is_server_request=False,
+            )
+
+        # RECORD mode with async execution
+        return await self._record_async_execute_command(
+            pipeline, original_execute, sdk, args, kwargs, command_name, command_str
+        )
+
     def _replay_execute_command(self, sdk: TuskDrift, command_name: str, command_str: str, args: tuple) -> Any:
         """Handle REPLAY mode for execute_command."""
         span_name = f"redis.{command_name}"
@@ -194,8 +318,11 @@ class RedisInstrumentation(InstrumentationBase):
             raise RuntimeError("Error creating span in replay mode")
 
         with SpanUtils.with_span(span_info):
+            # Build input_value using shared helper
+            input_value = self._build_command_input_value(command_str, args)
+
             mock_result = self._try_get_mock(
-                sdk, command_name, command_str, args, span_info.trace_id, span_info.span_id, span_info.parent_span_id
+                sdk, command_name, input_value, span_info.trace_id, span_info.span_id, span_info.parent_span_id
             )
 
             if mock_result is None:
@@ -369,6 +496,83 @@ class RedisInstrumentation(InstrumentationBase):
             span_kind=OTelSpanKind.CLIENT,
         )
 
+    async def _traced_async_pipeline_execute(
+        self, pipeline: Any, original_execute: Any, sdk: TuskDrift, args: tuple, kwargs: dict
+    ) -> Any:
+        """Traced async Pipeline.execute method."""
+        if sdk.mode == TuskDriftMode.DISABLED:
+            return await original_execute(pipeline, *args, **kwargs)
+
+        # Get commands from pipeline
+        command_stack = self._get_pipeline_commands(pipeline)
+        command_str = self._format_pipeline_commands(command_stack)
+
+        if sdk.mode == TuskDriftMode.REPLAY:
+            return handle_replay_mode(
+                replay_mode_handler=lambda: self._replay_pipeline_execute(sdk, command_str, command_stack),
+                no_op_request_handler=lambda: [],  # Empty list for pipeline
+                is_server_request=False,
+            )
+
+        # RECORD mode with async execution
+        return await self._record_async_pipeline_execute(
+            pipeline, original_execute, sdk, args, kwargs, command_str, command_stack
+        )
+
+    async def _record_async_pipeline_execute(
+        self,
+        pipeline: Any,
+        original_execute: Any,
+        sdk: TuskDrift,
+        args: tuple,
+        kwargs: dict,
+        command_str: str,
+        command_stack: list,
+    ) -> Any:
+        """Handle async RECORD mode for pipeline execute."""
+        is_pre_app_start = not sdk.app_ready
+        span_name = "redis.pipeline"
+
+        # Create span using SpanUtils
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name=span_name,
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: span_name,
+                    TdSpanAttributes.PACKAGE_NAME: "redis",
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "RedisInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: "pipeline",
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.REDIS.name,
+                    TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+                },
+                is_pre_app_start=is_pre_app_start,
+            )
+        )
+
+        if not span_info:
+            # Fallback to original call if span creation fails
+            return await original_execute(pipeline, *args, **kwargs)
+
+        error = None
+        result = None
+
+        with SpanUtils.with_span(span_info):
+            try:
+                result = await original_execute(pipeline, *args, **kwargs)
+                return result
+            except Exception as e:
+                error = e
+                raise
+            finally:
+                self._finalize_pipeline_span(
+                    span_info.span,
+                    command_str,
+                    command_stack,
+                    result if error is None else None,
+                    error,
+                )
+
     def _replay_pipeline_execute(self, sdk: TuskDrift, command_str: str, command_stack: list) -> Any:
         """Handle REPLAY mode for pipeline execute."""
         span_name = "redis.pipeline"
@@ -394,11 +598,13 @@ class RedisInstrumentation(InstrumentationBase):
             raise RuntimeError("Error creating span in replay mode")
 
         with SpanUtils.with_span(span_info):
+            # Build input_value the same way as _finalize_pipeline_span
+            input_value = self._build_pipeline_input_value(command_str, command_stack)
+
             mock_result = self._try_get_mock(
                 sdk,
                 "pipeline",
-                command_str,
-                command_stack,
+                input_value,
                 span_info.trace_id,
                 span_info.span_id,
                 span_info.parent_span_id,
@@ -516,25 +722,34 @@ class RedisInstrumentation(InstrumentationBase):
 
         return "PIPELINE: " + " ".join(commands)
 
+    def _build_command_input_value(self, command_str: str, args: tuple) -> dict[str, Any]:
+        """Build input_value for single commands (used by both record and replay)."""
+        input_value: dict[str, Any] = {"command": command_str.strip()}
+        if args is not None:
+            input_value["arguments"] = self._serialize_args(args)
+        return input_value
+
+    def _build_pipeline_input_value(self, command_str: str, command_stack: list) -> dict[str, Any]:
+        """Build input_value for pipeline operations (used by both record and replay)."""
+        serialized_commands = [
+            self._serialize_args(cmd.args if hasattr(cmd, "args") else cmd[0]) for cmd in command_stack
+        ]
+        return {
+            "command": command_str,
+            "commands": serialized_commands,
+        }
+
     def _try_get_mock(
         self,
         sdk: TuskDrift,
         command_name: str,
-        command_str: str,
-        args: Any,
+        input_value: dict[str, Any],
         trace_id: str,
         span_id: str,
         parent_span_id: str | None,
     ) -> dict[str, Any] | None:
         """Try to get a mocked response from CLI."""
         try:
-            # Build input value
-            input_value = {
-                "command": command_str.strip(),
-            }
-            if args is not None:
-                input_value["arguments"] = self._serialize_args(args)
-
             # Generate schema and hashes for CLI matching
             input_result = JsonSchemaHelper.generate_schema_and_hash(input_value, {})
 
@@ -577,6 +792,7 @@ class RedisInstrumentation(InstrumentationBase):
                 outbound_span=mock_span,
             )
 
+            command_str = input_value.get("command", "")
             logger.debug(f"Requesting mock from CLI for command: {command_str[:50]}...")
             mock_response_output = sdk.request_mock_sync(mock_request)
             logger.debug(f"CLI returned: found={mock_response_output.found}")
@@ -601,12 +817,8 @@ class RedisInstrumentation(InstrumentationBase):
     ) -> None:
         """Finalize span with command data."""
         try:
-            # Build input value
-            input_value = {
-                "command": command.strip(),
-            }
-            if args is not None:
-                input_value["arguments"] = self._serialize_args(args)
+            # Build input value using shared helper
+            input_value = self._build_command_input_value(command, args)
 
             # Build output value
             output_value = {}
@@ -653,14 +865,8 @@ class RedisInstrumentation(InstrumentationBase):
     ) -> None:
         """Finalize span with pipeline data."""
         try:
-            # Build input value
-            serialized_commands = [
-                self._serialize_args(cmd.args if hasattr(cmd, "args") else cmd[0]) for cmd in command_stack
-            ]
-            input_value: dict[str, Any] = {
-                "command": command_str,
-                "commands": serialized_commands,
-            }
+            # Build input value using shared helper
+            input_value = self._build_pipeline_input_value(command_str, command_stack)
 
             # Build output value
             output_value = {}
@@ -707,9 +913,10 @@ class RedisInstrumentation(InstrumentationBase):
         """Serialize a single value for JSON."""
         if isinstance(value, bytes):
             try:
-                return value.decode("utf-8")
+                decoded = value.decode("utf-8")
+                return {"__bytes__": True, "encoding": "utf8", "value": decoded}
             except UnicodeDecodeError:
-                return value.hex()
+                return {"__bytes__": True, "encoding": "hex", "value": value.hex()}
         elif isinstance(value, (str, int, float, bool, type(None))):
             return value
         elif isinstance(value, (list, tuple)):
@@ -725,6 +932,24 @@ class RedisInstrumentation(InstrumentationBase):
         """Serialize Redis response for recording."""
         return self._serialize_value(response)
 
+    def _deserialize_value(self, value: Any) -> Any:
+        """Deserialize a value, converting typed wrappers back to original types."""
+        if isinstance(value, dict):
+            # Check for bytes wrapper
+            if value.get("__bytes__") is True:
+                encoding = value.get("encoding")
+                data = value.get("value", "")
+                if encoding == "utf8":
+                    return data.encode("utf-8")
+                elif encoding == "hex":
+                    return bytes.fromhex(data)
+                return data  # fallback
+            # Recursively deserialize dict values
+            return {k: self._deserialize_value(v) for k, v in value.items()}
+        elif isinstance(value, list):
+            return [self._deserialize_value(v) for v in value]
+        return value
+
     def _deserialize_response(self, mock_data: dict[str, Any]) -> Any:
         """Deserialize mocked response data from CLI.
 
@@ -735,9 +960,9 @@ class RedisInstrumentation(InstrumentationBase):
 
         if isinstance(mock_data, dict):
             if "result" in mock_data:
-                return mock_data["result"]
+                return self._deserialize_value(mock_data["result"])
             elif "results" in mock_data:
-                return mock_data["results"]
+                return [self._deserialize_value(r) for r in mock_data["results"]]
 
         logger.warning(f"Could not deserialize mock_data structure: {mock_data}")
         return None

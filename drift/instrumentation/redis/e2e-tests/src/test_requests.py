@@ -33,8 +33,7 @@ if __name__ == "__main__":
     # Get operations
     make_request("GET", "/redis/get/test_key")
     make_request("GET", "/redis/get/test_key_expiry")
-    # TODO: figure out why this test fails during replay
-    # make_request("GET", "/redis/get/nonexistent_key")
+    make_request("GET", "/redis/get/nonexistent_key")
 
     # Increment operations
     make_request("POST", "/redis/incr/counter")
@@ -48,5 +47,19 @@ if __name__ == "__main__":
     # Delete operations
     make_request("DELETE", "/redis/delete/test_key")
     make_request("DELETE", "/redis/delete/counter")
+
+    make_request("GET", "/test/mget-mset")
+
+    # Pipeline operations
+    make_request("GET", "/test/pipeline-basic")
+    make_request("GET", "/test/pipeline-no-transaction")
+
+    # Async Pipeline operations
+    make_request("GET", "/test/async-pipeline")
+
+    # Binary data handling
+    make_request("GET", "/test/binary-data")
+
+    make_request("GET", "/test/transaction-watch")
 
     print("\nAll requests completed successfully")

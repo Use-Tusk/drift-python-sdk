@@ -82,9 +82,8 @@ def _python_to_value(value: Any) -> Any:
     from betterproto.lib.google.protobuf import ListValue, Value
 
     if value is None:
-        from betterproto.lib.google.protobuf import NullValue
-
-        return Value(null_value=NullValue.NULL_VALUE)  # type: ignore[arg-type]
+        # betterproto 2.0.0b7 uses integer 0 for null value (NullValue.NULL_VALUE doesn't exist)
+        return Value(null_value=0)  # type: ignore[arg-type]
     elif isinstance(value, bool):
         return Value(bool_value=value)
     elif isinstance(value, (int, float)):

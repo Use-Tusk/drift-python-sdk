@@ -37,9 +37,8 @@ def _value_to_proto(value: Any) -> ProtoValue:
     proto_value = ProtoValue()
 
     if value is None:
-        from betterproto.lib.google.protobuf import NullValue
-
-        proto_value.null_value = NullValue.NULL_VALUE  # type: ignore[assignment]
+        # betterproto 2.0.0b7 uses integer 0 for null value (NullValue.NULL_VALUE doesn't exist)
+        proto_value.null_value = 0  # type: ignore[assignment]
     elif isinstance(value, bool):
         proto_value.bool_value = value
     elif isinstance(value, (int, float)):
