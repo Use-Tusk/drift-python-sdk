@@ -732,8 +732,7 @@ class RedisInstrumentation(InstrumentationBase):
     def _build_pipeline_input_value(self, command_str: str, command_stack: list) -> dict[str, Any]:
         """Build input_value for pipeline operations (used by both record and replay)."""
         serialized_commands = [
-            self._serialize_args(cmd.args if hasattr(cmd, "args") else cmd[0])
-            for cmd in command_stack
+            self._serialize_args(cmd.args if hasattr(cmd, "args") else cmd[0]) for cmd in command_stack
         ]
         return {
             "command": command_str,

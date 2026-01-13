@@ -88,6 +88,7 @@ def redis_keys(pattern):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 @app.route("/test/mget-mset", methods=["GET"])
 def test_mget_mset():
     """Test MGET/MSET - multiple key operations."""
@@ -101,6 +102,7 @@ def test_mget_mset():
         return jsonify({"success": True, "result": result})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/test/pipeline-basic", methods=["GET"])
 def test_pipeline_basic():
@@ -134,6 +136,7 @@ def test_pipeline_no_transaction():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 @app.route("/test/async-pipeline", methods=["GET"])
 def test_async_pipeline():
     """Test async pipeline operations using asyncio."""
@@ -146,7 +149,7 @@ def test_async_pipeline():
             host=os.getenv("REDIS_HOST", "redis"),
             port=int(os.getenv("REDIS_PORT", "6379")),
             db=0,
-            decode_responses=True
+            decode_responses=True,
         )
 
         try:
@@ -167,12 +170,10 @@ def test_async_pipeline():
 
     try:
         results = asyncio.run(run_async_pipeline())
-        return jsonify({
-            "success": True,
-            "results": results
-        })
+        return jsonify({"success": True, "results": results})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/test/binary-data", methods=["GET"])
 def test_binary_data():
@@ -183,7 +184,7 @@ def test_binary_data():
             host=os.getenv("REDIS_HOST", "redis"),
             port=int(os.getenv("REDIS_PORT", "6379")),
             db=0,
-            decode_responses=False
+            decode_responses=False,
         )
 
         # Binary data that cannot be decoded as UTF-8
@@ -198,14 +199,17 @@ def test_binary_data():
         # Clean up
         binary_client.delete("test:binary:key")
 
-        return jsonify({
-            "success": True,
-            "original_hex": binary_value.hex(),
-            "retrieved_hex": retrieved.hex() if retrieved else None,
-            "match": binary_value == retrieved
-        })
+        return jsonify(
+            {
+                "success": True,
+                "original_hex": binary_value.hex(),
+                "retrieved_hex": retrieved.hex() if retrieved else None,
+                "match": binary_value == retrieved,
+            }
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/test/transaction-watch", methods=["GET"])
 def test_transaction_watch():
@@ -235,12 +239,7 @@ def test_transaction_watch():
         # Clean up
         redis_client.delete("test:watch:counter")
 
-        return jsonify({
-            "success": True,
-            "initial_value": 10,
-            "expected_final": 15,
-            "results": results
-        })
+        return jsonify({"success": True, "initial_value": 10, "expected_final": 15, "results": results})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

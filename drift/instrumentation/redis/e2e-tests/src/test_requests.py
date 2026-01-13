@@ -33,8 +33,7 @@ if __name__ == "__main__":
     # Get operations
     make_request("GET", "/redis/get/test_key")
     make_request("GET", "/redis/get/test_key_expiry")
-    # TODO: figure out why this test fails during replay
-    # make_request("GET", "/redis/get/nonexistent_key")
+    make_request("GET", "/redis/get/nonexistent_key")
 
     # Increment operations
     make_request("POST", "/redis/incr/counter")

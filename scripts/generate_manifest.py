@@ -176,6 +176,7 @@ def main() -> int:
     manifest = {
         "sdkVersion": sdk_version,
         "language": "python",
+        "pythonVersion": ">=3.12",
         "generatedAt": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "instrumentations": instrumentations,
     }
