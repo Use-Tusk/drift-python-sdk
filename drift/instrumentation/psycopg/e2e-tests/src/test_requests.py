@@ -66,4 +66,6 @@ if __name__ == "__main__":
 
     make_request("GET", "/test/cursor-stream")
 
+    make_request("GET", "/test/server-cursor")
+
     print("\nAll requests completed successfully")

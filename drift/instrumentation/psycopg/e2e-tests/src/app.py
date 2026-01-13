@@ -160,14 +160,6 @@ def test_cursor_stream():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
-# =============================================================================
-# BUG HUNTING TEST ENDPOINTS
-# These endpoints expose confirmed bugs in the psycopg instrumentation.
-# See BUG_TRACKING.md for detailed analysis.
-# =============================================================================
-
-
 @app.route("/test/server-cursor")
 def test_server_cursor():
     """Test ServerCursor (named cursor) - server-side cursor.
@@ -187,6 +179,13 @@ def test_server_cursor():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+
+# =============================================================================
+# BUG HUNTING TEST ENDPOINTS
+# These endpoints expose confirmed bugs in the psycopg instrumentation.
+# See BUG_TRACKING.md for detailed analysis.
+# =============================================================================
 
 @app.route("/test/copy-to")
 def test_copy_to():

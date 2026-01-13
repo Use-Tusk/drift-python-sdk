@@ -105,9 +105,15 @@ class MockConnection:
 
         logger.debug("[MOCK_CONNECTION] Created mock connection for REPLAY mode (psycopg3)")
 
-    def cursor(self, name=None, cursor_factory=None):
-        """Create a cursor using the instrumented cursor factory."""
+    def cursor(self, name=None, *, cursor_factory=None, **kwargs):
+        """Create a cursor using the instrumented cursor factory.
+
+        Accepts the same parameters as psycopg's Connection.cursor(), including
+        server cursor parameters like scrollable and withhold.
+        """
         # For mock connections, we create a MockCursor directly
+        # The name parameter is accepted but not used since mock cursors
+        # behave the same for both regular and server cursors
         cursor = MockCursor(self)
 
         # Wrap execute/executemany for mock cursor
@@ -262,11 +268,17 @@ class PsycopgInstrumentation(InstrumentationBase):
             user_cursor_factory = kwargs.pop("cursor_factory", None)
             cursor_factory = instrumentation._create_cursor_factory(sdk, user_cursor_factory)
 
+            # Create server cursor factory for named cursors (conn.cursor(name="..."))
+            server_cursor_factory = instrumentation._create_server_cursor_factory(sdk)
+
             # In REPLAY mode, try to connect but fall back to mock connection if DB is unavailable
             if sdk.mode == TuskDriftMode.REPLAY:
                 try:
                     kwargs["cursor_factory"] = cursor_factory
                     connection = original_connect(*args, **kwargs)
+                    # Set server cursor factory on the connection for named cursors
+                    if server_cursor_factory:
+                        connection.server_cursor_factory = server_cursor_factory
                     logger.info("[PATCHED_CONNECT] REPLAY mode: Successfully connected to database (psycopg3)")
                     return connection
                 except Exception as e:
@@ -279,6 +291,9 @@ class PsycopgInstrumentation(InstrumentationBase):
             # In RECORD mode, always require real connection
             kwargs["cursor_factory"] = cursor_factory
             connection = original_connect(*args, **kwargs)
+            # Set server cursor factory on the connection for named cursors
+            if server_cursor_factory:
+                connection.server_cursor_factory = server_cursor_factory
             logger.debug("[PATCHED_CONNECT] RECORD mode: Connected to database (psycopg3)")
             return connection
 
@@ -323,6 +338,42 @@ class PsycopgInstrumentation(InstrumentationBase):
                 return instrumentation._traced_stream(self, super().stream, sdk, query, params, **kwargs)
 
         return InstrumentedCursor
+
+    def _create_server_cursor_factory(self, sdk: TuskDrift, base_factory=None):
+        """Create a server cursor factory that wraps ServerCursor with instrumentation.
+
+        Returns a cursor CLASS (psycopg3 expects a class, not a function).
+        ServerCursor is used when conn.cursor(name="...") is called.
+        """
+        instrumentation = self
+        logger.debug(f"[CURSOR_FACTORY] Creating server cursor factory, sdk.mode={sdk.mode}")
+
+        try:
+            from psycopg import ServerCursor as BaseServerCursor
+        except ImportError:
+            logger.warning("[CURSOR_FACTORY] Could not import psycopg.ServerCursor")
+            return None
+
+        base = base_factory or BaseServerCursor
+
+        class InstrumentedServerCursor(base):  # type: ignore
+            _tusk_description = None  # Store mock description for replay mode
+
+            @property
+            def description(self):
+                # In replay mode, return mock description if set; otherwise use base
+                if self._tusk_description is not None:
+                    return self._tusk_description
+                return super().description
+
+            def execute(self, query, params=None, **kwargs):
+                # Note: ServerCursor.execute() doesn't support 'prepare' parameter
+                return instrumentation._traced_execute(self, super().execute, sdk, query, params, **kwargs)
+
+            # Note: ServerCursor doesn't support executemany()
+            # Note: ServerCursor has stream-like iteration via fetchmany/itersize
+
+        return InstrumentedServerCursor
 
     def _traced_execute(
         self, cursor: Any, original_execute: Any, sdk: TuskDrift, query: str, params=None, **kwargs
