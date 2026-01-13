@@ -68,4 +68,6 @@ if __name__ == "__main__":
 
     make_request("GET", "/test/server-cursor")
 
+    make_request("GET", "/test/copy-to")
+
     print("\nAll requests completed successfully")

@@ -179,14 +179,6 @@ def test_server_cursor():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
-
-# =============================================================================
-# BUG HUNTING TEST ENDPOINTS
-# These endpoints expose confirmed bugs in the psycopg instrumentation.
-# See BUG_TRACKING.md for detailed analysis.
-# =============================================================================
-
 @app.route("/test/copy-to")
 def test_copy_to():
     """Test cursor.copy() with COPY TO - bulk data export.
@@ -206,6 +198,12 @@ def test_copy_to():
         return jsonify({"count": len(output), "data": output})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+# =============================================================================
+# BUG HUNTING TEST ENDPOINTS
+# These endpoints expose confirmed bugs in the psycopg instrumentation.
+# See BUG_TRACKING.md for detailed analysis.
+# =============================================================================
 
 
 @app.route("/test/multiple-queries")

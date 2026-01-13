@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import contextmanager
 from types import ModuleType
-from typing import Any
+from typing import Any, Iterator
 
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind as OTelSpanKind
@@ -141,10 +142,19 @@ class MockConnection:
 
             return instrumentation._traced_stream(cursor, noop_stream, sdk, query, params, **kwargs)
 
+        def mock_copy(query, params=None, **kwargs):
+            # For mock cursor, original_copy is a no-op context manager
+            @contextmanager
+            def noop_copy(q, p=None, **kw):
+                yield MockCopy([])
+
+            return instrumentation._traced_copy(cursor, noop_copy, sdk, query, params, **kwargs)
+
         # Monkey-patch mock functions onto cursor
         cursor.execute = mock_execute  # type: ignore[method-assign]
         cursor.executemany = mock_executemany  # type: ignore[method-assign]
         cursor.stream = mock_stream  # type: ignore[method-assign]
+        cursor.copy = mock_copy  # type: ignore[method-assign]
 
         logger.debug("[MOCK_CONNECTION] Created cursor (psycopg3)")
         return cursor
@@ -227,6 +237,141 @@ class MockCursor:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
         return False
+
+
+class MockCopy:
+    """Mock Copy object for REPLAY mode.
+
+    Provides a minimal interface compatible with psycopg's Copy object
+    for COPY TO operations (iteration) and COPY FROM operations (write).
+    """
+
+    def __init__(self, data: list):
+        """Initialize MockCopy with recorded data.
+
+        Args:
+            data: For COPY TO - list of data chunks (as strings from JSON, will be encoded to bytes)
+        """
+        self._data = data
+        self._index = 0
+
+    def __iter__(self) -> Iterator[bytes]:
+        """Iterate over COPY TO data chunks."""
+        for item in self._data:
+            # Data was stored as string in JSON, convert back to bytes
+            if isinstance(item, str):
+                yield item.encode("utf-8")
+            elif isinstance(item, bytes):
+                yield item
+            else:
+                yield str(item).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return False
+
+    def read(self) -> bytes:
+        """Read next data chunk for COPY TO."""
+        if self._index < len(self._data):
+            item = self._data[self._index]
+            self._index += 1
+            if isinstance(item, str):
+                return item.encode("utf-8")
+            elif isinstance(item, bytes):
+                return item
+            return str(item).encode("utf-8")
+        return b""
+
+    def rows(self) -> Iterator[tuple]:
+        """Iterate over rows for COPY TO (parsed format)."""
+        for item in self._data:
+            yield tuple(item) if isinstance(item, list) else item
+
+    def write(self, buffer) -> None:
+        """No-op for COPY FROM in replay mode."""
+        pass
+
+    def write_row(self, row) -> None:
+        """No-op for COPY FROM in replay mode."""
+        pass
+
+    def set_types(self, types) -> None:
+        """No-op for replay mode."""
+        pass
+
+
+class _TracedCopyWrapper:
+    """Wrapper around psycopg's Copy object to capture data in RECORD mode.
+
+    Intercepts all data operations to record them for replay.
+    """
+
+    def __init__(self, copy: Any, data_collected: list):
+        """Initialize wrapper.
+
+        Args:
+            copy: The real psycopg Copy object
+            data_collected: List to append captured data chunks to
+        """
+        self._copy = copy
+        self._data_collected = data_collected
+
+    def __iter__(self) -> Iterator[bytes]:
+        """Iterate over COPY TO data, capturing each chunk."""
+        for data in self._copy:
+            # Handle both bytes and memoryview
+            if isinstance(data, memoryview):
+                data = bytes(data)
+            self._data_collected.append(data)
+            yield data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return False
+
+    def read(self) -> bytes:
+        """Read raw data from COPY TO, capturing it."""
+        data = self._copy.read()
+        if data:
+            if isinstance(data, memoryview):
+                data = bytes(data)
+            self._data_collected.append(data)
+        return data
+
+    def read_row(self):
+        """Read a parsed row from COPY TO."""
+        row = self._copy.read_row()
+        if row is not None:
+            self._data_collected.append(row)
+        return row
+
+    def rows(self):
+        """Iterate over parsed rows from COPY TO."""
+        for row in self._copy.rows():
+            self._data_collected.append(row)
+            yield row
+
+    def write(self, buffer):
+        """Write raw data for COPY FROM."""
+        self._data_collected.append(buffer)
+        return self._copy.write(buffer)
+
+    def write_row(self, row):
+        """Write a row for COPY FROM."""
+        self._data_collected.append(row)
+        return self._copy.write_row(row)
+
+    def set_types(self, types):
+        """Proxy set_types to the underlying Copy object."""
+        return self._copy.set_types(types)
+
+    def __getattr__(self, name):
+        """Proxy any other attributes to the underlying copy object."""
+        return getattr(self._copy, name)
 
 
 class PsycopgInstrumentation(InstrumentationBase):
@@ -336,6 +481,9 @@ class PsycopgInstrumentation(InstrumentationBase):
 
             def stream(self, query, params=None, **kwargs):
                 return instrumentation._traced_stream(self, super().stream, sdk, query, params, **kwargs)
+
+            def copy(self, query, params=None, **kwargs):
+                return instrumentation._traced_copy(self, super().copy, sdk, query, params, **kwargs)
 
         return InstrumentedCursor
 
@@ -803,6 +951,249 @@ class PsycopgInstrumentation(InstrumentationBase):
 
         except Exception as e:
             logger.error(f"Error finalizing stream span: {e}")
+
+    def _traced_copy(
+        self, cursor: Any, original_copy: Any, sdk: TuskDrift, query: str, params=None, **kwargs
+    ) -> Any:
+        """Traced cursor.copy method - returns a context manager."""
+        if sdk.mode == TuskDriftMode.DISABLED:
+            return original_copy(query, params, **kwargs)
+
+        query_str = self._query_to_string(query, cursor)
+
+        if sdk.mode == TuskDriftMode.REPLAY:
+            return handle_replay_mode(
+                replay_mode_handler=lambda: self._replay_copy(cursor, sdk, query_str),
+                no_op_request_handler=lambda: self._noop_copy(),
+                is_server_request=False,
+            )
+
+        # RECORD mode - return a context manager that wraps the copy operation
+        return self._record_copy(cursor, original_copy, sdk, query, query_str, params, kwargs)
+
+    @contextmanager
+    def _noop_copy(self) -> Iterator[MockCopy]:
+        """Handle background requests in REPLAY mode - return empty mock."""
+        yield MockCopy(data=[])
+
+    @contextmanager
+    def _record_copy(
+        self,
+        cursor: Any,
+        original_copy: Any,
+        sdk: TuskDrift,
+        query: str,
+        query_str: str,
+        params: Any,
+        kwargs: dict,
+    ) -> Iterator[_TracedCopyWrapper]:
+        """Handle RECORD mode for copy - wrap Copy object with tracing."""
+        is_pre_app_start = not sdk.app_ready
+
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name="psycopg.copy",
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: "psycopg.copy",
+                    TdSpanAttributes.PACKAGE_NAME: "psycopg",
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "PsycopgInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: "copy",
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
+                    TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+                },
+                is_pre_app_start=is_pre_app_start,
+            )
+        )
+
+        if not span_info:
+            # Fallback to original if span creation fails
+            with original_copy(query, params, **kwargs) as copy:
+                yield copy
+            return
+
+        error = None
+        data_collected: list = []
+
+        try:
+            with SpanUtils.with_span(span_info):
+                with original_copy(query, params, **kwargs) as copy:
+                    # Wrap the Copy object to capture data
+                    wrapped_copy = _TracedCopyWrapper(copy, data_collected)
+                    yield wrapped_copy
+        except Exception as e:
+            error = e
+            raise
+        finally:
+            self._finalize_copy_span(
+                span_info.span,
+                query_str,
+                data_collected,
+                error,
+            )
+            span_info.span.end()
+
+    @contextmanager
+    def _replay_copy(self, cursor: Any, sdk: TuskDrift, query_str: str) -> Iterator[MockCopy]:
+        """Handle REPLAY mode for copy - return mock Copy object."""
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name="psycopg.copy",
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: "psycopg.copy",
+                    TdSpanAttributes.PACKAGE_NAME: "psycopg",
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "PsycopgInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: "copy",
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
+                    TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
+                },
+                is_pre_app_start=not sdk.app_ready,
+            )
+        )
+
+        if not span_info:
+            raise RuntimeError("Error creating span in replay mode")
+
+        with SpanUtils.with_span(span_info):
+            mock_result = self._try_get_copy_mock(
+                sdk, query_str, span_info.trace_id, span_info.span_id
+            )
+
+            if mock_result is None:
+                is_pre_app_start = not sdk.app_ready
+                raise RuntimeError(
+                    f"[Tusk REPLAY] No mock found for psycopg copy operation. "
+                    f"This {'pre-app-start ' if is_pre_app_start else ''}copy was not recorded. "
+                    f"Query: {query_str[:100]}..."
+                )
+
+            # Yield a mock copy object with recorded data
+            mock_copy = MockCopy(mock_result.get("data", []))
+            yield mock_copy
+
+            span_info.span.end()
+
+    def _try_get_copy_mock(
+        self,
+        sdk: TuskDrift,
+        query: str,
+        trace_id: str,
+        span_id: str,
+    ) -> dict[str, Any] | None:
+        """Try to get a mocked response for copy operation from CLI."""
+        try:
+            # Determine operation type from query
+            query_upper = query.upper()
+            is_copy_to = "TO" in query_upper and "STDOUT" in query_upper
+            is_copy_from = "FROM" in query_upper and "STDIN" in query_upper
+
+            input_value = {
+                "query": query.strip(),
+                "operation": "COPY_TO" if is_copy_to else "COPY_FROM" if is_copy_from else "COPY",
+            }
+
+            # Use centralized mock finding utility
+            from ...core.mock_utils import find_mock_response_sync
+
+            mock_response_output = find_mock_response_sync(
+                sdk=sdk,
+                trace_id=trace_id,
+                span_id=span_id,
+                name="psycopg.copy",
+                package_name="psycopg",
+                package_type=PackageType.PG,
+                instrumentation_name="PsycopgInstrumentation",
+                submodule_name="copy",
+                input_value=input_value,
+                kind=SpanKind.CLIENT,
+                is_pre_app_start=not sdk.app_ready,
+            )
+
+            if not mock_response_output or not mock_response_output.found:
+                logger.debug(f"No mock found for psycopg copy: {query[:100]}")
+                return None
+
+            return mock_response_output.response
+
+        except Exception as e:
+            logger.error(f"Error getting mock for psycopg copy: {e}")
+            return None
+
+    def _finalize_copy_span(
+        self,
+        span: trace.Span,
+        query: str,
+        data_collected: list,
+        error: Exception | None,
+    ) -> None:
+        """Finalize span for copy operation."""
+        try:
+            import datetime
+
+            def serialize_value(val):
+                """Convert non-JSON-serializable values to JSON-compatible types."""
+                if isinstance(val, (datetime.datetime, datetime.date, datetime.time)):
+                    return val.isoformat()
+                elif isinstance(val, bytes):
+                    return val.decode("utf-8", errors="replace")
+                elif isinstance(val, memoryview):
+                    return bytes(val).decode("utf-8", errors="replace")
+                elif isinstance(val, (list, tuple)):
+                    return [serialize_value(v) for v in val]
+                elif isinstance(val, dict):
+                    return {k: serialize_value(v) for k, v in val.items()}
+                return val
+
+            # Determine operation type from query
+            query_upper = query.upper()
+            is_copy_to = "TO" in query_upper and "STDOUT" in query_upper
+            is_copy_from = "FROM" in query_upper and "STDIN" in query_upper
+
+            # Build input value
+            input_value = {
+                "query": query.strip(),
+                "operation": "COPY_TO" if is_copy_to else "COPY_FROM" if is_copy_from else "COPY",
+            }
+
+            # Build output value
+            output_value = {}
+
+            if error:
+                output_value = {
+                    "errorName": type(error).__name__,
+                    "errorMessage": str(error),
+                }
+                span.set_status(Status(OTelStatusCode.ERROR, str(error)))
+            else:
+                # Serialize the captured data
+                serialized_data = [serialize_value(d) for d in data_collected]
+                output_value = {
+                    "data": serialized_data,
+                    "chunk_count": len(data_collected),
+                }
+
+            # Generate schemas and hashes
+            input_result = JsonSchemaHelper.generate_schema_and_hash(input_value, {})
+            output_result = JsonSchemaHelper.generate_schema_and_hash(output_value, {})
+
+            # Set span attributes
+            span.set_attribute(TdSpanAttributes.INPUT_VALUE, json.dumps(input_value))
+            span.set_attribute(TdSpanAttributes.OUTPUT_VALUE, json.dumps(output_value))
+            span.set_attribute(TdSpanAttributes.INPUT_SCHEMA, json.dumps(input_result.schema.to_primitive()))
+            span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA, json.dumps(output_result.schema.to_primitive()))
+            span.set_attribute(TdSpanAttributes.INPUT_SCHEMA_HASH, input_result.decoded_schema_hash)
+            span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA_HASH, output_result.decoded_schema_hash)
+            span.set_attribute(TdSpanAttributes.INPUT_VALUE_HASH, input_result.decoded_value_hash)
+            span.set_attribute(TdSpanAttributes.OUTPUT_VALUE_HASH, output_result.decoded_value_hash)
+
+            if not error:
+                span.set_status(Status(OTelStatusCode.OK))
+
+            logger.debug("[PSYCOPG] Copy span finalized successfully")
+
+        except Exception as e:
+            logger.error(f"Error finalizing copy span: {e}")
 
     def _query_to_string(self, query: Any, cursor: Any) -> str:
         """Convert query to string."""
