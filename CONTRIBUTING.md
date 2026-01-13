@@ -45,21 +45,6 @@ uv run python -m unittest tests.unit.test_adapters -v
 timeout 30 uv run python -m unittest discover -s tests/integration -v
 ```
 
-### Database Integration Tests
-
-Requires Docker for running test databases.
-
-```bash
-# Start test databases
-docker compose -f docker-compose.test.yml up -d
-
-# Run database tests
-uv run python -m unittest tests.integration.test_database -v
-
-# Stop databases
-docker compose -f docker-compose.test.yml down
-```
-
 ### E2E Tests
 
 E2E tests validate full instrumentation workflows using Docker containers. They record real API interactions and verify replay behavior using the Tusk CLI.
