@@ -136,9 +136,17 @@ class MockConnection:
 
             return instrumentation._traced_executemany(cursor, noop_executemany, sdk, query, params_seq, **kwargs)
 
+        def mock_stream(query, params=None, **kwargs):
+            # For mock cursor, original_stream is just a no-op generator
+            def noop_stream(q, p, **kw):
+                return iter([])
+
+            return instrumentation._traced_stream(cursor, noop_stream, sdk, query, params, **kwargs)
+
         # Monkey-patch mock functions onto cursor
         cursor.execute = mock_execute  # type: ignore[method-assign]
         cursor.executemany = mock_executemany  # type: ignore[method-assign]
+        cursor.stream = mock_stream  # type: ignore[method-assign]
 
         logger.debug("[MOCK_CONNECTION] Created cursor (psycopg3)")
         return cursor
@@ -207,6 +215,10 @@ class MockCursor:
 
     def fetchall(self):
         return []
+
+    def stream(self, query, params=None, **kwargs):
+        """Will be replaced by instrumentation."""
+        return iter([])
 
     def close(self):
         pass
@@ -314,6 +326,9 @@ class PsycopgInstrumentation(InstrumentationBase):
 
             def executemany(self, query, params_seq, **kwargs):
                 return instrumentation._traced_executemany(self, super().executemany, sdk, query, params_seq, **kwargs)
+
+            def stream(self, query, params=None, **kwargs):
+                return instrumentation._traced_stream(self, super().stream, sdk, query, params, **kwargs)
 
         return InstrumentedCursor
 
@@ -557,6 +572,194 @@ class PsycopgInstrumentation(InstrumentationBase):
                     error,
                 )
                 span_info.span.end()
+
+    def _traced_stream(
+        self, cursor: Any, original_stream: Any, sdk: TuskDrift, query: str, params=None, **kwargs
+    ) -> Any:
+        """Traced cursor.stream method."""
+        if sdk.mode == TuskDriftMode.DISABLED:
+            return original_stream(query, params, **kwargs)
+
+        query_str = self._query_to_string(query, cursor)
+
+        if sdk.mode == TuskDriftMode.REPLAY:
+            return handle_replay_mode(
+                replay_mode_handler=lambda: self._replay_stream(cursor, sdk, query_str, params),
+                no_op_request_handler=lambda: iter([]),  # Empty iterator for background requests
+                is_server_request=False,
+            )
+
+        # RECORD mode
+        return handle_record_mode(
+            original_function_call=lambda: original_stream(query, params, **kwargs),
+            record_mode_handler=lambda is_pre_app_start: self._record_stream(
+                cursor, original_stream, sdk, query, query_str, params, is_pre_app_start, kwargs
+            ),
+            span_kind=OTelSpanKind.CLIENT,
+        )
+
+    def _record_stream(
+        self,
+        cursor: Any,
+        original_stream: Any,
+        sdk: TuskDrift,
+        query: str,
+        query_str: str,
+        params: Any,
+        is_pre_app_start: bool,
+        kwargs: dict,
+    ):
+        """Handle RECORD mode for stream - wrap generator with tracing."""
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name="psycopg.query",
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: "psycopg.query",
+                    TdSpanAttributes.PACKAGE_NAME: "psycopg",
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "PsycopgInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: "query",
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
+                    TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+                },
+                is_pre_app_start=is_pre_app_start,
+            )
+        )
+
+        if not span_info:
+            yield from original_stream(query, params, **kwargs)
+            return
+
+        rows_collected = []
+        error = None
+
+        try:
+            with SpanUtils.with_span(span_info):
+                for row in original_stream(query, params, **kwargs):
+                    rows_collected.append(row)
+                    yield row
+        except Exception as e:
+            error = e
+            raise
+        finally:
+            self._finalize_stream_span(span_info.span, cursor, query_str, params, rows_collected, error)
+            span_info.span.end()
+
+    def _replay_stream(self, cursor: Any, sdk: TuskDrift, query_str: str, params: Any):
+        """Handle REPLAY mode for stream - return mock generator."""
+        span_info = SpanUtils.create_span(
+            CreateSpanOptions(
+                name="psycopg.query",
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: "psycopg.query",
+                    TdSpanAttributes.PACKAGE_NAME: "psycopg",
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "PsycopgInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: "query",
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
+                    TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
+                },
+                is_pre_app_start=not sdk.app_ready,
+            )
+        )
+
+        if not span_info:
+            raise RuntimeError("Error creating span in replay mode")
+
+        with SpanUtils.with_span(span_info):
+            mock_result = self._try_get_mock(
+                sdk, query_str, params, span_info.trace_id, span_info.span_id, span_info.parent_span_id
+            )
+
+            if mock_result is None:
+                is_pre_app_start = not sdk.app_ready
+                raise RuntimeError(
+                    f"[Tusk REPLAY] No mock found for psycopg stream query. "
+                    f"This {'pre-app-start ' if is_pre_app_start else ''}query was not recorded. "
+                    f"Query: {query_str[:100]}..."
+                )
+
+            # Deserialize and yield rows from mock
+            rows = mock_result.get("rows", [])
+            for row in rows:
+                deserialized = deserialize_db_value(row)
+                yield tuple(deserialized) if isinstance(deserialized, list) else deserialized
+
+            span_info.span.end()
+
+    def _finalize_stream_span(
+        self,
+        span: trace.Span,
+        cursor: Any,
+        query: str,
+        params: Any,
+        rows: list,
+        error: Exception | None,
+    ) -> None:
+        """Finalize span for stream operation with collected rows."""
+        try:
+            import datetime
+
+            def serialize_value(val):
+                """Convert non-JSON-serializable values to JSON-compatible types."""
+                if isinstance(val, (datetime.datetime, datetime.date, datetime.time)):
+                    return val.isoformat()
+                elif isinstance(val, bytes):
+                    return val.decode("utf-8", errors="replace")
+                elif isinstance(val, (list, tuple)):
+                    return [serialize_value(v) for v in val]
+                elif isinstance(val, dict):
+                    return {k: serialize_value(v) for k, v in val.items()}
+                return val
+
+            # Build input value
+            input_value = {
+                "query": query.strip(),
+            }
+            if params is not None:
+                input_value["parameters"] = serialize_value(params)
+
+            # Build output value
+            output_value = {}
+
+            if error:
+                output_value = {
+                    "errorName": type(error).__name__,
+                    "errorMessage": str(error),
+                }
+                span.set_status(Status(OTelStatusCode.ERROR, str(error)))
+            else:
+                # Use pre-collected rows (unlike _finalize_query_span which calls fetchall)
+                serialized_rows = [[serialize_value(col) for col in row] for row in rows]
+
+                output_value = {
+                    "rowcount": len(rows),
+                }
+
+                if serialized_rows:
+                    output_value["rows"] = serialized_rows
+
+            # Generate schemas and hashes
+            input_result = JsonSchemaHelper.generate_schema_and_hash(input_value, {})
+            output_result = JsonSchemaHelper.generate_schema_and_hash(output_value, {})
+
+            # Set span attributes
+            span.set_attribute(TdSpanAttributes.INPUT_VALUE, json.dumps(input_value))
+            span.set_attribute(TdSpanAttributes.OUTPUT_VALUE, json.dumps(output_value))
+            span.set_attribute(TdSpanAttributes.INPUT_SCHEMA, json.dumps(input_result.schema.to_primitive()))
+            span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA, json.dumps(output_result.schema.to_primitive()))
+            span.set_attribute(TdSpanAttributes.INPUT_SCHEMA_HASH, input_result.decoded_schema_hash)
+            span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA_HASH, output_result.decoded_schema_hash)
+            span.set_attribute(TdSpanAttributes.INPUT_VALUE_HASH, input_result.decoded_value_hash)
+            span.set_attribute(TdSpanAttributes.OUTPUT_VALUE_HASH, output_result.decoded_value_hash)
+
+            if not error:
+                span.set_status(Status(OTelStatusCode.OK))
+
+            logger.debug("[PSYCOPG] Stream span finalized successfully")
+
+        except Exception as e:
+            logger.error(f"Error finalizing stream span: {e}")
 
     def _query_to_string(self, query: Any, cursor: Any) -> str:
         """Convert query to string."""

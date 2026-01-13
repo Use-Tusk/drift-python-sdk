@@ -143,6 +143,97 @@ def db_transaction():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/test/cursor-stream")
+def test_cursor_stream():
+    """Test cursor.stream() - generator-based result streaming.
+
+    This tests whether the instrumentation captures streaming queries
+    that return results as a generator.
+    """
+    try:
+        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
+            # Stream results row-by-row instead of fetchall
+            results = []
+            for row in cur.stream("SELECT id, name, email FROM users ORDER BY id LIMIT 5"):
+                results.append({"id": row[0], "name": row[1], "email": row[2]})
+        return jsonify({"count": len(results), "data": results})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# =============================================================================
+# BUG HUNTING TEST ENDPOINTS
+# These endpoints expose confirmed bugs in the psycopg instrumentation.
+# See BUG_TRACKING.md for detailed analysis.
+# =============================================================================
+
+
+@app.route("/test/server-cursor")
+def test_server_cursor():
+    """Test ServerCursor (named cursor) - server-side cursor.
+
+    This tests whether the instrumentation captures server-side cursors
+    which use DECLARE CURSOR on the database server.
+    """
+    try:
+        with psycopg.connect(get_conn_string()) as conn:
+            # Named cursor creates a server-side cursor
+            with conn.cursor(name="test_server_cursor") as cur:
+                cur.execute("SELECT id, name, email FROM users ORDER BY id LIMIT 5")
+                rows = cur.fetchall()
+                columns = [desc[0] for desc in cur.description] if cur.description else ["id", "name", "email"]
+                results = [dict(zip(columns, row, strict=False)) for row in rows]
+        return jsonify({"count": len(results), "data": results})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/copy-to")
+def test_copy_to():
+    """Test cursor.copy() with COPY TO - bulk data export.
+
+    This tests whether the instrumentation captures COPY operations.
+    """
+    try:
+        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
+            # Use COPY to export data
+            output = []
+            with cur.copy("COPY (SELECT id, name, email FROM users ORDER BY id LIMIT 5) TO STDOUT") as copy:
+                for row in copy:
+                    # Handle both bytes and memoryview
+                    if isinstance(row, memoryview):
+                        row = bytes(row)
+                    output.append(row.decode('utf-8').strip())
+        return jsonify({"count": len(output), "data": output})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/multiple-queries")
+def test_multiple_queries():
+    """Test multiple queries in same connection.
+
+    This tests whether multiple queries in the same connection
+    are all captured and replayed correctly.
+    """
+    try:
+        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
+            # Query 1
+            cur.execute("SELECT COUNT(*) FROM users")
+            count = cur.fetchone()[0]
+
+            # Query 2
+            cur.execute("SELECT MAX(id) FROM users")
+            max_id = cur.fetchone()[0]
+
+            # Query 3
+            cur.execute("SELECT MIN(id) FROM users")
+            min_id = cur.fetchone()[0]
+
+        return jsonify({"count": count, "max_id": max_id, "min_id": min_id})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 if __name__ == "__main__":
     sdk.mark_app_as_ready()

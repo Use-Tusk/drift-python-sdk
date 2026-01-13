@@ -64,4 +64,6 @@ if __name__ == "__main__":
         if user_id:
             make_request("DELETE", f"/db/delete/{user_id}")
 
+    make_request("GET", "/test/cursor-stream")
+
     print("\nAll requests completed successfully")
