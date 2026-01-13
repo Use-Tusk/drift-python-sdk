@@ -69,19 +69,6 @@ After completing the CLI wizard, install the SDK:
 pip install tusk-drift-python-sdk
 ```
 
-#### With Framework Support
-
-```bash
-# With Flask support
-pip install tusk-drift-python-sdk[flask]
-
-# With FastAPI support
-pip install tusk-drift-python-sdk[fastapi]
-
-# With Django support
-pip install tusk-drift-python-sdk[django]
-```
-
 ### Step 3: Initialize the SDK for your service
 
 Refer to our [initialization guide](docs/initialization.md) to set up the SDK for your service.
