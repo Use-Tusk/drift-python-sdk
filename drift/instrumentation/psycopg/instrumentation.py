@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import weakref
 from contextlib import contextmanager
 from types import ModuleType
 from typing import Any, Iterator
@@ -184,6 +185,10 @@ class MockConnection:
             self.commit()
         return False
 
+    def pipeline(self):
+        """Return a mock pipeline context manager for REPLAY mode."""
+        return MockPipeline(self)
+
 
 class MockCursor:
     """Mock cursor for when we can't create a real cursor from base class.
@@ -302,6 +307,27 @@ class MockCopy:
         pass
 
 
+class MockPipeline:
+    """Mock Pipeline for REPLAY mode.
+
+    In REPLAY mode, pipeline operations are no-ops since queries
+    return mocked data immediately.
+    """
+
+    def __init__(self, connection: "MockConnection"):
+        self._conn = connection
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return False
+
+    def sync(self):
+        """No-op sync for mock pipeline."""
+        pass
+
+
 class _TracedCopyWrapper:
     """Wrapper around psycopg's Copy object to capture data in RECORD mode.
 
@@ -389,6 +415,8 @@ class PsycopgInstrumentation(InstrumentationBase):
             enabled=enabled,
         )
         self._original_connect = None
+        # Track pending pipeline spans per connection for deferred finalization
+        self._pending_pipeline_spans: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
         _instance = self
 
     def patch(self, module: ModuleType) -> None:
@@ -444,6 +472,51 @@ class PsycopgInstrumentation(InstrumentationBase):
 
         module.connect = patched_connect  # type: ignore[attr-defined]
         logger.debug("psycopg.connect instrumented")
+
+        # Patch Pipeline class for pipeline mode support
+        self._patch_pipeline_class(module)
+
+    def _patch_pipeline_class(self, module: ModuleType) -> None:
+        """Patch psycopg.Pipeline to finalize spans on sync/exit."""
+        try:
+            from psycopg import Pipeline
+        except ImportError:
+            logger.debug("psycopg.Pipeline not available, skipping pipeline instrumentation")
+            return
+
+        instrumentation = self
+
+        # Store originals for potential unpatch
+        self._original_pipeline_sync = getattr(Pipeline, 'sync', None)
+        self._original_pipeline_exit = getattr(Pipeline, '__exit__', None)
+
+        if self._original_pipeline_sync:
+            def patched_sync(pipeline_self):
+                """Patched Pipeline.sync that finalizes pending spans."""
+                result = instrumentation._original_pipeline_sync(pipeline_self)
+                # _conn is the connection associated with the pipeline
+                conn = getattr(pipeline_self, '_conn', None)
+                if conn:
+                    instrumentation._finalize_pending_pipeline_spans(conn)
+                return result
+
+            Pipeline.sync = patched_sync
+            logger.debug("psycopg.Pipeline.sync instrumented")
+
+        if self._original_pipeline_exit:
+            def patched_exit(pipeline_self, exc_type, exc_val, exc_tb):
+                """Patched Pipeline.__exit__ that finalizes any remaining spans."""
+                result = instrumentation._original_pipeline_exit(
+                    pipeline_self, exc_type, exc_val, exc_tb
+                )
+                # Finalize any remaining pending spans (handles implicit sync on exit)
+                conn = getattr(pipeline_self, '_conn', None)
+                if conn:
+                    instrumentation._finalize_pending_pipeline_spans(conn)
+                return result
+
+            Pipeline.__exit__ = patched_exit
+            logger.debug("psycopg.Pipeline.__exit__ instrumented")
 
     def _create_cursor_factory(self, sdk: TuskDrift, base_factory=None):
         """Create a cursor factory that wraps cursors with instrumentation.
@@ -638,6 +711,9 @@ class PsycopgInstrumentation(InstrumentationBase):
         error = None
         result = None
 
+        # Check if we're in pipeline mode BEFORE executing
+        in_pipeline_mode = self._is_in_pipeline_mode(cursor)
+
         with SpanUtils.with_span(span_info):
             try:
                 result = original_execute(query, params, **kwargs)
@@ -646,14 +722,24 @@ class PsycopgInstrumentation(InstrumentationBase):
                 error = e
                 raise
             finally:
-                self._finalize_query_span(
-                    span_info.span,
-                    cursor,
-                    query_str,
-                    params,
-                    error,
-                )
-                span_info.span.end()
+                if error is not None:
+                    # Always finalize immediately on error
+                    self._finalize_query_span(span_info.span, cursor, query_str, params, error)
+                    span_info.span.end()
+                elif in_pipeline_mode:
+                    # Defer finalization until pipeline.sync()
+                    connection = self._get_connection_from_cursor(cursor)
+                    if connection:
+                        self._add_pending_pipeline_span(connection, span_info, cursor, query_str, params)
+                        # DON'T end span here - will be ended in _finalize_pending_pipeline_spans
+                    else:
+                        # Fallback: finalize immediately if we can't get connection
+                        self._finalize_query_span(span_info.span, cursor, query_str, params, None)
+                        span_info.span.end()
+                else:
+                    # Normal mode: finalize immediately
+                    self._finalize_query_span(span_info.span, cursor, query_str, params, None)
+                    span_info.span.end()
 
     def _traced_executemany(
         self, cursor: Any, original_executemany: Any, sdk: TuskDrift, query: str, params_seq, **kwargs
@@ -1217,6 +1303,71 @@ class PsycopgInstrumentation(InstrumentationBase):
             pass
 
         return str(query) if not isinstance(query, str) else query
+
+    def _is_in_pipeline_mode(self, cursor: Any) -> bool:
+        """Check if the cursor's connection is currently in pipeline mode.
+
+        In psycopg3, when conn.pipeline() is active, connection._pipeline is set.
+        """
+        try:
+            conn = getattr(cursor, 'connection', None)
+            if conn is None:
+                return False
+            # MockConnection doesn't have real pipeline mode
+            if isinstance(conn, MockConnection):
+                return False
+            pipeline = getattr(conn, '_pipeline', None)
+            return pipeline is not None
+        except Exception:
+            return False
+
+    def _get_connection_from_cursor(self, cursor: Any) -> Any:
+        """Get the connection object from a cursor."""
+        return getattr(cursor, 'connection', None)
+
+    def _add_pending_pipeline_span(
+        self,
+        connection: Any,
+        span_info: Any,
+        cursor: Any,
+        query: str,
+        params: Any,
+    ) -> None:
+        """Add a pending span to be finalized when pipeline syncs."""
+        if connection not in self._pending_pipeline_spans:
+            self._pending_pipeline_spans[connection] = []
+
+        self._pending_pipeline_spans[connection].append({
+            'span_info': span_info,
+            'cursor': cursor,
+            'query': query,
+            'params': params,
+        })
+        logger.debug(f"[PIPELINE] Deferred span for query: {query[:50]}...")
+
+    def _finalize_pending_pipeline_spans(self, connection: Any) -> None:
+        """Finalize all pending spans for a connection after pipeline sync."""
+        if connection not in self._pending_pipeline_spans:
+            return
+
+        pending = self._pending_pipeline_spans.pop(connection, [])
+        logger.debug(f"[PIPELINE] Finalizing {len(pending)} pending pipeline spans")
+
+        for item in pending:
+            span_info = item['span_info']
+            cursor = item['cursor']
+            query = item['query']
+            params = item['params']
+
+            try:
+                self._finalize_query_span(span_info.span, cursor, query, params, error=None)
+                span_info.span.end()
+            except Exception as e:
+                logger.error(f"[PIPELINE] Error finalizing deferred span: {e}")
+                try:
+                    span_info.span.end()
+                except Exception:
+                    pass
 
     def _try_get_mock(
         self,

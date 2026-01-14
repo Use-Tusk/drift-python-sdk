@@ -224,6 +224,105 @@ def test_multiple_queries():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/test/pipeline-mode")
+def test_pipeline_mode():
+    """Test pipeline mode - batched operations.
+
+    Pipeline mode allows sending multiple queries without waiting for results.
+    This tests whether the instrumentation handles pipeline mode correctly.
+    """
+    try:
+        with psycopg.connect(get_conn_string()) as conn:
+            # Enter pipeline mode
+            with conn.pipeline() as p:
+                cur1 = conn.execute("SELECT id, name FROM users ORDER BY id LIMIT 3")
+                cur2 = conn.execute("SELECT COUNT(*) FROM users")
+                # Sync the pipeline to get results
+                p.sync()
+
+                rows1 = cur1.fetchall()
+                count = cur2.fetchone()[0]
+
+        return jsonify({
+            "rows": [{"id": r[0], "name": r[1]} for r in rows1],
+            "count": count
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ==========================================
+# Bug Hunt Test Endpoints
+# ==========================================
+
+@app.route("/test/dict-row-factory")
+def test_dict_row_factory():
+    """Test dict_row row factory.
+
+    Tests whether the instrumentation correctly handles dict row factories
+    which return dictionaries instead of tuples.
+    """
+    try:
+        from psycopg.rows import dict_row
+
+        with psycopg.connect(get_conn_string(), row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, name, email FROM users ORDER BY id LIMIT 3")
+                rows = cur.fetchall()
+
+        return jsonify({
+            "count": len(rows),
+            "data": rows  # Already dictionaries
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/namedtuple-row-factory")
+def test_namedtuple_row_factory():
+    """Test namedtuple_row row factory.
+
+    Tests whether the instrumentation correctly handles namedtuple row factories.
+    """
+    try:
+        from psycopg.rows import namedtuple_row
+
+        with psycopg.connect(get_conn_string(), row_factory=namedtuple_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, name, email FROM users ORDER BY id LIMIT 3")
+                rows = cur.fetchall()
+
+        # Convert named tuples to dicts for JSON serialization
+        return jsonify({
+            "count": len(rows),
+            "data": [{"id": r.id, "name": r.name, "email": r.email} for r in rows]
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/cursor-iteration")
+def test_cursor_iteration():
+    """Test direct cursor iteration (for row in cursor).
+
+    Tests whether iterating over cursor directly works correctly.
+    """
+    try:
+        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
+            cur.execute("SELECT id, name FROM users ORDER BY id LIMIT 5")
+
+            # Iterate directly over cursor
+            results = []
+            for row in cur:
+                results.append({"id": row[0], "name": row[1]})
+
+        return jsonify({
+            "count": len(results),
+            "data": results
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 if __name__ == "__main__":
     sdk.mark_app_as_ready()
