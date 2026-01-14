@@ -1,27 +1,9 @@
 """Execute test requests against the FastAPI app."""
 
 import json
-import os
-import time
 from pathlib import Path
 
-import requests
-
-PORT = os.getenv("PORT", "8000")
-BASE_URL = f"http://localhost:{PORT}"
-
-
-def make_request(method: str, endpoint: str, **kwargs):
-    """Make HTTP request and log result."""
-    url = f"{BASE_URL}{endpoint}"
-    print(f"→ {method} {endpoint}")
-
-    # Set default timeout if not provided
-    kwargs.setdefault("timeout", 30)
-    response = requests.request(method, url, **kwargs)
-    print(f"  Status: {response.status_code}")
-    time.sleep(0.5)  # Small delay between requests
-    return response
+from drift.instrumentation.e2e_common.test_utils import make_request, print_request_summary
 
 
 def verify_stack_traces():
@@ -180,3 +162,5 @@ if __name__ == "__main__":
     print("\n" + "=" * 50)
     print("All requests completed successfully")
     print("=" * 50)
+
+    print_request_summary()

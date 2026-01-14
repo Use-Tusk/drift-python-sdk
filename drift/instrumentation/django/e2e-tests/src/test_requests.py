@@ -1,26 +1,6 @@
 """Execute test requests against the Django app."""
 
-import os
-import time
-
-import requests
-
-PORT = os.getenv("PORT", "8000")
-BASE_URL = f"http://localhost:{PORT}"
-
-
-def make_request(method: str, endpoint: str, **kwargs):
-    """Make HTTP request and log result."""
-    url = f"{BASE_URL}{endpoint}"
-    print(f"→ {method} {endpoint}")
-
-    # Set default timeout if not provided
-    kwargs.setdefault("timeout", 30)
-    response = requests.request(method, url, **kwargs)
-    print(f"  Status: {response.status_code}")
-    time.sleep(0.5)  # Small delay between requests
-    return response
-
+from drift.instrumentation.e2e_common.test_utils import make_request, print_request_summary
 
 if __name__ == "__main__":
     print("Starting Django test request sequence...\n")
@@ -42,4 +22,4 @@ if __name__ == "__main__":
     )
     make_request("DELETE", "/api/post/1/delete")
 
-    print("\nAll requests completed successfully")
+    print_request_summary()

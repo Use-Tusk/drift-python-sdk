@@ -45,6 +45,7 @@ class E2ETestRunnerBase:
         self.app_port = app_port
         self.app_process: subprocess.Popen | None = None
         self.exit_code = 0
+        self.expected_request_count: int | None = None
 
         # Register signal handlers for cleanup
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -75,6 +76,17 @@ class E2ETestRunnerBase:
             raise subprocess.CalledProcessError(result.returncode, cmd)
 
         return result
+
+    def _parse_request_count(self, output: str):
+        """Parse the request count from test_requests.py output."""
+        for line in output.split("\n"):
+            if line.startswith("TOTAL_REQUESTS_SENT:"):
+                try:
+                    count = int(line.split(":")[1])
+                    self.expected_request_count = count
+                    self.log(f"Captured request count: {count}", Colors.GREEN)
+                except (ValueError, IndexError):
+                    self.log(f"Failed to parse request count from: {line}", Colors.YELLOW)
 
     def wait_for_service(self, check_cmd: list[str], timeout: int = 30, interval: int = 1) -> bool:
         """Wait for a service to become ready."""
@@ -164,7 +176,13 @@ class E2ETestRunnerBase:
         # Execute test requests
         self.log("Executing test requests...", Colors.GREEN)
         try:
-            self.run_command(["python", "src/test_requests.py"])
+            # Pass PYTHONPATH so test_requests.py can import from e2e_common
+            result = self.run_command(
+                ["python", "src/test_requests.py"],
+                env={"PYTHONPATH": "/sdk"},
+            )
+            # Parse request count from output
+            self._parse_request_count(result.stdout)
         except subprocess.CalledProcessError:
             self.log("Test requests failed", Colors.RED)
             self.exit_code = 1
@@ -257,6 +275,7 @@ class E2ETestRunnerBase:
                     idx += 1
 
             all_passed = True
+            passed_count = 0
             for result in results:
                 test_id = result.get("test_id", "unknown")
                 passed = result.get("passed", False)
@@ -264,6 +283,7 @@ class E2ETestRunnerBase:
 
                 if passed:
                     self.log(f"✓ Test ID: {test_id} (Duration: {duration}ms)", Colors.GREEN)
+                    passed_count += 1
                 else:
                     self.log(f"✗ Test ID: {test_id} (Duration: {duration}ms)", Colors.RED)
                     all_passed = False
@@ -275,6 +295,20 @@ class E2ETestRunnerBase:
             else:
                 self.log("Some tests failed!", Colors.RED)
                 self.exit_code = 1
+
+            # Validate request count matches passed tests
+            if self.expected_request_count is not None:
+                if passed_count < self.expected_request_count:
+                    self.log(
+                        f"✗ Request count mismatch: {passed_count} passed tests != {self.expected_request_count} requests sent",
+                        Colors.RED,
+                    )
+                    self.exit_code = 1
+                else:
+                    self.log(
+                        f"✓ Request count validation: {passed_count} passed tests >= {self.expected_request_count} requests sent",
+                        Colors.GREEN,
+                    )
 
         except Exception as e:
             self.log(f"Failed to parse test results: {e}", Colors.RED)
