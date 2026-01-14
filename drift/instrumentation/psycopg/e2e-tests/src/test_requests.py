@@ -74,13 +74,10 @@ if __name__ == "__main__":
 
     make_request("GET", "/test/pipeline-mode")
 
-    # BUG 2: Dict row factory - rows returned as column names
     make_request("GET", "/test/dict-row-factory")
 
-    # BUG 3: Namedtuple row factory - rows returned as plain tuples
     make_request("GET", "/test/namedtuple-row-factory")
 
-    # BUG 4: Cursor iteration - "no result available" in replay mode
     make_request("GET", "/test/cursor-iteration")
 
     print("\nAll requests completed successfully")

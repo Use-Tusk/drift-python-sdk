@@ -250,11 +250,6 @@ def test_pipeline_mode():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
-# ==========================================
-# Bug Hunt Test Endpoints
-# ==========================================
-
 @app.route("/test/dict-row-factory")
 def test_dict_row_factory():
     """Test dict_row row factory.
@@ -299,7 +294,6 @@ def test_namedtuple_row_factory():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 
 @app.route("/test/cursor-iteration")
 def test_cursor_iteration():

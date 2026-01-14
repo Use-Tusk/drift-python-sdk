@@ -76,10 +76,11 @@ class MockConnection:
     All queries are mocked at the cursor.execute() level.
     """
 
-    def __init__(self, sdk: TuskDrift, instrumentation: PsycopgInstrumentation, cursor_factory):
+    def __init__(self, sdk: TuskDrift, instrumentation: PsycopgInstrumentation, cursor_factory, row_factory=None):
         self.sdk = sdk
         self.instrumentation = instrumentation
         self.cursor_factory = cursor_factory
+        self.row_factory = row_factory  # Store row_factory for cursor creation
         self.closed = False
         self.autocommit = False
 
@@ -232,6 +233,18 @@ class MockCursor:
     def stream(self, query, params=None, **kwargs):
         """Will be replaced by instrumentation."""
         return iter([])
+
+    def __iter__(self):
+        """Support direct cursor iteration (for row in cursor)."""
+        return self
+
+    def __next__(self):
+        """Return next row for iteration."""
+        if self._mock_index < len(self._mock_rows):
+            row = self._mock_rows[self._mock_index]
+            self._mock_index += 1
+            return tuple(row) if isinstance(row, list) else row
+        raise StopIteration
 
     def close(self):
         pass
@@ -439,6 +452,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                 return original_connect(*args, **kwargs)
 
             user_cursor_factory = kwargs.pop("cursor_factory", None)
+            user_row_factory = kwargs.pop("row_factory", None)
             cursor_factory = instrumentation._create_cursor_factory(sdk, user_cursor_factory)
 
             # Create server cursor factory for named cursors (conn.cursor(name="..."))
@@ -448,6 +462,8 @@ class PsycopgInstrumentation(InstrumentationBase):
             if sdk.mode == TuskDriftMode.REPLAY:
                 try:
                     kwargs["cursor_factory"] = cursor_factory
+                    if user_row_factory is not None:
+                        kwargs["row_factory"] = user_row_factory
                     connection = original_connect(*args, **kwargs)
                     # Set server cursor factory on the connection for named cursors
                     if server_cursor_factory:
@@ -459,10 +475,12 @@ class PsycopgInstrumentation(InstrumentationBase):
                         f"[PATCHED_CONNECT] REPLAY mode: Database connection failed ({e}), using mock connection (psycopg3)"
                     )
                     # Return mock connection that doesn't require a real database
-                    return MockConnection(sdk, instrumentation, cursor_factory)
+                    return MockConnection(sdk, instrumentation, cursor_factory, row_factory=user_row_factory)
 
             # In RECORD mode, always require real connection
             kwargs["cursor_factory"] = cursor_factory
+            if user_row_factory is not None:
+                kwargs["row_factory"] = user_row_factory
             connection = original_connect(*args, **kwargs)
             # Set server cursor factory on the connection for named cursors
             if server_cursor_factory:
@@ -558,6 +576,38 @@ class PsycopgInstrumentation(InstrumentationBase):
             def copy(self, query, params=None, **kwargs):
                 return instrumentation._traced_copy(self, super().copy, sdk, query, params, **kwargs)
 
+            def __iter__(self):
+                # Support direct cursor iteration (for row in cursor)
+                # In replay mode with mock data (_mock_rows) or record mode with captured data (_tusk_rows)
+                if hasattr(self, '_mock_rows') and self._mock_rows is not None:
+                    return self
+                if hasattr(self, '_tusk_rows') and self._tusk_rows is not None:
+                    return self
+                return super().__iter__()
+
+            def __next__(self):
+                # In replay mode with mock data, iterate over mock rows
+                if hasattr(self, '_mock_rows') and self._mock_rows is not None:
+                    if self._mock_index < len(self._mock_rows):
+                        row = self._mock_rows[self._mock_index]
+                        self._mock_index += 1
+                        # Apply row transformation if fetchone is patched
+                        if hasattr(self, 'fetchone') and callable(self.fetchone):
+                            # Reset index, get transformed row, restore index
+                            self._mock_index -= 1
+                            result = self.fetchone()
+                            return result
+                        return tuple(row) if isinstance(row, list) else row
+                    raise StopIteration
+                # In record mode with captured data, iterate over stored rows
+                if hasattr(self, '_tusk_rows') and self._tusk_rows is not None:
+                    if self._tusk_index < len(self._tusk_rows):
+                        row = self._tusk_rows[self._tusk_index]
+                        self._tusk_index += 1
+                        return row
+                    raise StopIteration
+                return super().__next__()
+
         return InstrumentedCursor
 
     def _create_server_cursor_factory(self, sdk: TuskDrift, base_factory=None):
@@ -593,6 +643,38 @@ class PsycopgInstrumentation(InstrumentationBase):
 
             # Note: ServerCursor doesn't support executemany()
             # Note: ServerCursor has stream-like iteration via fetchmany/itersize
+
+            def __iter__(self):
+                # Support direct cursor iteration (for row in cursor)
+                # In replay mode with mock data (_mock_rows) or record mode with captured data (_tusk_rows)
+                if hasattr(self, '_mock_rows') and self._mock_rows is not None:
+                    return self
+                if hasattr(self, '_tusk_rows') and self._tusk_rows is not None:
+                    return self
+                return super().__iter__()
+
+            def __next__(self):
+                # In replay mode with mock data, iterate over mock rows
+                if hasattr(self, '_mock_rows') and self._mock_rows is not None:
+                    if self._mock_index < len(self._mock_rows):
+                        row = self._mock_rows[self._mock_index]
+                        self._mock_index += 1
+                        # Apply row transformation if fetchone is patched
+                        if hasattr(self, 'fetchone') and callable(self.fetchone):
+                            # Reset index, get transformed row, restore index
+                            self._mock_index -= 1
+                            result = self.fetchone()
+                            return result
+                        return tuple(row) if isinstance(row, list) else row
+                    raise StopIteration
+                # In record mode with captured data, iterate over stored rows
+                if hasattr(self, '_tusk_rows') and self._tusk_rows is not None:
+                    if self._tusk_index < len(self._tusk_rows):
+                        row = self._tusk_rows[self._tusk_index]
+                        self._tusk_index += 1
+                        return row
+                    raise StopIteration
+                return super().__next__()
 
         return InstrumentedServerCursor
 
@@ -1304,6 +1386,28 @@ class PsycopgInstrumentation(InstrumentationBase):
 
         return str(query) if not isinstance(query, str) else query
 
+    def _detect_row_factory_type(self, row_factory: Any) -> str:
+        """Detect the type of row factory for mock transformations.
+
+        Returns:
+            "dict" for dict_row, "namedtuple" for namedtuple_row, "tuple" otherwise
+        """
+        if row_factory is None:
+            return "tuple"
+
+        # Check by function/class name
+        factory_name = getattr(row_factory, '__name__', '')
+        if not factory_name:
+            factory_name = str(type(row_factory).__name__)
+
+        factory_name_lower = factory_name.lower()
+        if 'dict' in factory_name_lower:
+            return "dict"
+        elif 'namedtuple' in factory_name_lower:
+            return "namedtuple"
+
+        return "tuple"
+
     def _is_in_pipeline_mode(self, cursor: Any) -> bool:
         """Check if the cursor's connection is currently in pipeline mode.
 
@@ -1443,6 +1547,36 @@ class PsycopgInstrumentation(InstrumentationBase):
                 except AttributeError:
                     pass
 
+        # Get row_factory from cursor or connection for row transformation
+        row_factory = getattr(cursor, 'row_factory', None)
+        if row_factory is None:
+            conn = getattr(cursor, 'connection', None)
+            if conn:
+                row_factory = getattr(conn, 'row_factory', None)
+
+        # Extract column names from description for row factory transformations
+        column_names = None
+        if description_data:
+            column_names = [col["name"] for col in description_data]
+
+        # Detect row factory type for transformation
+        row_factory_type = self._detect_row_factory_type(row_factory)
+
+        # Create namedtuple class once if needed (avoid recreating for each row)
+        RowClass = None
+        if row_factory_type == "namedtuple" and column_names:
+            from collections import namedtuple
+            RowClass = namedtuple('Row', column_names)
+
+        def transform_row(row):
+            """Transform raw row data according to row factory type."""
+            values = tuple(row) if isinstance(row, list) else row
+            if row_factory_type == "dict" and column_names:
+                return dict(zip(column_names, values))
+            elif row_factory_type == "namedtuple" and RowClass is not None:
+                return RowClass(*values)
+            return values
+
         mock_rows = actual_data.get("rows", [])
         # Deserialize datetime strings back to datetime objects for consistent Flask serialization
         mock_rows = [deserialize_db_value(row) for row in mock_rows]
@@ -1453,7 +1587,7 @@ class PsycopgInstrumentation(InstrumentationBase):
             if cursor._mock_index < len(cursor._mock_rows):  # pyright: ignore[reportAttributeAccessIssue]
                 row = cursor._mock_rows[cursor._mock_index]  # pyright: ignore[reportAttributeAccessIssue]
                 cursor._mock_index += 1  # pyright: ignore[reportAttributeAccessIssue]
-                return tuple(row) if isinstance(row, list) else row
+                return transform_row(row)
             return None
 
         def mock_fetchmany(size=cursor.arraysize):
@@ -1468,11 +1602,14 @@ class PsycopgInstrumentation(InstrumentationBase):
         def mock_fetchall():
             rows = cursor._mock_rows[cursor._mock_index :]  # pyright: ignore[reportAttributeAccessIssue]
             cursor._mock_index = len(cursor._mock_rows)  # pyright: ignore[reportAttributeAccessIssue]
-            return [tuple(row) if isinstance(row, list) else row for row in rows]
+            return [transform_row(row) for row in rows]
 
         cursor.fetchone = mock_fetchone  # pyright: ignore[reportAttributeAccessIssue]
         cursor.fetchmany = mock_fetchmany  # pyright: ignore[reportAttributeAccessIssue]
         cursor.fetchall = mock_fetchall  # pyright: ignore[reportAttributeAccessIssue]
+
+        # Note: __iter__ and __next__ are handled at the class level in InstrumentedCursor
+        # and MockCursor classes, as Python looks up special methods on the type, not instance
 
     def _finalize_query_span(
         self,
@@ -1538,8 +1675,20 @@ class PsycopgInstrumentation(InstrumentationBase):
                         # We need to capture these for replay mode
                         try:
                             all_rows = cursor.fetchall()
-                            # Convert tuples to lists for JSON serialization
-                            rows = [list(row) for row in all_rows]
+                            # Convert rows to lists for JSON serialization
+                            # Handle dict_row (returns dicts) and namedtuple_row (returns namedtuples)
+                            column_names = [d["name"] for d in description]
+                            rows = []
+                            for row in all_rows:
+                                if isinstance(row, dict):
+                                    # dict_row: extract values in column order
+                                    rows.append([row.get(col) for col in column_names])
+                                elif hasattr(row, '_fields'):
+                                    # namedtuple: extract values in column order
+                                    rows.append([getattr(row, col, None) for col in column_names])
+                                else:
+                                    # tuple or list: convert directly
+                                    rows.append(list(row))
 
                             # CRITICAL: Re-populate cursor so user code can still fetch
                             # We'll store the rows and patch fetch methods
