@@ -33,8 +33,9 @@ from .instrumentation.fastapi import FastAPIInstrumentation
 from .instrumentation.flask import FlaskInstrumentation
 from .instrumentation.requests import RequestsInstrumentation
 from .instrumentation.urllib3 import Urllib3Instrumentation
+from .version import SDK_VERSION
 
-__version__ = "0.1.0"
+__version__ = SDK_VERSION
 
 __all__ = [
     # Core
