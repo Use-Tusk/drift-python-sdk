@@ -1291,7 +1291,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8.0" },
     { name = "starlette", marker = "extra == 'fastapi'", specifier = "<0.42.0" },
     { name = "time-machine", specifier = ">=2.10.0" },
-    { name = "tusk-drift-schemas", directory = "../tusk-drift-schemas" },
+    { name = "tusk-drift-schemas", specifier = ">=0.1.24" },
     { name = "ty", marker = "extra == 'dev'", specifier = ">=0.0.1a7" },
     { name = "uvicorn", marker = "extra == 'dev'", specifier = ">=0.34.2" },
     { name = "uvicorn", marker = "extra == 'fastapi'", specifier = ">=0.34.2" },
@@ -1300,14 +1300,15 @@ provides-extras = ["flask", "fastapi", "django", "dev"]
 
 [[package]]
 name = "tusk-drift-schemas"
-version = "0.1.23"
-source = { directory = "../tusk-drift-schemas" }
+version = "0.1.24"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "betterproto", extra = ["compiler"] },
 ]
-
-[package.metadata]
-requires-dist = [{ name = "betterproto", extras = ["compiler"], specifier = ">=2.0.0b7" }]
+sdist = { url = "https://files.pythonhosted.org/packages/a5/7f/c2190752a637d659915bbd90747d7e8402b985b9f8cf2bded5304d3410a4/tusk_drift_schemas-0.1.24.tar.gz", hash = "sha256:0062325661fd696a79754dce3d58dd1e9cae81f51c672197bf8d974a340272a1", size = 13780, upload-time = "2026-01-14T07:03:38.016Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/81/99/c8216ffe305d371f8bd6d80cc36300a5243401c2cfcdbbf63069f343e2c1/tusk_drift_schemas-0.1.24-py3-none-any.whl", hash = "sha256:49fb7adef7f26bf9f5e46a964780753030d334d0f25296d28d0915524124b26e", size = 13682, upload-time = "2026-01-14T07:03:36.688Z" },
+]
 
 [[package]]
 name = "ty"
