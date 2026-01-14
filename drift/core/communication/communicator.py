@@ -23,9 +23,12 @@ from .types import (
     MessageType,
     MockRequestInput,
     MockResponseOutput,
+    Runtime,
     SdkMessage,
     SendAlertRequest,
     SendInboundSpanForReplayRequest,
+    SetTimeTravelRequest,
+    SetTimeTravelResponse,
     UnpatchedDependencyAlert,
     span_to_proto,
 )
@@ -78,6 +81,8 @@ class ProtobufCommunicator:
         self._incoming_buffer = bytearray()
         self._pending_requests: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
+        self._background_reader_thread: threading.Thread | None = None
+        self._stop_background_reader = threading.Event()
 
     @property
     def is_connected(self) -> bool:
@@ -321,6 +326,9 @@ class ProtobufCommunicator:
                     self._connected = True
                     logger.info(f"[CONNECT_SYNC] Connection successful! Socket is: {self._socket}")
                     logger.info(f"[CONNECT_SYNC] _connected={self._connected}, is_connected={self.is_connected}")
+
+                    # Start background reader for CLI-initiated messages (like SetTimeTravel)
+                    self._start_background_reader()
                 else:
                     error_msg = response.error or "Unknown error"
                     raise ConnectionError(f"CLI rejected connection: {error_msg}")
@@ -770,6 +778,12 @@ class ProtobufCommunicator:
         logger.warning("[CLEANUP] _cleanup() called! Stack trace:")
         logger.warning("".join(traceback.format_stack()))
 
+        # Stop background reader thread
+        self._stop_background_reader.set()
+        if self._background_reader_thread and self._background_reader_thread.is_alive():
+            self._background_reader_thread.join(timeout=1.0)
+        self._background_reader_thread = None
+
         self._connected = False
         self._session_id = None
         self._incoming_buffer.clear()
@@ -783,3 +797,116 @@ class ProtobufCommunicator:
             self._socket = None
 
         self._pending_requests.clear()
+
+    # ========== Background Reader for CLI-initiated Messages ==========
+
+    def _start_background_reader(self) -> None:
+        """Start background thread to read CLI-initiated messages."""
+        if self._background_reader_thread and self._background_reader_thread.is_alive():
+            return
+
+        self._stop_background_reader.clear()
+        self._background_reader_thread = threading.Thread(
+            target=self._background_read_loop,
+            daemon=True,
+            name="CLI-Message-Reader",
+        )
+        self._background_reader_thread.start()
+        logger.debug("Started background reader thread for CLI-initiated messages")
+
+    def _background_read_loop(self) -> None:
+        """Background loop to read and handle CLI-initiated messages."""
+        while not self._stop_background_reader.is_set():
+            if not self._socket:
+                break
+
+            try:
+                # Set a short timeout so we can check the stop event periodically
+                self._socket.settimeout(0.5)
+
+                # Try to read length prefix
+                try:
+                    length_data = self._recv_exact(4)
+                except socket.timeout:
+                    continue  # No data available, check stop event and retry
+                except Exception:
+                    continue
+
+                if not length_data:
+                    continue
+
+                length = struct.unpack(">I", length_data)[0]
+
+                # Read message data
+                self._socket.settimeout(5.0)  # Longer timeout for message body
+                message_data = self._recv_exact(length)
+                if not message_data:
+                    continue
+
+                # Parse message
+                cli_message = CliMessage().parse(message_data)
+                logger.debug(f"Background reader received message type: {cli_message.type}")
+
+                # Handle CLI-initiated messages based on message type
+                if cli_message.type == MessageType.SET_TIME_TRAVEL:
+                    self._handle_set_time_travel_sync(cli_message)
+                else:
+                    # Other message types (responses to SDK requests) are handled elsewhere
+                    logger.debug(f"Background reader ignoring message type: {cli_message.type}")
+
+            except socket.timeout:
+                continue  # Normal timeout, just retry
+            except Exception as e:
+                if not self._stop_background_reader.is_set():
+                    logger.debug(f"Background reader error: {e}")
+                break
+
+        logger.debug("Background reader thread stopped")
+
+    def _handle_set_time_travel_sync(self, cli_message: CliMessage) -> None:
+        """Handle SetTimeTravel request from CLI and send response."""
+        request = cli_message.set_time_travel_request
+        if not request:
+            return
+
+        logger.debug(
+            f"Received SetTimeTravel request: timestamp={request.timestamp_seconds}, "
+            f"traceId={request.trace_id}, source={request.timestamp_source}"
+        )
+
+        try:
+            from drift.instrumentation.datetime.instrumentation import start_time_travel
+
+            success = start_time_travel(request.timestamp_seconds, request.trace_id)
+
+            response = SetTimeTravelResponse(
+                success=success,
+                error="" if success else "time-machine library not available or failed to start",
+            )
+        except Exception as e:
+            logger.error(f"Failed to set time travel: {e}")
+            response = SetTimeTravelResponse(success=False, error=str(e))
+
+        # Send response back to CLI
+        sdk_message = SdkMessage(
+            type=MessageType.SET_TIME_TRAVEL,
+            request_id=cli_message.request_id,
+            set_time_travel_response=response,
+        )
+
+        try:
+            self._send_message_sync(sdk_message)
+            logger.debug(f"Sent SetTimeTravel response: success={response.success}")
+        except Exception as e:
+            logger.error(f"Failed to send SetTimeTravel response: {e}")
+
+    def _send_message_sync(self, message: SdkMessage) -> None:
+        """Send a message synchronously on the main socket."""
+        if not self._socket:
+            raise ConnectionError("Not connected to CLI")
+
+        message_bytes = bytes(message)
+        length_prefix = struct.pack(">I", len(message_bytes))
+
+        with self._lock:
+            self._socket.sendall(length_prefix + message_bytes)
