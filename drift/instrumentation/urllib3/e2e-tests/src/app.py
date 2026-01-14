@@ -223,19 +223,23 @@ def poolmanager_chain():
 @app.route("/api/connectionpool/get-json", methods=["GET"])
 def connectionpool_get_json():
     """Test GET request using HTTPConnectionPool directly."""
+    pool = None
     try:
         pool = urllib3.HTTPSConnectionPool("jsonplaceholder.typicode.com", port=443)
         response = pool.request("GET", "/posts/2")
         data = json.loads(response.data.decode("utf-8"))
-        pool.close()
         return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        if pool is not None:
+            pool.close()
 
 
 @app.route("/api/connectionpool/post-json", methods=["POST"])
 def connectionpool_post_json():
     """Test POST request using HTTPConnectionPool directly."""
+    pool = None
     try:
         req_data = request.get_json() or {}
         body = json.dumps(
@@ -253,10 +257,12 @@ def connectionpool_post_json():
             headers={"Content-Type": "application/json"},
         )
         data = json.loads(response.data.decode("utf-8"))
-        pool.close()
         return jsonify(data), 201
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        if pool is not None:
+            pool.close()
 
 
 # =============================================================================
