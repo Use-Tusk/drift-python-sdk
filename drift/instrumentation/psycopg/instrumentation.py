@@ -857,6 +857,8 @@ class PsycopgInstrumentation(InstrumentationBase):
             cursor.fetchall = cursor._tusk_original_fetchall
             cursor._tusk_rows = None
             cursor._tusk_index = 0
+        if hasattr(cursor, '_tusk_original_scroll'):
+            cursor.scroll = cursor._tusk_original_scroll
 
         span_info = SpanUtils.create_span(
             CreateSpanOptions(
@@ -2090,16 +2092,36 @@ class PsycopgInstrumentation(InstrumentationBase):
                                 cursor._tusk_index = len(cursor._tusk_rows)  # pyright: ignore[reportAttributeAccessIssue]
                                 return result
 
+                            def patched_scroll(value: int, mode: str = "relative") -> None:
+                                """Scroll the cursor to a new position in the captured result set."""
+                                if mode == "relative":
+                                    newpos = cursor._tusk_index + value  # pyright: ignore[reportAttributeAccessIssue]
+                                elif mode == "absolute":
+                                    newpos = value
+                                else:
+                                    raise ValueError(f"bad mode: {mode}. It should be 'relative' or 'absolute'")
+
+                                num_rows = len(cursor._tusk_rows)  # pyright: ignore[reportAttributeAccessIssue]
+                                if num_rows > 0:
+                                    if not (0 <= newpos < num_rows):
+                                        raise IndexError("cursor position out of range")
+                                elif newpos != 0:
+                                    raise IndexError("cursor position out of range")
+
+                                cursor._tusk_index = newpos  # pyright: ignore[reportAttributeAccessIssue]
+
                             # Save original fetch methods before patching (only if not already saved)
                             # These will be restored at the start of the next execute() call
                             if not hasattr(cursor, '_tusk_original_fetchone'):
                                 cursor._tusk_original_fetchone = cursor.fetchone  # pyright: ignore[reportAttributeAccessIssue]
                                 cursor._tusk_original_fetchmany = cursor.fetchmany  # pyright: ignore[reportAttributeAccessIssue]
                                 cursor._tusk_original_fetchall = cursor.fetchall  # pyright: ignore[reportAttributeAccessIssue]
+                                cursor._tusk_original_scroll = cursor.scroll  # pyright: ignore[reportAttributeAccessIssue]
 
                             cursor.fetchone = patched_fetchone  # pyright: ignore[reportAttributeAccessIssue]
                             cursor.fetchmany = patched_fetchmany  # pyright: ignore[reportAttributeAccessIssue]
                             cursor.fetchall = patched_fetchall  # pyright: ignore[reportAttributeAccessIssue]
+                            cursor.scroll = patched_scroll  # pyright: ignore[reportAttributeAccessIssue]
 
                         except Exception as fetch_error:
                             logger.debug(f"Could not fetch rows (query might not return rows): {fetch_error}")

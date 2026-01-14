@@ -414,58 +414,11 @@ def test_statusmessage():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
-
-# ============================================================================
-# CONFIRMED BUG TEST ENDPOINTS
-# These endpoints expose confirmed bugs in the psycopg instrumentation.
-# See BUG_TRACKING.md for detailed documentation of each bug.
-#
-# Bug Summary:
-# 1. /test/cursor-scroll - scroll() broken during RECORD mode
-# 4. /test/nextset - nextset() iteration broken during RECORD mode
-# 5. /test/server-cursor-scroll - scroll() broken during RECORD mode
-# ============================================================================
-
-@app.route("/test/cursor-scroll")
-def test_cursor_scroll():
-    """Test cursor.scroll() method.
-
-    BUG: During RECORD mode, the instrumentation's _finalize_query_span calls
-    fetchall() which breaks the cursor position tracking. After fetchall(),
-    scroll(0, absolute) doesn't properly reset the cursor position because
-    the patched fetch methods use _tusk_index instead of _pos.
-    """
-    try:
-        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
-            cur.execute("SELECT id, name FROM users ORDER BY id")
-
-            # Fetch first row
-            first = cur.fetchone()
-
-            # Scroll back to start
-            cur.scroll(0, mode='absolute')
-
-            # Fetch first row again
-            first_again = cur.fetchone()
-
-        return jsonify({
-            "first": {"id": first[0], "name": first[1]} if first else None,
-            "first_again": {"id": first_again[0], "name": first_again[1]} if first_again else None,
-            "match": first == first_again
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 @app.route("/test/nextset")
 def test_nextset():
     """Test cursor.nextset() for multiple result sets.
 
-    BUG: During RECORD mode, the interaction between executemany with
-    returning=True and the fetch method patching breaks nextset() iteration.
-    The instrumentation's fetch patching may consume results before nextset()
-    can iterate through them, causing 0 results in RECORD but correct
-    results in REPLAY.
+    Tests whether the instrumentation correctly handles nextset() for multiple result sets.
     """
     try:
         with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
@@ -497,16 +450,38 @@ def test_nextset():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/test/cursor-scroll")
+def test_cursor_scroll():
+    """Test cursor.scroll() method.
+
+    Tests whether the instrumentation correctly handles scroll() for cursor position tracking.
+    """
+    try:
+        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
+            cur.execute("SELECT id, name FROM users ORDER BY id")
+
+            # Fetch first row
+            first = cur.fetchone()
+
+            # Scroll back to start
+            cur.scroll(0, mode='absolute')
+
+            # Fetch first row again
+            first_again = cur.fetchone()
+
+        return jsonify({
+            "first": {"id": first[0], "name": first[1]} if first else None,
+            "first_again": {"id": first_again[0], "name": first_again[1]} if first_again else None,
+            "match": first == first_again
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/test/server-cursor-scroll")
 def test_server_cursor_scroll():
     """Test ServerCursor.scroll() method.
 
-    BUG: Same root cause as /test/cursor-scroll. During RECORD mode,
-    the instrumentation breaks scroll() functionality by consuming all
-    rows via fetchall() in _finalize_query_span. ServerCursor.scroll()
-    sends MOVE commands to the server, but the position tracking is
-    inconsistent after the instrumentation patches the fetch methods.
+    Tests whether the instrumentation correctly handles scroll() for server-side cursors.
     """
     try:
         with psycopg.connect(get_conn_string()) as conn:
