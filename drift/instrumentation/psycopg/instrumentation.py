@@ -266,6 +266,24 @@ class MockCursor:
             return tuple(row) if isinstance(row, list) else row
         raise StopIteration
 
+    def scroll(self, value: int, mode: str = "relative") -> None:
+        """Scroll the cursor to a new position in the result set."""
+        if mode == "relative":
+            newpos = self._mock_index + value
+        elif mode == "absolute":
+            newpos = value
+        else:
+            raise ValueError(f"bad mode: {mode}. It should be 'relative' or 'absolute'")
+
+        num_rows = len(self._mock_rows)
+        if num_rows > 0:
+            if not (0 <= newpos < num_rows):
+                raise IndexError("position out of bound")
+        elif newpos != 0:
+            raise IndexError("position out of bound")
+
+        self._mock_index = newpos
+
     def close(self):
         pass
 
@@ -1656,6 +1674,26 @@ class PsycopgInstrumentation(InstrumentationBase):
         cursor.fetchone = mock_fetchone  # pyright: ignore[reportAttributeAccessIssue]
         cursor.fetchmany = mock_fetchmany  # pyright: ignore[reportAttributeAccessIssue]
         cursor.fetchall = mock_fetchall  # pyright: ignore[reportAttributeAccessIssue]
+
+        def mock_scroll(value: int, mode: str = "relative") -> None:
+            """Scroll the cursor to a new position in the mock result set."""
+            if mode == "relative":
+                newpos = cursor._mock_index + value  # pyright: ignore[reportAttributeAccessIssue]
+            elif mode == "absolute":
+                newpos = value
+            else:
+                raise ValueError(f"bad mode: {mode}. It should be 'relative' or 'absolute'")
+
+            num_rows = len(cursor._mock_rows)  # pyright: ignore[reportAttributeAccessIssue]
+            if num_rows > 0:
+                if not (0 <= newpos < num_rows):
+                    raise IndexError("position out of bound")
+            elif newpos != 0:
+                raise IndexError("position out of bound")
+
+            cursor._mock_index = newpos  # pyright: ignore[reportAttributeAccessIssue]
+
+        cursor.scroll = mock_scroll  # pyright: ignore[reportAttributeAccessIssue]
 
         # Note: __iter__ and __next__ are handled at the class level in InstrumentedCursor
         # and MockCursor classes, as Python looks up special methods on the type, not instance
