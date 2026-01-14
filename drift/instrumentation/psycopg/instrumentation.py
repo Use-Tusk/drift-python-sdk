@@ -1914,6 +1914,80 @@ class PsycopgInstrumentation(InstrumentationBase):
                     except AttributeError:
                         pass
 
+            # Set up initial fetch methods for the first result set (for code that uses nextset() instead of results())
+            first_column_names = first_set.get("column_names")
+            FirstRowClass = create_row_class(first_column_names)
+
+            def make_fetchone_replay(cn, RC):
+                def fetchone():
+                    if cursor._mock_index < len(cursor._mock_rows):  # pyright: ignore[reportAttributeAccessIssue]
+                        row = cursor._mock_rows[cursor._mock_index]  # pyright: ignore[reportAttributeAccessIssue]
+                        cursor._mock_index += 1  # pyright: ignore[reportAttributeAccessIssue]
+                        return transform_row(row, cn, RC)
+                    return None
+                return fetchone
+
+            def make_fetchmany_replay(cn, RC):
+                def fetchmany(size=cursor.arraysize):
+                    rows = []
+                    for _ in range(size):
+                        if cursor._mock_index < len(cursor._mock_rows):  # pyright: ignore[reportAttributeAccessIssue]
+                            row = cursor._mock_rows[cursor._mock_index]  # pyright: ignore[reportAttributeAccessIssue]
+                            cursor._mock_index += 1  # pyright: ignore[reportAttributeAccessIssue]
+                            rows.append(transform_row(row, cn, RC))
+                        else:
+                            break
+                    return rows
+                return fetchmany
+
+            def make_fetchall_replay(cn, RC):
+                def fetchall():
+                    rows = cursor._mock_rows[cursor._mock_index:]  # pyright: ignore[reportAttributeAccessIssue]
+                    cursor._mock_index = len(cursor._mock_rows)  # pyright: ignore[reportAttributeAccessIssue]
+                    return [transform_row(row, cn, RC) for row in rows]
+                return fetchall
+
+            cursor.fetchone = make_fetchone_replay(first_column_names, FirstRowClass)  # pyright: ignore[reportAttributeAccessIssue]
+            cursor.fetchmany = make_fetchmany_replay(first_column_names, FirstRowClass)  # pyright: ignore[reportAttributeAccessIssue]
+            cursor.fetchall = make_fetchall_replay(first_column_names, FirstRowClass)  # pyright: ignore[reportAttributeAccessIssue]
+
+            # Patch nextset() to work with _mock_result_sets
+            def patched_nextset():
+                """Move to the next result set in _mock_result_sets."""
+                next_index = cursor._mock_result_set_index + 1  # pyright: ignore[reportAttributeAccessIssue]
+                if next_index < len(cursor._mock_result_sets):  # pyright: ignore[reportAttributeAccessIssue]
+                    cursor._mock_result_set_index = next_index  # pyright: ignore[reportAttributeAccessIssue]
+                    next_set = cursor._mock_result_sets[next_index]  # pyright: ignore[reportAttributeAccessIssue]
+                    cursor._mock_rows = next_set["rows"]  # pyright: ignore[reportAttributeAccessIssue]
+                    cursor._mock_index = 0  # pyright: ignore[reportAttributeAccessIssue]
+
+                    # Update fetch methods for the new result set
+                    next_column_names = next_set.get("column_names")
+                    NextRowClass = create_row_class(next_column_names)
+                    cursor.fetchone = make_fetchone_replay(next_column_names, NextRowClass)  # pyright: ignore[reportAttributeAccessIssue]
+                    cursor.fetchmany = make_fetchmany_replay(next_column_names, NextRowClass)  # pyright: ignore[reportAttributeAccessIssue]
+                    cursor.fetchall = make_fetchall_replay(next_column_names, NextRowClass)  # pyright: ignore[reportAttributeAccessIssue]
+
+                    # Update description for next result set
+                    next_description_data = next_set.get("description")
+                    if next_description_data:
+                        next_desc = [
+                            (col["name"], col.get("type_code"), None, None, None, None, None)
+                            for col in next_description_data
+                        ]
+                        try:
+                            cursor._tusk_description = next_desc  # pyright: ignore[reportAttributeAccessIssue]
+                        except AttributeError:
+                            try:
+                                cursor.description = next_desc  # pyright: ignore[reportAttributeAccessIssue]
+                            except AttributeError:
+                                pass
+
+                    return True
+                return None
+
+            cursor.nextset = patched_nextset  # pyright: ignore[reportAttributeAccessIssue]
+
     def _finalize_query_span(
         self,
         span: trace.Span,
@@ -2215,6 +2289,58 @@ class PsycopgInstrumentation(InstrumentationBase):
                             yield cursor
 
                     cursor.results = patched_results  # pyright: ignore[reportAttributeAccessIssue]
+
+                    # Set up the first result set immediately for user code that uses nextset() instead of results()
+                    if all_rows_collected:
+                        cursor._tusk_rows = all_rows_collected[0]  # pyright: ignore[reportAttributeAccessIssue]
+                        cursor._tusk_index = 0  # pyright: ignore[reportAttributeAccessIssue]
+                        cursor._tusk_result_set_index = 0  # pyright: ignore[reportAttributeAccessIssue]
+
+                        # Create initial fetch methods for the first result set
+                        def make_patched_fetchone_record():
+                            def patched_fetchone():
+                                if cursor._tusk_index < len(cursor._tusk_rows):  # pyright: ignore[reportAttributeAccessIssue]
+                                    row = cursor._tusk_rows[cursor._tusk_index]  # pyright: ignore[reportAttributeAccessIssue]
+                                    cursor._tusk_index += 1  # pyright: ignore[reportAttributeAccessIssue]
+                                    return row
+                                return None
+                            return patched_fetchone
+
+                        def make_patched_fetchmany_record():
+                            def patched_fetchmany(size=cursor.arraysize):
+                                result = cursor._tusk_rows[cursor._tusk_index : cursor._tusk_index + size]  # pyright: ignore[reportAttributeAccessIssue]
+                                cursor._tusk_index += len(result)  # pyright: ignore[reportAttributeAccessIssue]
+                                return result
+                            return patched_fetchmany
+
+                        def make_patched_fetchall_record():
+                            def patched_fetchall():
+                                result = cursor._tusk_rows[cursor._tusk_index :]  # pyright: ignore[reportAttributeAccessIssue]
+                                cursor._tusk_index = len(cursor._tusk_rows)  # pyright: ignore[reportAttributeAccessIssue]
+                                return result
+                            return patched_fetchall
+
+                        cursor.fetchone = make_patched_fetchone_record()  # pyright: ignore[reportAttributeAccessIssue]
+                        cursor.fetchmany = make_patched_fetchmany_record()  # pyright: ignore[reportAttributeAccessIssue]
+                        cursor.fetchall = make_patched_fetchall_record()  # pyright: ignore[reportAttributeAccessIssue]
+
+                    # Patch nextset() to work with _tusk_result_sets
+                    def patched_nextset():
+                        """Move to the next result set in _tusk_result_sets."""
+                        next_index = cursor._tusk_result_set_index + 1  # pyright: ignore[reportAttributeAccessIssue]
+                        if next_index < len(cursor._tusk_result_sets):  # pyright: ignore[reportAttributeAccessIssue]
+                            cursor._tusk_result_set_index = next_index  # pyright: ignore[reportAttributeAccessIssue]
+                            cursor._tusk_rows = cursor._tusk_result_sets[next_index]  # pyright: ignore[reportAttributeAccessIssue]
+                            cursor._tusk_index = 0  # pyright: ignore[reportAttributeAccessIssue]
+
+                            # Update fetch methods for the new result set
+                            cursor.fetchone = make_patched_fetchone_record()  # pyright: ignore[reportAttributeAccessIssue]
+                            cursor.fetchmany = make_patched_fetchmany_record()  # pyright: ignore[reportAttributeAccessIssue]
+                            cursor.fetchall = make_patched_fetchall_record()  # pyright: ignore[reportAttributeAccessIssue]
+                            return True
+                        return None
+
+                    cursor.nextset = patched_nextset  # pyright: ignore[reportAttributeAccessIssue]
 
                 else:
                     output_value = {"rowcount": cursor.rowcount if hasattr(cursor, "rowcount") else -1}
