@@ -55,6 +55,7 @@ async def retry_async[T](
     operation: Callable[[], Awaitable[T]],
     config: RetryConfig | None = None,
     retryable_exceptions: tuple[type[Exception], ...] = (Exception,),
+    non_retryable_exceptions: tuple[type[Exception], ...] = (),
     operation_name: str = "operation",
 ) -> T:
     """Execute an async operation with retry and exponential backoff.
@@ -63,13 +64,14 @@ async def retry_async[T](
         operation: Async callable to execute
         config: Retry configuration (uses defaults if None)
         retryable_exceptions: Tuple of exception types that trigger retry
+        non_retryable_exceptions: Tuple of exception types that should fail immediately
         operation_name: Name for logging purposes
 
     Returns:
         Result of the operation
 
     Raises:
-        The last exception if all retries are exhausted
+        The last exception if all retries are exhausted, or immediately for non-retryable
     """
     config = config or RetryConfig()
     last_exception: Exception | None = None
@@ -77,6 +79,9 @@ async def retry_async[T](
     for attempt in range(1, config.max_attempts + 1):
         try:
             return await operation()
+        except non_retryable_exceptions:
+            # Don't retry these - re-raise immediately
+            raise
         except retryable_exceptions as e:
             last_exception = e
 

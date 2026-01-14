@@ -119,23 +119,25 @@ class BatchSpanProcessor:
         Returns:
             True if span was added, False if queue is full or trace is blocked
         """
-        # Check if span should be blocked (size limit or server error)
-        # Blocks entire trace
         from .trace_blocking_manager import TraceBlockingManager, should_block_span
 
-        if should_block_span(span):
-            self._dropped_spans += 1
-            self._metrics.record_spans_dropped()
-            return False
-
-        # Check if trace is already blocked
-        if TraceBlockingManager.get_instance().is_trace_blocked(span.trace_id):
-            logger.debug(f"Skipping span '{span.name}' - trace {span.trace_id} is blocked")
-            self._dropped_spans += 1
-            self._metrics.record_spans_dropped()
-            return False
+        # Check blocking conditions outside lock (read-only checks)
+        is_blocked = should_block_span(span)
+        is_trace_blocked = TraceBlockingManager.get_instance().is_trace_blocked(span.trace_id)
 
         with self._condition:
+            # Handle blocked spans (increment counter under lock)
+            if is_blocked:
+                self._dropped_spans += 1
+                self._metrics.record_spans_dropped()
+                return False
+
+            if is_trace_blocked:
+                logger.debug(f"Skipping span '{span.name}' - trace {span.trace_id} is blocked")
+                self._dropped_spans += 1
+                self._metrics.record_spans_dropped()
+                return False
+
             if len(self._queue) >= self._config.max_queue_size:
                 self._dropped_spans += 1
                 self._metrics.record_spans_dropped()

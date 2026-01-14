@@ -282,6 +282,11 @@ class MetricsCollector:
             self._queue_peak_size = 0
             self._start_time = time.monotonic()
 
+            self._warned_high_drop_rate = False
+            self._warned_high_failure_rate = False
+            self._warned_queue_capacity = False
+            self._warned_circuit_open = False
+
 
 # Global metrics collector instance
 _metrics_collector: MetricsCollector | None = None
