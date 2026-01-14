@@ -26,6 +26,13 @@ from ...resilience import (
 )
 from .base import ExportResult, SpanExportAdapter
 
+
+class NonRetryableError(Exception):
+    """Error that should not be retried (e.g., 4xx client errors)."""
+
+    pass
+
+
 if TYPE_CHECKING:
     from betterproto.lib.google.protobuf import Struct
 
@@ -162,11 +169,12 @@ class ApiSpanAdapter(SpanExportAdapter):
             async def do_export() -> ExportResult:
                 return await self._do_export(spans)
 
-            # Execute with retry
+            # Execute with retry (NonRetryableError bypasses retry)
             result = await retry_async(
                 do_export,
                 config=self._retry_config,
-                retryable_exceptions=(Exception,),  # Retry all exceptions
+                retryable_exceptions=(Exception,),
+                non_retryable_exceptions=(NonRetryableError,),
                 operation_name="span_export",
             )
 
@@ -231,9 +239,9 @@ class ApiSpanAdapter(SpanExportAdapter):
                 error_text = await http_response.text()
                 raise Exception(f"Server error (status {http_response.status}): {error_text}")
             elif http_response.status != 200:
-                # Client errors (4xx) are not retryable
+                # Client errors (4xx) are not retryable - fail immediately
                 error_text = await http_response.text()
-                raise Exception(f"API request failed (status {http_response.status}): {error_text}")
+                raise NonRetryableError(f"Client error (status {http_response.status}): {error_text}")
 
             response_bytes = await http_response.read()
             response = ExportSpansResponse().parse(response_bytes)
