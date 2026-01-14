@@ -418,17 +418,16 @@ class PsycopgInstrumentation(InstrumentationBase):
     ) -> Any:
         """Handle RECORD mode for execute - create span and execute query."""
         # Reset cursor state from any previous execute() on this cursor.
-        # This ensures fetch methods work correctly for multiple queries on the same cursor.
-        # We must restore original fetch methods so _finalize_query_span can call the real
-        # psycopg fetchall() method, not our patched version from a previous query.
-        if hasattr(cursor, '_tusk_original_fetchone'):
-            cursor.fetchone = cursor._tusk_original_fetchone
-            cursor.fetchmany = cursor._tusk_original_fetchmany
-            cursor.fetchall = cursor._tusk_original_fetchall
+        # Delete instance attribute overrides to expose original class methods.
+        # This is safer than saving/restoring bound methods which can become stale.
+        if hasattr(cursor, '_tusk_patched'):
+            # Remove patched instance attributes to expose class methods
+            for attr in ('fetchone', 'fetchmany', 'fetchall', 'scroll'):
+                if attr in cursor.__dict__:
+                    delattr(cursor, attr)
             cursor._tusk_rows = None
             cursor._tusk_index = 0
-        if hasattr(cursor, '_tusk_original_scroll'):
-            cursor.scroll = cursor._tusk_original_scroll
+            del cursor._tusk_patched
 
         span_info = SpanUtils.create_span(
             CreateSpanOptions(
@@ -1635,18 +1634,12 @@ class PsycopgInstrumentation(InstrumentationBase):
 
                                 cursor._tusk_index = newpos  # pyright: ignore[reportAttributeAccessIssue]
 
-                            # Save original fetch methods before patching (only if not already saved)
-                            # These will be restored at the start of the next execute() call
-                            if not hasattr(cursor, '_tusk_original_fetchone'):
-                                cursor._tusk_original_fetchone = cursor.fetchone  # pyright: ignore[reportAttributeAccessIssue]
-                                cursor._tusk_original_fetchmany = cursor.fetchmany  # pyright: ignore[reportAttributeAccessIssue]
-                                cursor._tusk_original_fetchall = cursor.fetchall  # pyright: ignore[reportAttributeAccessIssue]
-                                cursor._tusk_original_scroll = cursor.scroll  # pyright: ignore[reportAttributeAccessIssue]
-
+                            # Patch fetch methods with our versions that return stored rows
                             cursor.fetchone = patched_fetchone  # pyright: ignore[reportAttributeAccessIssue]
                             cursor.fetchmany = patched_fetchmany  # pyright: ignore[reportAttributeAccessIssue]
                             cursor.fetchall = patched_fetchall  # pyright: ignore[reportAttributeAccessIssue]
                             cursor.scroll = patched_scroll  # pyright: ignore[reportAttributeAccessIssue]
+                            cursor._tusk_patched = True  # pyright: ignore[reportAttributeAccessIssue]
 
                         except Exception as fetch_error:
                             logger.debug(f"Could not fetch rows (query might not return rows): {fetch_error}")

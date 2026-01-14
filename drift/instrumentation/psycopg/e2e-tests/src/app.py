@@ -506,6 +506,133 @@ def test_server_cursor_scroll():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/test/cursor-reuse")
+def test_cursor_reuse():
+    """Test reusing cursor for multiple queries.
+
+    Tests whether the instrumentation correctly handles reusing a cursor for multiple execute() calls.
+    """
+    try:
+        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
+            # First query
+            cur.execute("SELECT id, name FROM users WHERE id = 1")
+            row1 = cur.fetchone()
+
+            # Second query on same cursor
+            cur.execute("SELECT id, name FROM users WHERE id = 2")
+            row2 = cur.fetchone()
+
+            # Third query
+            cur.execute("SELECT COUNT(*) FROM users")
+            count = cur.fetchone()[0]
+
+        return jsonify({
+            "row1": {"id": row1[0], "name": row1[1]} if row1 else None,
+            "row2": {"id": row2[0], "name": row2[1]} if row2 else None,
+            "count": count
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/test/sql-composed")
+def test_sql_composed():
+    """Test psycopg.sql.SQL() composed queries."""
+    try:
+        from psycopg import sql
+
+        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
+            table = sql.Identifier("users")
+            columns = sql.SQL(", ").join([
+                sql.Identifier("id"),
+                sql.Identifier("name"),
+                sql.Identifier("email")
+            ])
+
+            query = sql.SQL("SELECT {} FROM {} ORDER BY id LIMIT 3").format(columns, table)
+            cur.execute(query)
+            rows = cur.fetchall()
+
+        return jsonify({
+            "count": len(rows),
+            "data": [{"id": r[0], "name": r[1], "email": r[2]} for r in rows]
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
+
+# ===== BUG HUNTING TEST ENDPOINTS =====
+# These endpoints expose confirmed bugs in the psycopg instrumentation
+# Endpoints that passed tests have been removed
+
+@app.route("/test/binary-uuid")
+def test_binary_uuid():
+    """Test binary UUID data type.
+
+    BUG HYPOTHESIS: UUID types may not serialize/deserialize correctly
+    during RECORD/REPLAY because they are binary.
+    """
+    try:
+        import uuid
+
+        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
+            # Create a temp table with UUID column
+            cur.execute("CREATE TEMP TABLE uuid_test (id UUID PRIMARY KEY, name TEXT)")
+
+            # Insert a UUID
+            test_uuid = uuid.uuid4()
+            cur.execute(
+                "INSERT INTO uuid_test (id, name) VALUES (%s, %s) RETURNING id, name",
+                (test_uuid, "UUID Test")
+            )
+            inserted = cur.fetchone()
+
+            # Query it back
+            cur.execute("SELECT id, name FROM uuid_test WHERE id = %s", (test_uuid,))
+            queried = cur.fetchone()
+
+            conn.commit()
+
+        return jsonify({
+            "inserted_uuid": str(inserted[0]) if inserted else None,
+            "queried_uuid": str(queried[0]) if queried else None,
+            "match": str(inserted[0]) == str(queried[0]) if inserted and queried else False
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/binary-bytea")
+def test_binary_bytea():
+    """Test binary bytea data type.
+
+    BUG HYPOTHESIS: Binary data (bytea) may not serialize/deserialize
+    correctly during RECORD/REPLAY.
+    """
+    try:
+        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
+            # Create a temp table with bytea column
+            cur.execute("CREATE TEMP TABLE bytea_test (id SERIAL, data BYTEA)")
+
+            # Insert binary data
+            test_data = b'\x00\x01\x02\x03\xff\xfe\xfd'
+            cur.execute(
+                "INSERT INTO bytea_test (data) VALUES (%s) RETURNING id, data",
+                (test_data,)
+            )
+            inserted = cur.fetchone()
+
+            conn.commit()
+
+        # Convert bytes to hex for JSON serialization
+        return jsonify({
+            "inserted_id": inserted[0] if inserted else None,
+            "data_hex": inserted[1].hex() if inserted and inserted[1] else None,
+            "data_length": len(inserted[1]) if inserted and inserted[1] else 0
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     sdk.mark_app_as_ready()
