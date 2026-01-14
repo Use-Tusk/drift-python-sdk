@@ -402,6 +402,16 @@ class TuskDrift:
         except ImportError:
             pass
 
+        try:
+            import urllib3  # type: ignore[unresolved-import]
+
+            from ..instrumentation.urllib3 import Urllib3Instrumentation
+
+            _ = Urllib3Instrumentation()
+            logger.debug("urllib3 instrumentation initialized")
+        except ImportError:
+            pass
+
         # Initialize PostgreSQL instrumentation before Django
         # Instrument BOTH psycopg2 and psycopg if available
         # This allows apps to use either or both

@@ -32,6 +32,7 @@ from .core.tracing.adapters import (
 from .instrumentation.fastapi import FastAPIInstrumentation
 from .instrumentation.flask import FlaskInstrumentation
 from .instrumentation.requests import RequestsInstrumentation
+from .instrumentation.urllib3 import Urllib3Instrumentation
 
 __version__ = "0.1.0"
 
@@ -61,6 +62,7 @@ __all__ = [
     "FlaskInstrumentation",
     "FastAPIInstrumentation",
     "RequestsInstrumentation",
+    "Urllib3Instrumentation",
     # Adapters
     "SpanExportAdapter",
     "ExportResult",
