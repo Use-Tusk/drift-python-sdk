@@ -30,6 +30,7 @@ from ...core.types import (
 )
 from ..base import InstrumentationBase
 from ..utils.psycopg_utils import deserialize_db_value
+from ..utils.serialization import serialize_value
 
 logger = logging.getLogger(__name__)
 
@@ -814,21 +815,6 @@ class Psycopg2Instrumentation(InstrumentationBase):
     ) -> None:
         """Finalize span with query data."""
         try:
-            # Helper function to serialize non-JSON types
-            import datetime
-
-            def serialize_value(val):
-                """Convert non-JSON-serializable values to JSON-compatible types."""
-                if isinstance(val, (datetime.datetime, datetime.date, datetime.time)):
-                    return val.isoformat()
-                elif isinstance(val, bytes):
-                    return val.decode("utf-8", errors="replace")
-                elif isinstance(val, (list, tuple)):
-                    return [serialize_value(v) for v in val]
-                elif isinstance(val, dict):
-                    return {k: serialize_value(v) for k, v in val.items()}
-                return val
-
             # Build input value
             query_str = _query_to_str(query)
             input_value = {
