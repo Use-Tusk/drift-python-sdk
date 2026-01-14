@@ -354,12 +354,6 @@ class TuskDrift:
             self._is_connected_with_cli = False
             # Don't raise - allow Django to start even if CLI isn't ready yet
 
-        logger.info(f"[INIT_COMPLETE] SDK initialization finished. Connected to CLI: {self._is_connected_with_cli}")
-        if self.communicator and self.communicator.is_connected:
-            logger.info("[INIT_COMPLETE] Communicator reports connected: True")
-        else:
-            logger.info("[INIT_COMPLETE] Communicator reports connected: False")
-
     def _init_auto_instrumentations(self) -> None:
         """Initialize instrumentations."""
         try:
@@ -645,10 +639,6 @@ class TuskDrift:
             logger.error("Requesting sync mock but CLI is not ready yet")
             return MockResponseOutput(found=False, error="CLI not connected yet")
 
-        if not self._is_connected_with_cli:
-            logger.error("Requesting sync mock but CLI is not ready yet")
-            raise RuntimeError("Requesting sync mock but CLI is not ready yet")
-
         try:
             logger.debug(f"Sending protobuf request to CLI (sync) {mock_request.test_id}")
             response = self.communicator.request_mock_sync(mock_request)
@@ -685,8 +675,8 @@ class TuskDrift:
             await self.communicator.send_instrumentation_version_mismatch_alert(
                 module_name, requested_version, supported_versions
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to send version mismatch alert: {e}")
 
     async def send_unpatched_dependency_alert(
         self,
@@ -699,8 +689,8 @@ class TuskDrift:
 
         try:
             await self.communicator.send_unpatched_dependency_alert(stack_trace, trace_test_server_span_id)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to send unpatched dependency alert: {e}")
 
     def get_sampling_rate(self) -> float:
         """Get the current sampling rate."""

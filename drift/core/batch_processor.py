@@ -57,6 +57,7 @@ class BatchSpanProcessor:
         self._config = config or BatchSpanProcessorConfig()
         self._queue: deque[CleanSpanData] = deque(maxlen=self._config.max_queue_size)
         self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
         self._shutdown_event = threading.Event()
         self._export_thread: threading.Thread | None = None
         self._started = False
@@ -88,6 +89,9 @@ class BatchSpanProcessor:
             return
 
         self._shutdown_event.set()
+        # Wake up the export thread so it can see the shutdown event
+        with self._condition:
+            self._condition.notify_all()
 
         if self._export_thread is not None:
             self._export_thread.join(timeout=timeout or self._config.export_timeout_seconds)
@@ -108,7 +112,7 @@ class BatchSpanProcessor:
         Returns:
             True if span was added, False if queue is full and span was dropped
         """
-        with self._lock:
+        with self._condition:
             if len(self._queue) >= self._config.max_queue_size:
                 self._dropped_spans += 1
                 logger.warning(
@@ -121,16 +125,17 @@ class BatchSpanProcessor:
 
             # Trigger immediate export if batch size reached
             if len(self._queue) >= self._config.max_export_batch_size:
-                # Signal export thread to wake up (if using condition variable)
-                pass
+                self._condition.notify()
 
             return True
 
     def _export_loop(self) -> None:
         """Background thread that periodically exports spans."""
         while not self._shutdown_event.is_set():
-            # Wait for scheduled delay or shutdown
-            self._shutdown_event.wait(timeout=self._config.scheduled_delay_seconds)
+            # Wait for either: batch size reached, scheduled delay, or shutdown
+            with self._condition:
+                # Wait until batch is ready or timeout
+                self._condition.wait(timeout=self._config.scheduled_delay_seconds)
 
             if self._shutdown_event.is_set():
                 break
@@ -141,7 +146,7 @@ class BatchSpanProcessor:
         """Export a batch of spans from the queue."""
         # Get batch of spans
         batch: list[CleanSpanData] = []
-        with self._lock:
+        with self._condition:
             while self._queue and len(batch) < self._config.max_export_batch_size:
                 batch.append(self._queue.popleft())
 
@@ -171,7 +176,7 @@ class BatchSpanProcessor:
     def _force_flush(self) -> None:
         """Force export all remaining spans in the queue."""
         while True:
-            with self._lock:
+            with self._condition:
                 if not self._queue:
                     break
 
@@ -180,7 +185,7 @@ class BatchSpanProcessor:
     @property
     def queue_size(self) -> int:
         """Get the current queue size."""
-        with self._lock:
+        with self._condition:
             return len(self._queue)
 
     @property

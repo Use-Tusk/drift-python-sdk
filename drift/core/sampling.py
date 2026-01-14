@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import random
+
+logger = logging.getLogger(__name__)
 
 
 def should_sample(sampling_rate: float, is_app_ready: bool) -> bool:
@@ -40,12 +43,8 @@ def validate_sampling_rate(rate: float | None, source: str = "config") -> float 
     if rate is None:
         return None
 
-    if not isinstance(rate, (int, float)):
-        print(f"Warning: Invalid sampling rate from {source}: not a number. Ignoring.")
-        return None
-
     if rate < 0.0 or rate > 1.0:
-        print(f"Warning: Invalid sampling rate from {source}: {rate}. Must be between 0.0 and 1.0. Ignoring.")
+        logger.warning(f"Invalid sampling rate from {source}: {rate}. Must be between 0.0 and 1.0. Ignoring.")
         return None
 
     return float(rate)

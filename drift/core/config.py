@@ -135,8 +135,17 @@ def _parse_service_config(data: dict[str, Any]) -> ServiceConfig:
 
 def _parse_recording_config(data: dict[str, Any]) -> RecordingConfig:
     """Parse recording configuration from raw dict."""
+    # Validate sampling_rate type
+    sampling_rate = data.get("sampling_rate")
+    if sampling_rate is not None and not isinstance(sampling_rate, (int, float)):
+        logger.warning(
+            f"Invalid 'sampling_rate' in config: expected number, got {type(sampling_rate).__name__}. "
+            "This value will be ignored."
+        )
+        sampling_rate = None
+
     return RecordingConfig(
-        sampling_rate=data.get("sampling_rate"),
+        sampling_rate=sampling_rate,
         export_spans=data.get("export_spans"),
         enable_env_var_recording=data.get("enable_env_var_recording"),
         enable_analytics=data.get("enable_analytics"),
