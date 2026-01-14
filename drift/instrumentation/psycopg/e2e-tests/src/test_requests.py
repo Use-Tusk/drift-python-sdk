@@ -96,14 +96,8 @@ if __name__ == "__main__":
 
     make_request("GET", "/test/sql-composed")
 
-    # ===== BUG HUNTING TEST ENDPOINTS =====
-    # These tests expose confirmed bugs in the psycopg instrumentation
-    # See BUG_TRACKING.md for detailed information about each bug
-    print("\n--- Bug Hunting Tests (REPLAY mode bugs - pass RECORD but fail REPLAY) ---\n")
-
-    # Bug 8: UUID parameter serialization issue during REPLAY
     make_request("GET", "/test/binary-uuid")
-    # Bug 9: bytea data deserialization returns string instead of bytes
+
     make_request("GET", "/test/binary-bytea")
 
     print("\nAll requests completed successfully")

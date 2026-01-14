@@ -2,27 +2,35 @@
 
 from __future__ import annotations
 
+import base64
 import datetime as dt
 from typing import Any
 
 
 def deserialize_db_value(val: Any) -> Any:
-    """Convert ISO datetime strings back to datetime objects for consistent serialization.
+    """Convert serialized values back to their original Python types.
 
-    During recording, datetime objects from the database are serialized to ISO format strings.
-    During replay, we need to convert them back to datetime objects so that Flask/Django
-    serializes them the same way (e.g., RFC 2822 vs ISO 8601 format).
+    During recording, database values are serialized for JSON storage:
+    - datetime objects -> ISO format strings
+    - bytes/memoryview -> {"__bytes__": "<base64_encoded_data>"}
 
-    Only parses strings that contain a time component (T or space separator with :) to avoid
-    incorrectly converting date-only strings or text that happens to look like dates.
+    During replay, we need to convert them back to their original types so that
+    application code (Flask/Django) handles them the same way.
 
     Args:
         val: A value from the mocked database rows. Can be a string, list, dict, or any other type.
 
     Returns:
-        The value with ISO datetime strings converted back to datetime objects.
+        The value with serialized types converted back to their original Python types.
     """
-    if isinstance(val, str):
+    if isinstance(val, dict):
+        # Check for bytes tagged structure
+        if "__bytes__" in val and len(val) == 1:
+            # Decode base64 back to bytes
+            return base64.b64decode(val["__bytes__"])
+        # Recursively deserialize dict values
+        return {k: deserialize_db_value(v) for k, v in val.items()}
+    elif isinstance(val, str):
         # Only parse strings that look like full datetime (must have time component)
         # This avoids converting date-only strings like "2024-01-15" or text columns
         # that happen to match date patterns
@@ -35,6 +43,4 @@ def deserialize_db_value(val: Any) -> Any:
                 pass
     elif isinstance(val, list):
         return [deserialize_db_value(v) for v in val]
-    elif isinstance(val, dict):
-        return {k: deserialize_db_value(v) for k, v in val.items()}
     return val

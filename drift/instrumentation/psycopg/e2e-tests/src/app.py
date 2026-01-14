@@ -559,19 +559,11 @@ def test_sql_composed():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
-
-
-# ===== BUG HUNTING TEST ENDPOINTS =====
-# These endpoints expose confirmed bugs in the psycopg instrumentation
-# Endpoints that passed tests have been removed
-
 @app.route("/test/binary-uuid")
 def test_binary_uuid():
     """Test binary UUID data type.
 
-    BUG HYPOTHESIS: UUID types may not serialize/deserialize correctly
-    during RECORD/REPLAY because they are binary.
+    Tests whether the instrumentation correctly handles binary UUID data types.
     """
     try:
         import uuid
@@ -602,13 +594,11 @@ def test_binary_uuid():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
 @app.route("/test/binary-bytea")
 def test_binary_bytea():
     """Test binary bytea data type.
 
-    BUG HYPOTHESIS: Binary data (bytea) may not serialize/deserialize
-    correctly during RECORD/REPLAY.
+    Tests whether the instrumentation correctly handles binary bytea data types.
     """
     try:
         with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:

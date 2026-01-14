@@ -2,9 +2,31 @@
 
 from __future__ import annotations
 
+import base64
 import datetime
 import uuid
 from typing import Any
+
+
+def _serialize_bytes(val: bytes) -> Any:
+    """Serialize bytes to a JSON-compatible format.
+
+    Attempts UTF-8 decode first for text data (like COPY output).
+    Falls back to base64 encoding with tagged structure for binary data
+    that contains invalid UTF-8 sequences (like bytea columns).
+
+    Args:
+        val: The bytes value to serialize.
+
+    Returns:
+        Either a string (if valid UTF-8) or a dict {"__bytes__": "base64_data"}.
+    """
+    try:
+        # Try UTF-8 decode first - works for text data like COPY output
+        return val.decode("utf-8")
+    except UnicodeDecodeError:
+        # Fall back to base64 for binary data with invalid UTF-8 sequences
+        return {"__bytes__": base64.b64encode(val).decode("ascii")}
 
 
 def serialize_value(val: Any) -> Any:
@@ -22,10 +44,11 @@ def serialize_value(val: Any) -> Any:
         return val.isoformat()
     elif isinstance(val, uuid.UUID):
         return str(val)
-    elif isinstance(val, bytes):
-        return val.decode("utf-8", errors="replace")
     elif isinstance(val, memoryview):
-        return bytes(val).decode("utf-8", errors="replace")
+        # Convert memoryview to bytes first, then serialize
+        return _serialize_bytes(bytes(val))
+    elif isinstance(val, bytes):
+        return _serialize_bytes(val)
     elif isinstance(val, (list, tuple)):
         return [serialize_value(v) for v in val]
     elif isinstance(val, dict):
