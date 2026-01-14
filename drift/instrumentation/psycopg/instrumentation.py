@@ -1150,7 +1150,8 @@ class PsycopgInstrumentation(InstrumentationBase):
                 "query": query.strip(),
             }
             if params is not None:
-                input_value["parameters"] = params
+                # Serialize parameters to ensure consistent hashing with RECORD mode
+                input_value["parameters"] = serialize_value(params)
 
             # Use centralized mock finding utility
             from ...core.mock_utils import find_mock_response_sync

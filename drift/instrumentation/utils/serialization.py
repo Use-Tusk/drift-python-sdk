@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import uuid
 from typing import Any
 
 
@@ -19,6 +20,8 @@ def serialize_value(val: Any) -> Any:
     """
     if isinstance(val, (datetime.datetime, datetime.date, datetime.time)):
         return val.isoformat()
+    elif isinstance(val, uuid.UUID):
+        return str(val)
     elif isinstance(val, bytes):
         return val.decode("utf-8", errors="replace")
     elif isinstance(val, memoryview):
