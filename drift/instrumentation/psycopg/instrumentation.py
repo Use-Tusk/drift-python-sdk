@@ -204,6 +204,9 @@ class MockCursor:
         self.arraysize = 1
         self._mock_rows = []
         self._mock_index = 0
+        # Support for multiple result sets (executemany with returning=True)
+        self._mock_result_sets = []
+        self._mock_result_set_index = 0
         self.adapters = MockAdapters()  # Django needs this
         logger.debug("[MOCK_CURSOR] Created fallback mock cursor (psycopg3)")
 
@@ -229,6 +232,23 @@ class MockCursor:
 
     def fetchall(self):
         return []
+
+    def results(self):
+        """Iterate over result sets for executemany with returning=True.
+
+        This method is patched by _mock_executemany_returning_with_data
+        when replaying executemany with returning=True.
+        Default implementation yields self once for backward compatibility.
+        """
+        yield self
+
+    def nextset(self):
+        """Move to the next result set.
+
+        Returns True if there is another result set, None otherwise.
+        This method is patched during replay for executemany with returning=True.
+        """
+        return None
 
     def stream(self, query, params=None, **kwargs):
         """Will be replaced by instrumentation."""
@@ -833,10 +853,14 @@ class PsycopgInstrumentation(InstrumentationBase):
         query_str = self._query_to_string(query, cursor)
         # Convert to list BEFORE executing to avoid iterator exhaustion
         params_list = list(params_seq)
+        # Detect returning flag for executemany with RETURNING clause
+        returning = kwargs.get("returning", False)
 
         if sdk.mode == TuskDriftMode.REPLAY:
             return handle_replay_mode(
-                replay_mode_handler=lambda: self._replay_executemany(cursor, sdk, query_str, params_list),
+                replay_mode_handler=lambda: self._replay_executemany(
+                    cursor, sdk, query_str, params_list, returning
+                ),
                 no_op_request_handler=lambda: self._noop_execute(cursor),
                 is_server_request=False,
             )
@@ -845,12 +869,14 @@ class PsycopgInstrumentation(InstrumentationBase):
         return handle_record_mode(
             original_function_call=lambda: original_executemany(query, params_list, **kwargs),
             record_mode_handler=lambda is_pre_app_start: self._record_executemany(
-                cursor, original_executemany, sdk, query, query_str, params_list, is_pre_app_start, kwargs
+                cursor, original_executemany, sdk, query, query_str, params_list, is_pre_app_start, kwargs, returning
             ),
             span_kind=OTelSpanKind.CLIENT,
         )
 
-    def _replay_executemany(self, cursor: Any, sdk: TuskDrift, query_str: str, params_list: list) -> Any:
+    def _replay_executemany(
+        self, cursor: Any, sdk: TuskDrift, query_str: str, params_list: list, returning: bool = False
+    ) -> Any:
         """Handle REPLAY mode for executemany - fetch mock from CLI."""
         span_info = SpanUtils.create_span(
             CreateSpanOptions(
@@ -872,8 +898,13 @@ class PsycopgInstrumentation(InstrumentationBase):
             raise RuntimeError("Error creating span in replay mode")
 
         with SpanUtils.with_span(span_info):
+            # Include returning flag in parameters for mock matching
+            params_for_mock = {"_batch": params_list}
+            if returning:
+                params_for_mock["_returning"] = True
+
             mock_result = self._try_get_mock(
-                sdk, query_str, {"_batch": params_list}, span_info.trace_id, span_info.span_id
+                sdk, query_str, params_for_mock, span_info.trace_id, span_info.span_id
             )
 
             if mock_result is None:
@@ -887,7 +918,13 @@ class PsycopgInstrumentation(InstrumentationBase):
                     f"Query: {query_str[:100]}..."
                 )
 
-            self._mock_execute_with_data(cursor, mock_result)
+            # Check if this is executemany_returning format (multiple result sets)
+            if mock_result.get("executemany_returning"):
+                self._mock_executemany_returning_with_data(cursor, mock_result)
+            else:
+                # Backward compatible: use existing single result set handling
+                self._mock_execute_with_data(cursor, mock_result)
+
             span_info.span.end()
             return cursor
 
@@ -901,6 +938,7 @@ class PsycopgInstrumentation(InstrumentationBase):
         params_list: list,
         is_pre_app_start: bool,
         kwargs: dict,
+        returning: bool = False,
     ) -> Any:
         """Handle RECORD mode for executemany - create span and execute query."""
         span_info = SpanUtils.create_span(
@@ -934,13 +972,24 @@ class PsycopgInstrumentation(InstrumentationBase):
                 error = e
                 raise
             finally:
-                self._finalize_query_span(
-                    span_info.span,
-                    cursor,
-                    query_str,
-                    {"_batch": params_list},
-                    error,
-                )
+                if returning and error is None:
+                    # Use specialized method for executemany with returning=True
+                    self._finalize_executemany_returning_span(
+                        span_info.span,
+                        cursor,
+                        query_str,
+                        {"_batch": params_list, "_returning": True},
+                        error,
+                    )
+                else:
+                    # Existing behavior for executemany without returning
+                    self._finalize_query_span(
+                        span_info.span,
+                        cursor,
+                        query_str,
+                        {"_batch": params_list},
+                        error,
+                    )
                 span_info.span.end()
 
     def _traced_stream(
@@ -1611,6 +1660,167 @@ class PsycopgInstrumentation(InstrumentationBase):
         # Note: __iter__ and __next__ are handled at the class level in InstrumentedCursor
         # and MockCursor classes, as Python looks up special methods on the type, not instance
 
+    def _mock_executemany_returning_with_data(self, cursor: Any, mock_data: dict[str, Any]) -> None:
+        """Mock cursor for executemany with returning=True - supports multiple result sets.
+
+        This method sets up the cursor to replay multiple result sets captured during
+        executemany with returning=True. It patches the cursor's results() method to
+        yield the cursor for each result set, allowing iteration.
+        """
+        result_sets = mock_data.get("result_sets", [])
+
+        if not result_sets:
+            # Fallback to empty result
+            cursor._mock_rows = []  # pyright: ignore[reportAttributeAccessIssue]
+            cursor._mock_index = 0  # pyright: ignore[reportAttributeAccessIssue]
+            return
+
+        # Get row_factory from cursor or connection
+        row_factory = getattr(cursor, "row_factory", None)
+        if row_factory is None:
+            conn = getattr(cursor, "connection", None)
+            if conn:
+                row_factory = getattr(conn, "row_factory", None)
+
+        row_factory_type = self._detect_row_factory_type(row_factory)
+
+        # Store all result sets for iteration
+        cursor._mock_result_sets = []  # pyright: ignore[reportAttributeAccessIssue]
+        cursor._mock_result_set_index = 0  # pyright: ignore[reportAttributeAccessIssue]
+
+        for result_set in result_sets:
+            description_data = result_set.get("description")
+            column_names = None
+            if description_data:
+                column_names = [col["name"] for col in description_data]
+
+            # Deserialize rows
+            mock_rows = result_set.get("rows", [])
+            mock_rows = [deserialize_db_value(row) for row in mock_rows]
+
+            cursor._mock_result_sets.append(  # pyright: ignore[reportAttributeAccessIssue]
+                {
+                    "description": description_data,
+                    "column_names": column_names,
+                    "rows": mock_rows,
+                    "rowcount": result_set.get("rowcount", -1),
+                }
+            )
+
+        # Create row transformation helper
+        def create_row_class(col_names):
+            if row_factory_type == "namedtuple" and col_names:
+                from collections import namedtuple
+
+                return namedtuple("Row", col_names)
+            return None
+
+        def transform_row(row, col_names, RowClass):
+            """Transform raw row data according to row factory type."""
+            values = tuple(row) if isinstance(row, list) else row
+            if row_factory_type == "dict" and col_names:
+                return dict(zip(col_names, values))
+            elif row_factory_type == "namedtuple" and RowClass is not None:
+                return RowClass(*values)
+            return values
+
+        def mock_results():
+            """Generator that yields cursor for each result set."""
+            while cursor._mock_result_set_index < len(cursor._mock_result_sets):  # pyright: ignore[reportAttributeAccessIssue]
+                result_set = cursor._mock_result_sets[cursor._mock_result_set_index]  # pyright: ignore[reportAttributeAccessIssue]
+
+                # Set up cursor state for this result set
+                cursor._mock_rows = result_set["rows"]  # pyright: ignore[reportAttributeAccessIssue]
+                cursor._mock_index = 0  # pyright: ignore[reportAttributeAccessIssue]
+
+                # Set description
+                description_data = result_set.get("description")
+                if description_data:
+                    desc = [
+                        (col["name"], col.get("type_code"), None, None, None, None, None)
+                        for col in description_data
+                    ]
+                    try:
+                        cursor._tusk_description = desc  # pyright: ignore[reportAttributeAccessIssue]
+                    except AttributeError:
+                        try:
+                            cursor.description = desc  # pyright: ignore[reportAttributeAccessIssue]
+                        except AttributeError:
+                            pass
+
+                # Set rowcount
+                try:
+                    cursor._rowcount = result_set.get("rowcount", -1)  # pyright: ignore[reportAttributeAccessIssue]
+                except AttributeError:
+                    pass
+
+                column_names = result_set.get("column_names")
+                RowClass = create_row_class(column_names)
+
+                # Create fetch methods for this result set with closures capturing current values
+                def make_fetchone(cn, RC):
+                    def fetchone():
+                        if cursor._mock_index < len(cursor._mock_rows):  # pyright: ignore[reportAttributeAccessIssue]
+                            row = cursor._mock_rows[cursor._mock_index]  # pyright: ignore[reportAttributeAccessIssue]
+                            cursor._mock_index += 1  # pyright: ignore[reportAttributeAccessIssue]
+                            return transform_row(row, cn, RC)
+                        return None
+
+                    return fetchone
+
+                def make_fetchmany(cn, RC):
+                    def fetchmany(size=cursor.arraysize):
+                        rows = []
+                        for _ in range(size):
+                            if cursor._mock_index < len(cursor._mock_rows):  # pyright: ignore[reportAttributeAccessIssue]
+                                row = cursor._mock_rows[cursor._mock_index]  # pyright: ignore[reportAttributeAccessIssue]
+                                cursor._mock_index += 1  # pyright: ignore[reportAttributeAccessIssue]
+                                rows.append(transform_row(row, cn, RC))
+                            else:
+                                break
+                        return rows
+
+                    return fetchmany
+
+                def make_fetchall(cn, RC):
+                    def fetchall():
+                        rows = cursor._mock_rows[cursor._mock_index :]  # pyright: ignore[reportAttributeAccessIssue]
+                        cursor._mock_index = len(cursor._mock_rows)  # pyright: ignore[reportAttributeAccessIssue]
+                        return [transform_row(row, cn, RC) for row in rows]
+
+                    return fetchall
+
+                cursor.fetchone = make_fetchone(column_names, RowClass)  # pyright: ignore[reportAttributeAccessIssue]
+                cursor.fetchmany = make_fetchmany(column_names, RowClass)  # pyright: ignore[reportAttributeAccessIssue]
+                cursor.fetchall = make_fetchall(column_names, RowClass)  # pyright: ignore[reportAttributeAccessIssue]
+
+                cursor._mock_result_set_index += 1  # pyright: ignore[reportAttributeAccessIssue]
+                yield cursor
+
+        # Patch results() method onto cursor
+        cursor.results = mock_results  # pyright: ignore[reportAttributeAccessIssue]
+
+        # Also set up initial state for the first result set (in case user calls fetch without results())
+        if cursor._mock_result_sets:  # pyright: ignore[reportAttributeAccessIssue]
+            first_set = cursor._mock_result_sets[0]  # pyright: ignore[reportAttributeAccessIssue]
+            cursor._mock_rows = first_set["rows"]  # pyright: ignore[reportAttributeAccessIssue]
+            cursor._mock_index = 0  # pyright: ignore[reportAttributeAccessIssue]
+
+            # Set description for first result set
+            description_data = first_set.get("description")
+            if description_data:
+                desc = [
+                    (col["name"], col.get("type_code"), None, None, None, None, None)
+                    for col in description_data
+                ]
+                try:
+                    cursor._tusk_description = desc  # pyright: ignore[reportAttributeAccessIssue]
+                except AttributeError:
+                    try:
+                        cursor.description = desc  # pyright: ignore[reportAttributeAccessIssue]
+                    except AttributeError:
+                        pass
+
     def _finalize_query_span(
         self,
         span: trace.Span,
@@ -1764,3 +1974,172 @@ class PsycopgInstrumentation(InstrumentationBase):
 
         except Exception as e:
             logger.error(f"Error creating query span: {e}")
+
+    def _finalize_executemany_returning_span(
+        self,
+        span: trace.Span,
+        cursor: Any,
+        query: str,
+        params: Any,
+        error: Exception | None,
+    ) -> None:
+        """Finalize span for executemany with returning=True - captures multiple result sets.
+
+        This method iterates through cursor.results() to capture all result sets
+        from executemany with returning=True, storing them in a format that can
+        be replayed with multiple result set iteration.
+        """
+        try:
+            import datetime
+
+            def serialize_value(val):
+                """Convert non-JSON-serializable values to JSON-compatible types."""
+                if isinstance(val, (datetime.datetime, datetime.date, datetime.time)):
+                    return val.isoformat()
+                elif isinstance(val, bytes):
+                    return val.decode("utf-8", errors="replace")
+                elif isinstance(val, (list, tuple)):
+                    return [serialize_value(v) for v in val]
+                elif isinstance(val, dict):
+                    return {k: serialize_value(v) for k, v in val.items()}
+                return val
+
+            # Build input value
+            input_value = {
+                "query": query.strip(),
+            }
+            if params is not None:
+                input_value["parameters"] = serialize_value(params)
+
+            # Build output value
+            output_value = {}
+
+            if error:
+                output_value = {
+                    "errorName": type(error).__name__,
+                    "errorMessage": str(error),
+                }
+                span.set_status(Status(OTelStatusCode.ERROR, str(error)))
+            else:
+                # Iterate through cursor.results() to capture all result sets
+                result_sets = []
+                all_rows_collected = []  # For re-populating cursor
+
+                try:
+                    # cursor.results() yields the cursor itself for each result set
+                    for result_cursor in cursor.results():
+                        result_set_data = {}
+
+                        # Capture description for this result set
+                        if hasattr(result_cursor, "description") and result_cursor.description:
+                            description = [
+                                {
+                                    "name": desc[0] if hasattr(desc, "__getitem__") else desc.name,
+                                    "type_code": desc[1]
+                                    if hasattr(desc, "__getitem__") and len(desc) > 1
+                                    else getattr(desc, "type_code", None),
+                                }
+                                for desc in result_cursor.description
+                            ]
+                            result_set_data["description"] = description
+                            column_names = [d["name"] for d in description]
+                        else:
+                            description = None
+                            column_names = None
+
+                        # Fetch all rows for this result set
+                        rows = []
+                        raw_rows = result_cursor.fetchall()
+                        all_rows_collected.append(raw_rows)
+
+                        for row in raw_rows:
+                            if isinstance(row, dict):
+                                rows.append([row.get(col) for col in column_names] if column_names else list(row.values()))
+                            elif hasattr(row, "_fields"):
+                                rows.append(
+                                    [getattr(row, col, None) for col in column_names] if column_names else list(row)
+                                )
+                            else:
+                                rows.append(list(row))
+
+                        result_set_data["rowcount"] = (
+                            result_cursor.rowcount if hasattr(result_cursor, "rowcount") else len(rows)
+                        )
+                        result_set_data["rows"] = [[serialize_value(col) for col in row] for row in rows]
+
+                        result_sets.append(result_set_data)
+
+                except Exception as results_error:
+                    logger.debug(f"Could not iterate results(): {results_error}")
+                    # Fallback: treat as single result set
+                    result_sets = []
+
+                if result_sets:
+                    output_value = {
+                        "executemany_returning": True,
+                        "result_sets": result_sets,
+                    }
+
+                    # Re-populate cursor for user code
+                    # Store all collected rows for replay via results()
+                    cursor._tusk_result_sets = all_rows_collected  # pyright: ignore[reportAttributeAccessIssue]
+                    cursor._tusk_result_set_index = 0  # pyright: ignore[reportAttributeAccessIssue]
+
+                    # Patch results() method to iterate stored result sets
+                    def patched_results():
+                        while cursor._tusk_result_set_index < len(cursor._tusk_result_sets):  # pyright: ignore[reportAttributeAccessIssue]
+                            rows = cursor._tusk_result_sets[cursor._tusk_result_set_index]  # pyright: ignore[reportAttributeAccessIssue]
+                            cursor._tusk_rows = rows  # pyright: ignore[reportAttributeAccessIssue]
+                            cursor._tusk_index = 0  # pyright: ignore[reportAttributeAccessIssue]
+                            cursor._tusk_result_set_index += 1  # pyright: ignore[reportAttributeAccessIssue]
+
+                            # Patch fetch methods for this result set
+                            def patched_fetchone():
+                                if cursor._tusk_index < len(cursor._tusk_rows):  # pyright: ignore[reportAttributeAccessIssue]
+                                    row = cursor._tusk_rows[cursor._tusk_index]  # pyright: ignore[reportAttributeAccessIssue]
+                                    cursor._tusk_index += 1  # pyright: ignore[reportAttributeAccessIssue]
+                                    return row
+                                return None
+
+                            def patched_fetchmany(size=cursor.arraysize):
+                                result = cursor._tusk_rows[cursor._tusk_index : cursor._tusk_index + size]  # pyright: ignore[reportAttributeAccessIssue]
+                                cursor._tusk_index += len(result)  # pyright: ignore[reportAttributeAccessIssue]
+                                return result
+
+                            def patched_fetchall():
+                                result = cursor._tusk_rows[cursor._tusk_index :]  # pyright: ignore[reportAttributeAccessIssue]
+                                cursor._tusk_index = len(cursor._tusk_rows)  # pyright: ignore[reportAttributeAccessIssue]
+                                return result
+
+                            cursor.fetchone = patched_fetchone  # pyright: ignore[reportAttributeAccessIssue]
+                            cursor.fetchmany = patched_fetchmany  # pyright: ignore[reportAttributeAccessIssue]
+                            cursor.fetchall = patched_fetchall  # pyright: ignore[reportAttributeAccessIssue]
+
+                            yield cursor
+
+                    cursor.results = patched_results  # pyright: ignore[reportAttributeAccessIssue]
+
+                else:
+                    output_value = {"rowcount": cursor.rowcount if hasattr(cursor, "rowcount") else -1}
+
+            # Generate schemas and hashes
+            input_result = JsonSchemaHelper.generate_schema_and_hash(input_value, {})
+            output_result = JsonSchemaHelper.generate_schema_and_hash(output_value, {})
+
+            # Set span attributes
+            span.set_attribute(TdSpanAttributes.INPUT_VALUE, json.dumps(input_value))
+            span.set_attribute(TdSpanAttributes.OUTPUT_VALUE, json.dumps(output_value))
+            span.set_attribute(TdSpanAttributes.INPUT_SCHEMA, json.dumps(input_result.schema.to_primitive()))
+            span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA, json.dumps(output_result.schema.to_primitive()))
+            span.set_attribute(TdSpanAttributes.INPUT_SCHEMA_HASH, input_result.decoded_schema_hash)
+            span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA_HASH, output_result.decoded_schema_hash)
+            span.set_attribute(TdSpanAttributes.INPUT_VALUE_HASH, input_result.decoded_value_hash)
+            span.set_attribute(TdSpanAttributes.OUTPUT_VALUE_HASH, output_result.decoded_value_hash)
+
+            if not error:
+                span.set_status(Status(OTelStatusCode.OK))
+
+            logger.debug("[PSYCOPG] Executemany returning span finalized successfully")
+
+        except Exception as e:
+            logger.error(f"Error finalizing executemany returning span: {e}")

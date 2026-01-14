@@ -80,4 +80,6 @@ if __name__ == "__main__":
 
     make_request("GET", "/test/cursor-iteration")
 
+    make_request("GET", "/test/executemany-returning")
+
     print("\nAll requests completed successfully")

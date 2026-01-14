@@ -317,6 +317,75 @@ def test_cursor_iteration():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/test/executemany-returning")
+def test_executemany_returning():
+    """Test executemany with returning=True.
+
+    Tests whether the instrumentation correctly handles executemany with returning=True.
+    """
+    try:
+        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
+            # Create temp table
+            cur.execute("CREATE TEMP TABLE batch_test (id SERIAL, name TEXT)")
+
+            # Use executemany with returning
+            params = [("Batch User 1",), ("Batch User 2",), ("Batch User 3",)]
+            cur.executemany(
+                "INSERT INTO batch_test (name) VALUES (%s) RETURNING id, name",
+                params,
+                returning=True
+            )
+
+            # Fetch results from each batch
+            results = []
+            for result in cur.results():
+                row = result.fetchone()
+                if row:
+                    results.append({"id": row[0], "name": row[1]})
+
+            conn.commit()
+
+        return jsonify({
+            "count": len(results),
+            "data": results
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ============================================================================
+# BUG HUNTING TEST ENDPOINTS
+# These endpoints expose confirmed bugs in the instrumentation
+# ============================================================================
+
+@app.route("/test/cursor-scroll")
+def test_cursor_scroll():
+    """Test cursor.scroll() method.
+
+    BUG: The MockCursor and InstrumentedCursor classes don't implement
+    the scroll() method. In replay mode, scroll() causes "no result available"
+    error on subsequent fetchone() calls.
+    """
+    try:
+        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
+            cur.execute("SELECT id, name FROM users ORDER BY id")
+
+            # Fetch first row
+            first = cur.fetchone()
+
+            # Scroll back to start
+            cur.scroll(0, mode='absolute')
+
+            # Fetch first row again
+            first_again = cur.fetchone()
+
+        return jsonify({
+            "first": {"id": first[0], "name": first[1]} if first else None,
+            "first_again": {"id": first_again[0], "name": first_again[1]} if first_again else None,
+            "match": first == first_again
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 if __name__ == "__main__":
     sdk.mark_app_as_ready()
