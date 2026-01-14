@@ -352,18 +352,56 @@ def test_executemany_returning():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/test/rownumber")
+def test_rownumber():
+    """Test cursor.rownumber property.
+
+    Tests whether the rownumber property is properly tracked during replay mode.
+    """
+    try:
+        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
+            cur.execute("SELECT id, name FROM users ORDER BY id LIMIT 5")
+
+            positions = []
+            # Record rownumber at each fetch
+            positions.append({"before": cur.rownumber})
+
+            cur.fetchone()
+            positions.append({"after_fetchone_1": cur.rownumber})
+
+            cur.fetchone()
+            positions.append({"after_fetchone_2": cur.rownumber})
+
+            cur.fetchmany(2)
+            positions.append({"after_fetchmany_2": cur.rownumber})
+
+        return jsonify({
+            "positions": positions
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ============================================================================
-# BUG HUNTING TEST ENDPOINTS
-# These endpoints expose confirmed bugs in the instrumentation
+# CONFIRMED BUG TEST ENDPOINTS
+# These endpoints expose confirmed bugs in the psycopg instrumentation.
+# See BUG_TRACKING.md for detailed documentation of each bug.
+#
+# Bug Summary:
+# 1. /test/cursor-scroll - scroll() broken during RECORD mode
+# 3. /test/statusmessage - statusmessage property returns null during REPLAY
+# 4. /test/nextset - nextset() iteration broken during RECORD mode
+# 5. /test/server-cursor-scroll - scroll() broken during RECORD mode
 # ============================================================================
 
 @app.route("/test/cursor-scroll")
 def test_cursor_scroll():
     """Test cursor.scroll() method.
 
-    BUG: The MockCursor and InstrumentedCursor classes don't implement
-    the scroll() method. In replay mode, scroll() causes "no result available"
-    error on subsequent fetchone() calls.
+    BUG: During RECORD mode, the instrumentation's _finalize_query_span calls
+    fetchall() which breaks the cursor position tracking. After fetchall(),
+    scroll(0, absolute) doesn't properly reset the cursor position because
+    the patched fetch methods use _tusk_index instead of _pos.
     """
     try:
         with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
@@ -377,6 +415,114 @@ def test_cursor_scroll():
 
             # Fetch first row again
             first_again = cur.fetchone()
+
+        return jsonify({
+            "first": {"id": first[0], "name": first[1]} if first else None,
+            "first_again": {"id": first_again[0], "name": first_again[1]} if first_again else None,
+            "match": first == first_again
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/test/statusmessage")
+def test_statusmessage():
+    """Test cursor.statusmessage property.
+
+    BUG: The statusmessage property is not captured during RECORD mode
+    and not mocked during REPLAY mode. During RECORD, statusmessage
+    returns the command status (e.g., "SELECT 5", "INSERT 0 1"), but
+    during REPLAY it returns null because this property is not tracked.
+    """
+    try:
+        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
+            # SELECT should return something like "SELECT 5"
+            cur.execute("SELECT id FROM users LIMIT 5")
+            select_status = cur.statusmessage
+            cur.fetchall()
+
+            # INSERT should return something like "INSERT 0 1"
+            cur.execute(
+                "INSERT INTO users (name, email) VALUES (%s, %s) RETURNING id",
+                ("StatusTest", "status@test.com")
+            )
+            insert_status = cur.statusmessage
+            cur.fetchone()
+
+            conn.rollback()  # Don't actually insert
+
+        return jsonify({
+            "select_status": select_status,
+            "insert_status": insert_status
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/nextset")
+def test_nextset():
+    """Test cursor.nextset() for multiple result sets.
+
+    BUG: During RECORD mode, the interaction between executemany with
+    returning=True and the fetch method patching breaks nextset() iteration.
+    The instrumentation's fetch patching may consume results before nextset()
+    can iterate through them, causing 0 results in RECORD but correct
+    results in REPLAY.
+    """
+    try:
+        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
+            # Create temp table
+            cur.execute("CREATE TEMP TABLE nextset_test (id SERIAL, val TEXT)")
+
+            # Insert multiple rows with returning
+            cur.executemany(
+                "INSERT INTO nextset_test (val) VALUES (%s) RETURNING id, val",
+                [("First",), ("Second",), ("Third",)],
+                returning=True
+            )
+
+            # Use nextset to iterate through result sets
+            results = []
+            while True:
+                row = cur.fetchone()
+                if row:
+                    results.append({"id": row[0], "val": row[1]})
+                if cur.nextset() is None:
+                    break
+
+            conn.commit()
+
+        return jsonify({
+            "count": len(results),
+            "data": results
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/server-cursor-scroll")
+def test_server_cursor_scroll():
+    """Test ServerCursor.scroll() method.
+
+    BUG: Same root cause as /test/cursor-scroll. During RECORD mode,
+    the instrumentation breaks scroll() functionality by consuming all
+    rows via fetchall() in _finalize_query_span. ServerCursor.scroll()
+    sends MOVE commands to the server, but the position tracking is
+    inconsistent after the instrumentation patches the fetch methods.
+    """
+    try:
+        with psycopg.connect(get_conn_string()) as conn:
+            # Named cursor with scrollable=True
+            with conn.cursor(name="scroll_test", scrollable=True) as cur:
+                cur.execute("SELECT id, name FROM users ORDER BY id")
+
+                # Fetch first row
+                first = cur.fetchone()
+
+                # Scroll back to start
+                cur.scroll(0, mode='absolute')
+
+                # Fetch first row again
+                first_again = cur.fetchone()
 
         return jsonify({
             "first": {"id": first[0], "name": first[1]} if first else None,

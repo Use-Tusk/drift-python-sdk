@@ -214,6 +214,13 @@ class MockCursor:
     def description(self):
         return self._tusk_description
 
+    @property
+    def rownumber(self):
+        """Return the index of the next row to fetch, or None if no result."""
+        if self._mock_rows:
+            return self._mock_index
+        return None
+
     def execute(self, query, params=None, **kwargs):
         """Will be replaced by instrumentation."""
         logger.debug(f"[MOCK_CURSOR] execute() called: {query[:100]}")
@@ -602,6 +609,17 @@ class PsycopgInstrumentation(InstrumentationBase):
                     return self._tusk_description
                 return super().description
 
+            @property
+            def rownumber(self):
+                # In captured mode (after fetchall in _finalize_query_span), return tracked index
+                if hasattr(self, '_tusk_rows') and self._tusk_rows is not None:
+                    return self._tusk_index
+                # In replay mode with mock data, return mock index
+                if hasattr(self, '_mock_rows') and self._mock_rows is not None:
+                    return self._mock_index
+                # Otherwise, return real cursor's rownumber
+                return super().rownumber
+
             def execute(self, query, params=None, **kwargs):
                 return instrumentation._traced_execute(self, super().execute, sdk, query, params, **kwargs)
 
@@ -674,6 +692,17 @@ class PsycopgInstrumentation(InstrumentationBase):
                 if self._tusk_description is not None:
                     return self._tusk_description
                 return super().description
+
+            @property
+            def rownumber(self):
+                # In captured mode (after fetchall in _finalize_query_span), return tracked index
+                if hasattr(self, '_tusk_rows') and self._tusk_rows is not None:
+                    return self._tusk_index
+                # In replay mode with mock data, return mock index
+                if hasattr(self, '_mock_rows') and self._mock_rows is not None:
+                    return self._mock_index
+                # Otherwise, return real cursor's rownumber
+                return super().rownumber
 
             def execute(self, query, params=None, **kwargs):
                 # Note: ServerCursor.execute() doesn't support 'prepare' parameter

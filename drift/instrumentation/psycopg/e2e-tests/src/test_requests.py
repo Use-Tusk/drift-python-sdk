@@ -82,4 +82,12 @@ if __name__ == "__main__":
 
     make_request("GET", "/test/executemany-returning")
 
+    make_request("GET", "/test/rownumber")
+
+    # Bug-exposing test endpoints
+    make_request("GET", "/test/statusmessage")
+    make_request("GET", "/test/nextset")
+    make_request("GET", "/test/server-cursor-scroll")
+    make_request("GET", "/test/cursor-scroll")
+
     print("\nAll requests completed successfully")
