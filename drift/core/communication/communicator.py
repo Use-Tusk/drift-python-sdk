@@ -23,11 +23,9 @@ from .types import (
     MessageType,
     MockRequestInput,
     MockResponseOutput,
-    Runtime,
     SdkMessage,
     SendAlertRequest,
     SendInboundSpanForReplayRequest,
-    SetTimeTravelRequest,
     SetTimeTravelResponse,
     UnpatchedDependencyAlert,
     span_to_proto,
@@ -83,6 +81,10 @@ class ProtobufCommunicator:
         self._lock = threading.Lock()
         self._background_reader_thread: threading.Thread | None = None
         self._stop_background_reader = threading.Event()
+        # Response routing: background reader stores responses here, callers wait on events
+        self._response_events: dict[str, threading.Event] = {}
+        self._response_data: dict[str, CliMessage] = {}
+        self._response_lock = threading.Lock()  # Protects response_events and response_data
 
     @property
     def is_connected(self) -> bool:
@@ -534,16 +536,27 @@ class ProtobufCommunicator:
         # our own socket operations as unpatched dependencies
         context_token = calling_library_context.set("ProtobufCommunicator")
         try:
-            # Send synchronously (socket is blocking for sends)
-            self._socket.sendall(full_message)
+            # Acquire lock to prevent concurrent sends from background reader thread
+            # (e.g., _send_message_sync sending SetTimeTravel responses)
+            with self._lock:
+                self._socket.sendall(full_message)
         finally:
             calling_library_context.reset(context_token)
 
     async def _receive_response(self, request_id: str) -> MockResponseOutput:
-        """Receive and parse a response for a specific request ID."""
+        """Receive and parse a response for a specific request ID.
+
+        If the background reader is running, waits on an event for the response.
+        Otherwise, reads directly from the socket (for async-only connections).
+        """
         if not self._socket:
             raise ConnectionError("Socket not initialized")
 
+        # If background reader is running, wait on event instead of reading socket
+        if self._background_reader_thread and self._background_reader_thread.is_alive():
+            return self._wait_for_response(request_id)
+
+        # No background reader - read directly from socket (async connect path)
         self._socket.settimeout(self.config.request_timeout)
 
         try:
@@ -578,6 +591,38 @@ class ProtobufCommunicator:
 
         except TimeoutError as e:
             raise TimeoutError(f"Request timed out: {e}") from e
+
+    def _wait_for_response(self, request_id: str) -> MockResponseOutput:
+        """Wait for a response from the background reader thread.
+
+        Registers an event for the request_id, waits for the background reader
+        to signal it, then retrieves the response.
+        """
+        event = threading.Event()
+
+        # Register the event for this request
+        with self._response_lock:
+            self._response_events[request_id] = event
+
+        try:
+            # Wait for the background reader to signal us
+            if not event.wait(timeout=self.config.request_timeout):
+                raise TimeoutError(f"Request timed out waiting for response: {request_id}")
+
+            # Retrieve the response
+            with self._response_lock:
+                cli_message = self._response_data.pop(request_id, None)
+
+            if cli_message is None:
+                raise ConnectionError(f"Response was signaled but not found: {request_id}")
+
+            return self._handle_cli_message(cli_message)
+
+        finally:
+            # Clean up the event registration
+            with self._response_lock:
+                self._response_events.pop(request_id, None)
+                self._response_data.pop(request_id, None)  # In case of timeout
 
     def _recv_exact(self, n: int) -> bytes | None:
         """Receive exactly n bytes from socket."""
@@ -769,7 +814,6 @@ class ProtobufCommunicator:
 
     def _cleanup(self) -> None:
         """Clean up resources."""
-        import traceback
 
         # Stop background reader thread
         self._stop_background_reader.set()
@@ -790,6 +834,14 @@ class ProtobufCommunicator:
             self._socket = None
 
         self._pending_requests.clear()
+
+        # Clean up response routing data and signal any waiting threads
+        with self._response_lock:
+            # Signal all waiting threads so they don't hang
+            for event in self._response_events.values():
+                event.set()
+            self._response_events.clear()
+            self._response_data.clear()
 
     # ========== Background Reader for CLI-initiated Messages ==========
 
@@ -820,13 +872,14 @@ class ProtobufCommunicator:
                 # Try to read length prefix
                 try:
                     length_data = self._recv_exact(4)
-                except socket.timeout:
+                except TimeoutError:
                     continue  # No data available, check stop event and retry
                 except Exception:
                     continue
 
                 if not length_data:
-                    continue
+                    # None means connection closed (recv returned empty bytes)
+                    break
 
                 length = struct.unpack(">I", length_data)[0]
 
@@ -834,20 +887,32 @@ class ProtobufCommunicator:
                 self._socket.settimeout(5.0)  # Longer timeout for message body
                 message_data = self._recv_exact(length)
                 if not message_data:
-                    continue
+                    # None means connection closed (recv returned empty bytes)
+                    break
 
                 # Parse message
                 cli_message = CliMessage().parse(message_data)
                 logger.debug(f"Background reader received message type: {cli_message.type}")
 
-                # Handle CLI-initiated messages based on message type
+                # Handle CLI-initiated messages (no request_id, or special types)
                 if cli_message.type == MessageType.SET_TIME_TRAVEL:
                     self._handle_set_time_travel_sync(cli_message)
-                else:
-                    # Other message types (responses to SDK requests) are handled elsewhere
-                    logger.debug(f"Background reader ignoring message type: {cli_message.type}")
+                    continue
 
-            except socket.timeout:
+                # Route responses to waiting callers by request_id
+                request_id = cli_message.request_id
+                if request_id:
+                    with self._response_lock:
+                        if request_id in self._response_events:
+                            # Store response and signal the waiting caller
+                            self._response_data[request_id] = cli_message
+                            self._response_events[request_id].set()
+                            logger.debug(f"Background reader routed response for request_id: {request_id}")
+                        else:
+                            # No one waiting for this response (possibly timed out)
+                            logger.debug(f"Background reader received response with no waiter: {request_id}")
+
+            except TimeoutError:
                 continue  # Normal timeout, just retry
             except Exception as e:
                 if not self._stop_background_reader.is_set():

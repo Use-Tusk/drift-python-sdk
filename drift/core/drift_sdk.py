@@ -470,7 +470,7 @@ class TuskDrift:
                 logger.debug("Socket instrumentation initialized (REPLAY mode - unpatched dependency detection)")
             except Exception as e:
                 logger.debug(f"Socket instrumentation initialization failed: {e}")
-            
+
             # try:
             #     from ..instrumentation.kinde import KindeInstrumentation
             #     _ = KindeInstrumentation(enabled=True)
