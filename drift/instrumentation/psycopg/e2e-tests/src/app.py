@@ -381,49 +381,6 @@ def test_rownumber():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
-# ============================================================================
-# CONFIRMED BUG TEST ENDPOINTS
-# These endpoints expose confirmed bugs in the psycopg instrumentation.
-# See BUG_TRACKING.md for detailed documentation of each bug.
-#
-# Bug Summary:
-# 1. /test/cursor-scroll - scroll() broken during RECORD mode
-# 3. /test/statusmessage - statusmessage property returns null during REPLAY
-# 4. /test/nextset - nextset() iteration broken during RECORD mode
-# 5. /test/server-cursor-scroll - scroll() broken during RECORD mode
-# ============================================================================
-
-@app.route("/test/cursor-scroll")
-def test_cursor_scroll():
-    """Test cursor.scroll() method.
-
-    BUG: During RECORD mode, the instrumentation's _finalize_query_span calls
-    fetchall() which breaks the cursor position tracking. After fetchall(),
-    scroll(0, absolute) doesn't properly reset the cursor position because
-    the patched fetch methods use _tusk_index instead of _pos.
-    """
-    try:
-        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
-            cur.execute("SELECT id, name FROM users ORDER BY id")
-
-            # Fetch first row
-            first = cur.fetchone()
-
-            # Scroll back to start
-            cur.scroll(0, mode='absolute')
-
-            # Fetch first row again
-            first_again = cur.fetchone()
-
-        return jsonify({
-            "first": {"id": first[0], "name": first[1]} if first else None,
-            "first_again": {"id": first_again[0], "name": first_again[1]} if first_again else None,
-            "match": first == first_again
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 @app.route("/test/statusmessage")
 def test_statusmessage():
     """Test cursor.statusmessage property.
@@ -457,6 +414,48 @@ def test_statusmessage():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+
+# ============================================================================
+# CONFIRMED BUG TEST ENDPOINTS
+# These endpoints expose confirmed bugs in the psycopg instrumentation.
+# See BUG_TRACKING.md for detailed documentation of each bug.
+#
+# Bug Summary:
+# 1. /test/cursor-scroll - scroll() broken during RECORD mode
+# 4. /test/nextset - nextset() iteration broken during RECORD mode
+# 5. /test/server-cursor-scroll - scroll() broken during RECORD mode
+# ============================================================================
+
+@app.route("/test/cursor-scroll")
+def test_cursor_scroll():
+    """Test cursor.scroll() method.
+
+    BUG: During RECORD mode, the instrumentation's _finalize_query_span calls
+    fetchall() which breaks the cursor position tracking. After fetchall(),
+    scroll(0, absolute) doesn't properly reset the cursor position because
+    the patched fetch methods use _tusk_index instead of _pos.
+    """
+    try:
+        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
+            cur.execute("SELECT id, name FROM users ORDER BY id")
+
+            # Fetch first row
+            first = cur.fetchone()
+
+            # Scroll back to start
+            cur.scroll(0, mode='absolute')
+
+            # Fetch first row again
+            first_again = cur.fetchone()
+
+        return jsonify({
+            "first": {"id": first[0], "name": first[1]} if first else None,
+            "first_again": {"id": first_again[0], "name": first_again[1]} if first_again else None,
+            "match": first == first_again
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/test/nextset")
 def test_nextset():

@@ -221,6 +221,11 @@ class MockCursor:
             return self._mock_index
         return None
 
+    @property
+    def statusmessage(self):
+        """Return the mock status message if set, otherwise None."""
+        return getattr(self, '_mock_statusmessage', None)
+
     def execute(self, query, params=None, **kwargs):
         """Will be replaced by instrumentation."""
         logger.debug(f"[MOCK_CURSOR] execute() called: {query[:100]}")
@@ -620,6 +625,14 @@ class PsycopgInstrumentation(InstrumentationBase):
                 # Otherwise, return real cursor's rownumber
                 return super().rownumber
 
+            @property
+            def statusmessage(self):
+                # In replay mode with mock data, return mock statusmessage
+                if hasattr(self, '_mock_statusmessage'):
+                    return self._mock_statusmessage
+                # Otherwise, return real cursor's statusmessage
+                return super().statusmessage
+
             def execute(self, query, params=None, **kwargs):
                 return instrumentation._traced_execute(self, super().execute, sdk, query, params, **kwargs)
 
@@ -703,6 +716,14 @@ class PsycopgInstrumentation(InstrumentationBase):
                     return self._mock_index
                 # Otherwise, return real cursor's rownumber
                 return super().rownumber
+
+            @property
+            def statusmessage(self):
+                # In replay mode with mock data, return mock statusmessage
+                if hasattr(self, '_mock_statusmessage'):
+                    return self._mock_statusmessage
+                # Otherwise, return real cursor's statusmessage
+                return super().statusmessage
 
             def execute(self, query, params=None, **kwargs):
                 # Note: ServerCursor.execute() doesn't support 'prepare' parameter
@@ -1643,6 +1664,11 @@ class PsycopgInstrumentation(InstrumentationBase):
                 except AttributeError:
                     pass
 
+        # Set mock statusmessage for replay
+        statusmessage = actual_data.get("statusmessage")
+        if statusmessage is not None:
+            cursor._mock_statusmessage = statusmessage
+
         # Get row_factory from cursor or connection for row transformation
         row_factory = getattr(cursor, 'row_factory', None)
         if row_factory is None:
@@ -2016,6 +2042,10 @@ class PsycopgInstrumentation(InstrumentationBase):
                         # Convert rows to JSON-serializable format (handle datetime objects, etc.)
                         serialized_rows = [[serialize_value(col) for col in row] for row in rows]
                         output_value["rows"] = serialized_rows
+
+                    # Capture statusmessage for replay
+                    if hasattr(cursor, 'statusmessage') and cursor.statusmessage is not None:
+                        output_value["statusmessage"] = cursor.statusmessage
 
                 except Exception as e:
                     logger.debug(f"Error getting query metadata: {e}")
