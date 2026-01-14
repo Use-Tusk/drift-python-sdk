@@ -253,7 +253,6 @@ class ProtobufCommunicator:
             ConnectionError: If connection fails
             TimeoutError: If connection times out
         """
-        logger.info("[CONNECT_SYNC] Starting synchronous connection")
         # Determine address
         if connection_info:
             if "socketPath" in connection_info:
@@ -324,8 +323,6 @@ class ProtobufCommunicator:
                 if response.success:
                     logger.debug("CLI acknowledged connection successfully")
                     self._connected = True
-                    logger.info(f"[CONNECT_SYNC] Connection successful! Socket is: {self._socket}")
-                    logger.info(f"[CONNECT_SYNC] _connected={self._connected}, is_connected={self.is_connected}")
 
                     # Start background reader for CLI-initiated messages (like SetTimeTravel)
                     self._start_background_reader()
@@ -343,8 +340,6 @@ class ProtobufCommunicator:
             raise ConnectionError(f"Socket error: {e}") from e
         finally:
             calling_library_context.reset(context_token)
-
-        logger.info(f"[CONNECT_SYNC] Exiting connect_sync(). Socket still open: {self._socket is not None}")
 
     async def disconnect(self) -> None:
         """Disconnect from CLI."""
@@ -517,8 +512,9 @@ class ProtobufCommunicator:
 
         try:
             await self._send_protobuf_message(sdk_message)
-        except Exception:
-            pass  # Alerts are non-critical
+        except Exception as e:
+            # Alerts are non-critical, just log at debug level
+            logger.debug(f"Failed to send unpatched dependency alert: {e}")
 
     async def _send_protobuf_message(self, message: SdkMessage) -> None:
         """Send a protobuf message to CLI."""
@@ -775,9 +771,6 @@ class ProtobufCommunicator:
         """Clean up resources."""
         import traceback
 
-        logger.warning("[CLEANUP] _cleanup() called! Stack trace:")
-        logger.warning("".join(traceback.format_stack()))
-
         # Stop background reader thread
         self._stop_background_reader.set()
         if self._background_reader_thread and self._background_reader_thread.is_alive():
@@ -790,10 +783,10 @@ class ProtobufCommunicator:
 
         if self._socket:
             try:
-                logger.warning("[CLEANUP] Closing socket")
                 self._socket.close()
-            except Exception:
-                pass
+            except OSError as e:
+                # Socket may already be closed, which is fine
+                logger.debug(f"Error closing socket during cleanup: {e}")
             self._socket = None
 
         self._pending_requests.clear()

@@ -4,9 +4,10 @@ import importlib.machinery
 import sys
 from collections.abc import Callable, Sequence
 from types import ModuleType
-from typing import override
+from typing import TypeVar, override
 
 PatchFn = Callable[[ModuleType], None]
+T = TypeVar("T")
 
 _registry: dict[str, PatchFn] = {}
 _installed = False
@@ -89,11 +90,6 @@ def _apply_patch(module: ModuleType, patch_fn: PatchFn) -> None:
 
     patch_fn(module)
     module.__drift_patched__ = True  # type: ignore[attr-defined]
-
-
-from typing import TypeVar
-
-T = TypeVar("T")
 
 
 def patch_instances_via_gc[T](class_type: type, patch_instance_fn: Callable[[T], None]) -> None:

@@ -1,0 +1,20 @@
+services:
+  app:
+    build:
+      context: ../../../..
+      dockerfile: drift/instrumentation/urllib3/e2e-tests/Dockerfile
+      args:
+        - TUSK_CLI_VERSION=${TUSK_CLI_VERSION:-latest}
+    environment:
+      - PORT=8000
+      - TUSK_ANALYTICS_DISABLED=1
+      - PYTHONUNBUFFERED=1
+    working_dir: /app
+    volumes:
+      # Mount SDK source for hot reload (no rebuild needed for SDK changes)
+      - ../../../..:/sdk
+      # Mount app source for development
+      - ./src:/app/src
+      # Mount .tusk folder to persist traces
+      - ./.tusk:/app/.tusk
+

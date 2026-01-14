@@ -1,5 +1,0 @@
-include README.md
-include LICENSE
-include py.typed
-recursive-include drift *.py
-recursive-include drift *.typed

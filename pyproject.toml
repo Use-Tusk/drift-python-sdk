@@ -52,8 +52,8 @@ dev = [
 [project.urls]
 Homepage = "https://usetusk.ai"
 Documentation = "https://docs.usetusk.ai"
-Repository = "https://github.com/Use-Tusk/drift-node-sdk"
-Issues = "https://github.com/Use-Tusk/drift-node-sdk/issues"
+Repository = "https://github.com/Use-Tusk/drift-python-sdk"
+Issues = "https://github.com/Use-Tusk/drift-python-sdk/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
