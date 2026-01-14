@@ -624,6 +624,86 @@ def test_binary_bytea():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/test/class-row-factory")
+def test_class_row_factory():
+    """Test class_row row factory.
+
+    Tests whether the instrumentation correctly handles class_row factories
+    which return instances of a custom class.
+    """
+    try:
+        from psycopg.rows import class_row
+        from dataclasses import dataclass
+
+        @dataclass
+        class User:
+            id: int
+            name: str
+            email: str
+
+        with psycopg.connect(get_conn_string(), row_factory=class_row(User)) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, name, email FROM users ORDER BY id LIMIT 3")
+                rows = cur.fetchall()
+
+        return jsonify({
+            "count": len(rows),
+            "data": [{"id": r.id, "name": r.name, "email": r.email} for r in rows]
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/kwargs-row-factory")
+def test_kwargs_row_factory():
+    """Test kwargs_row row factory.
+
+    Tests whether the instrumentation correctly handles kwargs_row factories
+    which call a function with keyword arguments.
+    """
+    try:
+        from psycopg.rows import kwargs_row
+
+        def make_user_dict(**kwargs):
+            return {"user_data": kwargs, "processed": True}
+
+        with psycopg.connect(get_conn_string(), row_factory=kwargs_row(make_user_dict)) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, name, email FROM users ORDER BY id LIMIT 3")
+                rows = cur.fetchall()
+
+        return jsonify({
+            "count": len(rows),
+            "data": rows  # Already processed dictionaries
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# BUG HUNTING TEST ENDPOINTS
+
+@app.route("/test/scalar-row-factory")
+def test_scalar_row_factory():
+    """Test scalar_row row factory.
+
+    Tests whether the instrumentation correctly handles scalar_row factories
+    which return just the first column value.
+    """
+    try:
+        from psycopg.rows import scalar_row
+
+        with psycopg.connect(get_conn_string(), row_factory=scalar_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT name FROM users ORDER BY id LIMIT 5")
+                rows = cur.fetchall()
+
+        return jsonify({
+            "count": len(rows),
+            "data": rows  # Just names as scalars
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     sdk.mark_app_as_ready()
     app.run(host="0.0.0.0", port=8000, debug=False)

@@ -65,39 +65,25 @@ if __name__ == "__main__":
             make_request("DELETE", f"/db/delete/{user_id}")
 
     make_request("GET", "/test/cursor-stream")
-
     make_request("GET", "/test/server-cursor")
-
     make_request("GET", "/test/copy-to")
-
     make_request("GET", "/test/multiple-queries")
-
     make_request("GET", "/test/pipeline-mode")
-
     make_request("GET", "/test/dict-row-factory")
-
     make_request("GET", "/test/namedtuple-row-factory")
-
     make_request("GET", "/test/cursor-iteration")
-
     make_request("GET", "/test/executemany-returning")
-
     make_request("GET", "/test/rownumber")
-
     make_request("GET", "/test/statusmessage")
-
     make_request("GET", "/test/nextset")
-
     make_request("GET", "/test/server-cursor-scroll")
-
     make_request("GET", "/test/cursor-scroll")
-
     make_request("GET", "/test/cursor-reuse")
-
     make_request("GET", "/test/sql-composed")
-
     make_request("GET", "/test/binary-uuid")
-
     make_request("GET", "/test/binary-bytea")
+    make_request("GET", "/test/class-row-factory")
+    make_request("GET", "/test/kwargs-row-factory")
+    make_request("GET", "/test/scalar-row-factory")
 
     print("\nAll requests completed successfully")

@@ -1063,6 +1063,8 @@ class PsycopgInstrumentation(InstrumentationBase):
             return "dict"
         elif 'namedtuple' in factory_name_lower:
             return "namedtuple"
+        elif 'kwargs' in factory_name_lower:
+            return "kwargs"
 
         return "tuple"
 
@@ -1234,6 +1236,9 @@ class PsycopgInstrumentation(InstrumentationBase):
 
         def transform_row(row):
             """Transform raw row data according to row factory type."""
+            if row_factory_type == "kwargs":
+                # kwargs_row: return stored dict as-is (already in correct format)
+                return row
             values = tuple(row) if isinstance(row, list) else row
             if row_factory_type == "dict" and column_names:
                 return dict(zip(column_names, values))
@@ -1352,6 +1357,9 @@ class PsycopgInstrumentation(InstrumentationBase):
 
         def transform_row(row, col_names, RowClass):
             """Transform raw row data according to row factory type."""
+            if row_factory_type == "kwargs":
+                # kwargs_row: return stored dict as-is
+                return row
             values = tuple(row) if isinstance(row, list) else row
             if row_factory_type == "dict" and col_names:
                 return dict(zip(col_names, values))
@@ -1582,9 +1590,23 @@ class PsycopgInstrumentation(InstrumentationBase):
                             # Convert rows to lists for JSON serialization
                             # Handle dict_row (returns dicts) and namedtuple_row (returns namedtuples)
                             column_names = [d["name"] for d in description]
+
+                            # Get row factory from cursor or connection
+                            row_factory = getattr(cursor, 'row_factory', None)
+                            if row_factory is None:
+                                conn = getattr(cursor, 'connection', None)
+                                if conn:
+                                    row_factory = getattr(conn, 'row_factory', None)
+
+                            # Detect row factory type BEFORE processing rows
+                            row_factory_type = self._detect_row_factory_type(row_factory)
+
                             rows = []
                             for row in all_rows:
-                                if isinstance(row, dict):
+                                if row_factory_type == "kwargs":
+                                    # kwargs_row: store the entire dict as-is (it has custom keys, not column names)
+                                    rows.append(row)
+                                elif isinstance(row, dict):
                                     # dict_row: extract values in column order
                                     rows.append([row.get(col) for col in column_names])
                                 elif hasattr(row, '_fields'):
@@ -1655,7 +1677,12 @@ class PsycopgInstrumentation(InstrumentationBase):
 
                     if rows:
                         # Convert rows to JSON-serializable format (handle datetime objects, etc.)
-                        serialized_rows = [[serialize_value(col) for col in row] for row in rows]
+                        # For kwargs_row, rows are custom dicts - serialize each row as a complete dict
+                        # For other types, rows are lists of column values
+                        if row_factory_type == "kwargs":
+                            serialized_rows = [serialize_value(row) for row in rows]
+                        else:
+                            serialized_rows = [[serialize_value(col) for col in row] for row in rows]
                         output_value["rows"] = serialized_rows
 
                     # Capture statusmessage for replay

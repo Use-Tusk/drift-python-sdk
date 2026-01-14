@@ -63,6 +63,9 @@ class TracedCopyWrapper:
 
     def write(self, buffer):
         """Write raw data for COPY FROM."""
+        # Convert memoryview to bytes to avoid mutation if buffer is reused
+        if isinstance(buffer, memoryview):
+            buffer = bytes(buffer)
         self._data_collected.append(buffer)
         return self._copy.write(buffer)
 
