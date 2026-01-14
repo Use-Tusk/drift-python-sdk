@@ -19,6 +19,8 @@ from .core import (
     load_tusk_config,
 )
 from .core.logger import LogLevel, get_log_level, set_log_level
+from .core.metrics import SDKMetrics, get_sdk_metrics
+from .core.resilience import CircuitBreaker, CircuitBreakerConfig, RetryConfig
 from .core.tracing.adapters import (
     ApiSpanAdapter,
     ApiSpanAdapterConfig,
@@ -59,6 +61,13 @@ __all__ = [
     "LogLevel",
     "set_log_level",
     "get_log_level",
+    # Metrics
+    "SDKMetrics",
+    "get_sdk_metrics",
+    # Resilience
+    "RetryConfig",
+    "CircuitBreaker",
+    "CircuitBreakerConfig",
     # Instrumentations
     "FlaskInstrumentation",
     "FastAPIInstrumentation",

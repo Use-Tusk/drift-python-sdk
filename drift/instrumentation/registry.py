@@ -1,13 +1,11 @@
-import gc
 import importlib.abc
 import importlib.machinery
 import sys
 from collections.abc import Callable, Sequence
 from types import ModuleType
-from typing import TypeVar, override
+from typing import override
 
 PatchFn = Callable[[ModuleType], None]
-T = TypeVar("T")
 
 _registry: dict[str, PatchFn] = {}
 _installed = False
@@ -90,13 +88,3 @@ def _apply_patch(module: ModuleType, patch_fn: PatchFn) -> None:
 
     patch_fn(module)
     module.__drift_patched__ = True  # type: ignore[attr-defined]
-
-
-def patch_instances_via_gc[T](class_type: type, patch_instance_fn: Callable[[T], None]) -> None:
-    """Use gc to patch instances created before SDK initialization"""
-    for obj in gc.get_objects():  # pyright: ignore[reportAny]
-        if isinstance(obj, class_type):
-            obj: T = obj
-            if not getattr(obj, "__drift_instance_patched__", False):
-                patch_instance_fn(obj)
-                obj.__drift_instance_patched__ = True
