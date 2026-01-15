@@ -39,7 +39,7 @@ For comprehensive guides and API reference, visit our [full documentation](https
 
 ## Requirements
 
-- Python 3.12+
+- Python 3.9+
 
 Tusk Drift currently supports the following packages and versions:
 
