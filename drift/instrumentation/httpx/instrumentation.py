@@ -45,6 +45,7 @@ from ...core.types import (
     SpanStatus,
     StatusCode,
     TuskDriftMode,
+    calling_library_context,
 )
 from ..base import InstrumentationBase
 from ..http import HttpSpanData, HttpTransformEngine
@@ -285,33 +286,42 @@ class HttpxInstrumentation(InstrumentationBase):
             if sdk.mode == TuskDriftMode.DISABLED:
                 return original_send(client_self, request, stream=stream, auth=auth, follow_redirects=follow_redirects)
 
-            def original_call():
-                return original_send(client_self, request, stream=stream, auth=auth, follow_redirects=follow_redirects)
+            # Set calling_library_context to suppress socket instrumentation warnings
+            # for internal socket calls made by httpx or its dependencies
+            context_token = calling_library_context.set("httpx")
+            try:
 
-            # REPLAY mode: Use handle_replay_mode for proper background request handling
-            if sdk.mode == TuskDriftMode.REPLAY:
-                return handle_replay_mode(
-                    replay_mode_handler=lambda: instrumentation_self._handle_replay_send_sync(
-                        sdk, module, request, auth=auth, client=client_self
+                def original_call():
+                    return original_send(
+                        client_self, request, stream=stream, auth=auth, follow_redirects=follow_redirects
+                    )
+
+                # REPLAY mode: Use handle_replay_mode for proper background request handling
+                if sdk.mode == TuskDriftMode.REPLAY:
+                    return handle_replay_mode(
+                        replay_mode_handler=lambda: instrumentation_self._handle_replay_send_sync(
+                            sdk, module, request, auth=auth, client=client_self
+                        ),
+                        no_op_request_handler=lambda: instrumentation_self._get_default_response(module, url_str),
+                        is_server_request=False,
+                    )
+
+                # RECORD mode: Use handle_record_mode for proper is_pre_app_start handling
+                return handle_record_mode(
+                    original_function_call=original_call,
+                    record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record_send_sync(
+                        client_self,
+                        request,
+                        stream,
+                        is_pre_app_start,
+                        original_send,
+                        auth=auth,
+                        follow_redirects=follow_redirects,
                     ),
-                    no_op_request_handler=lambda: instrumentation_self._get_default_response(module, url_str),
-                    is_server_request=False,
+                    span_kind=OTelSpanKind.CLIENT,
                 )
-
-            # RECORD mode: Use handle_record_mode for proper is_pre_app_start handling
-            return handle_record_mode(
-                original_function_call=original_call,
-                record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record_send_sync(
-                    client_self,
-                    request,
-                    stream,
-                    is_pre_app_start,
-                    original_send,
-                    auth=auth,
-                    follow_redirects=follow_redirects,
-                ),
-                span_kind=OTelSpanKind.CLIENT,
-            )
+            finally:
+                calling_library_context.reset(context_token)
 
         # Apply patch
         module.Client.send = patched_send
@@ -467,37 +477,44 @@ class HttpxInstrumentation(InstrumentationBase):
                     client_self, request, stream=stream, auth=auth, follow_redirects=follow_redirects
                 )
 
-            async def original_call():
-                return await original_send(
-                    client_self, request, stream=stream, auth=auth, follow_redirects=follow_redirects
-                )
+            # Set calling_library_context to suppress socket instrumentation warnings
+            # for internal socket calls made by httpx or its dependencies
+            context_token = calling_library_context.set("httpx")
+            try:
 
-            # REPLAY mode: Use handle_replay_mode for proper background request handling
-            # handle_replay_mode returns coroutine which we await
-            if sdk.mode == TuskDriftMode.REPLAY:
-                return await handle_replay_mode(
-                    replay_mode_handler=lambda: instrumentation_self._handle_replay_send_async(
-                        sdk, module, request, auth=auth, client=client_self
+                async def original_call():
+                    return await original_send(
+                        client_self, request, stream=stream, auth=auth, follow_redirects=follow_redirects
+                    )
+
+                # REPLAY mode: Use handle_replay_mode for proper background request handling
+                # handle_replay_mode returns coroutine which we await
+                if sdk.mode == TuskDriftMode.REPLAY:
+                    return await handle_replay_mode(
+                        replay_mode_handler=lambda: instrumentation_self._handle_replay_send_async(
+                            sdk, module, request, auth=auth, client=client_self
+                        ),
+                        no_op_request_handler=lambda: instrumentation_self._get_default_response(module, url_str),
+                        is_server_request=False,
+                    )
+
+                # RECORD mode: Use handle_record_mode for proper is_pre_app_start handling
+                # handle_record_mode returns coroutine which we await
+                return await handle_record_mode(
+                    original_function_call=original_call,
+                    record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record_send_async(
+                        client_self,
+                        request,
+                        stream,
+                        is_pre_app_start,
+                        original_send,
+                        auth=auth,
+                        follow_redirects=follow_redirects,
                     ),
-                    no_op_request_handler=lambda: instrumentation_self._get_default_response(module, url_str),
-                    is_server_request=False,
+                    span_kind=OTelSpanKind.CLIENT,
                 )
-
-            # RECORD mode: Use handle_record_mode for proper is_pre_app_start handling
-            # handle_record_mode returns coroutine which we await
-            return await handle_record_mode(
-                original_function_call=original_call,
-                record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record_send_async(
-                    client_self,
-                    request,
-                    stream,
-                    is_pre_app_start,
-                    original_send,
-                    auth=auth,
-                    follow_redirects=follow_redirects,
-                ),
-                span_kind=OTelSpanKind.CLIENT,
-            )
+            finally:
+                calling_library_context.reset(context_token)
 
         # Apply patch
         module.AsyncClient.send = patched_send
