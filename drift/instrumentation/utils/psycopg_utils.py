@@ -8,6 +8,15 @@ import uuid
 from decimal import Decimal
 from typing import Any
 
+# Try to import psycopg Range type for deserialization support
+try:
+    from psycopg.types.range import Range as PsycopgRange
+
+    HAS_PSYCOPG_RANGE = True
+except ImportError:
+    HAS_PSYCOPG_RANGE = False
+    PsycopgRange = None  # type: ignore[misc, assignment]
+
 
 def deserialize_db_value(val: Any) -> Any:
     """Convert serialized values back to their original Python types.
@@ -40,6 +49,27 @@ def deserialize_db_value(val: Any) -> Any:
         # Check for timedelta tagged structure
         if "__timedelta__" in val and len(val) == 1:
             return dt.timedelta(seconds=val["__timedelta__"])
+        # Check for Range tagged structure (psycopg Range types)
+        if "__range__" in val and len(val) == 1:
+            range_data = val["__range__"]
+            if HAS_PSYCOPG_RANGE and PsycopgRange is not None:
+                if range_data.get("empty"):
+                    return PsycopgRange(empty=True)
+                # Recursively deserialize the lower and upper bounds
+                # (they may contain datetime or other serialized types)
+                lower = deserialize_db_value(range_data.get("lower"))
+                upper = deserialize_db_value(range_data.get("upper"))
+                bounds = range_data.get("bounds", "[)")
+                # Convert floats back to ints if they represent whole numbers
+                # This is needed because JSON doesn't distinguish int/float
+                if isinstance(lower, float) and lower.is_integer():
+                    lower = int(lower)
+                if isinstance(upper, float) and upper.is_integer():
+                    upper = int(upper)
+                return PsycopgRange(lower, upper, bounds)
+            else:
+                # If psycopg is not available, return the dict as-is
+                return range_data
         # Recursively deserialize dict values
         return {k: deserialize_db_value(v) for k, v in val.items()}
     elif isinstance(val, str):

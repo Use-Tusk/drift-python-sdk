@@ -982,10 +982,7 @@ def test_date_time_types():
 
 @app.route("/test/inet-cidr-types")
 def test_inet_cidr_types():
-    """Test PostgreSQL inet/cidr network types.
-
-    BUG INVESTIGATION: Network types may have serialization issues.
-    """
+    """Test PostgreSQL inet/cidr network types."""
     try:
         from ipaddress import IPv4Address, IPv4Network
 
