@@ -72,8 +72,10 @@ if __name__ == "__main__":
     # Test: NULL values handling (integrated into E2E suite)
     make_request("GET", "/test/null-values")
 
+    # Test: Transaction context manager
+    make_request("GET", "/test/transaction-context")
+
     # These still need investigation:
-    # make_request("GET", "/test/transaction-context")
     # make_request("GET", "/test/json-jsonb")
     # make_request("GET", "/test/array-types")
 
