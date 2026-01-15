@@ -733,10 +733,7 @@ def test_binary_format():
 
 @app.route("/test/null-values")
 def test_null_values():
-    """Test handling of NULL values in results.
-
-    BUG INVESTIGATION: NULL value serialization/deserialization may have issues.
-    """
+    """Test handling of NULL values in results."""
     try:
         with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
             # Create temp table with nullable columns

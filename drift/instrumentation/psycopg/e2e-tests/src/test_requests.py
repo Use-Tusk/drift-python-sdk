@@ -69,12 +69,7 @@ if __name__ == "__main__":
     make_request("GET", "/test/scalar-row-factory")
     make_request("GET", "/test/binary-format")
 
-    # =====================================================================
-    # PREVIOUSLY BUG-EXPOSING TEST ENDPOINTS
-    # See BUG_TRACKING.md for detailed analysis.
-    # =====================================================================
-
-    # Test 3: NULL values handling - FIXED (lazy capture mechanism)
+    # Test: NULL values handling (integrated into E2E suite)
     make_request("GET", "/test/null-values")
 
     # These still need investigation:
