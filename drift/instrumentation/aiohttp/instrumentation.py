@@ -44,6 +44,7 @@ from ...core.types import (
     SpanStatus,
     StatusCode,
     TuskDriftMode,
+    calling_library_context,
 )
 from ..base import InstrumentationBase
 from ..http import HttpSpanData, HttpTransformEngine
@@ -164,32 +165,41 @@ class AiohttpInstrumentation(InstrumentationBase):
             if sdk.mode == TuskDriftMode.DISABLED:
                 return await original_request(client_self, method, str_or_url, **kwargs)
 
-            async def original_call():
-                return await original_request(client_self, method, str_or_url, **kwargs)
+            # Set calling_library_context to suppress socket instrumentation warnings
+            # for internal socket calls (e.g., aiohappyeyeballs connection management)
+            context_token = calling_library_context.set("aiohttp")
+            try:
 
-            # REPLAY mode
-            if sdk.mode == TuskDriftMode.REPLAY:
-                return await handle_replay_mode(
-                    replay_mode_handler=lambda: instrumentation_self._handle_replay_request(
-                        sdk, module, method, url_str, **kwargs
+                async def original_call():
+                    return await original_request(client_self, method, str_or_url, **kwargs)
+
+                # REPLAY mode
+                if sdk.mode == TuskDriftMode.REPLAY:
+                    return await handle_replay_mode(
+                        replay_mode_handler=lambda: instrumentation_self._handle_replay_request(
+                            sdk, module, method, url_str, **kwargs
+                        ),
+                        no_op_request_handler=lambda: instrumentation_self._get_default_response(
+                            module, method, url_str
+                        ),
+                        is_server_request=False,
+                    )
+
+                # RECORD mode
+                return await handle_record_mode(
+                    original_function_call=original_call,
+                    record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record_request(
+                        client_self,
+                        method,
+                        str_or_url,
+                        is_pre_app_start,
+                        original_request,
+                        **kwargs,
                     ),
-                    no_op_request_handler=lambda: instrumentation_self._get_default_response(module, method, url_str),
-                    is_server_request=False,
+                    span_kind=OTelSpanKind.CLIENT,
                 )
-
-            # RECORD mode
-            return await handle_record_mode(
-                original_function_call=original_call,
-                record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record_request(
-                    client_self,
-                    method,
-                    str_or_url,
-                    is_pre_app_start,
-                    original_request,
-                    **kwargs,
-                ),
-                span_kind=OTelSpanKind.CLIENT,
-            )
+            finally:
+                calling_library_context.reset(context_token)
 
         # Apply patch
         module.ClientSession._request = patched_request

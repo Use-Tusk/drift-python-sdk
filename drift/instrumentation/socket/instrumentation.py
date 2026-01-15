@@ -35,8 +35,14 @@ class SocketInstrumentation(InstrumentationBase):
 
     Detection logic:
     - If spanKind == SERVER (inbound request context)
-    - AND callingLibrary != "ProtobufCommunicator" (not SDK's own communication)
+    - AND calling_library_context is not set (socket call is not from an instrumented library)
     - Then log warning and send alert to CLI
+
+    The calling_library_context is set by:
+    - ProtobufCommunicator: SDK's own socket communication to CLI
+    - HTTP client instrumentations (httpx, aiohttp, requests, urllib3): to suppress
+      warnings for internal socket calls (e.g., aiohappyeyeballs in aiohttp,
+      connection pool management in urllib3, etc.)
     """
 
     def __init__(self, mode: TuskDriftMode = TuskDriftMode.DISABLED, enabled: bool = True) -> None:
@@ -136,8 +142,12 @@ class SocketInstrumentation(InstrumentationBase):
 
         # Detect unpatched dependency:
         # - Must be in a SERVER span (inbound request context)
-        # - Must NOT be from ProtobufCommunicator
-        if span_kind == SpanKind.SERVER and calling_library != "ProtobufCommunicator":
+        # - Must NOT be from an instrumented library (calling_library_context is set)
+        # The calling_library_context is set by:
+        # - ProtobufCommunicator: SDK's own socket communication
+        # - HTTP client instrumentations (httpx, aiohttp, etc.): suppress warnings
+        #   for internal socket calls (e.g., aiohappyeyeballs in aiohttp)
+        if span_kind == SpanKind.SERVER and calling_library is None:
             self._log_unpatched_dependency(method_name, socket_self)
 
     def _log_unpatched_dependency(self, method_name: str, socket_self: Any) -> None:

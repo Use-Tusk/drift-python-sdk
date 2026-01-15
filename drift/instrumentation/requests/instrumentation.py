@@ -44,6 +44,7 @@ from ...core.types import (
     SpanStatus,
     StatusCode,
     TuskDriftMode,
+    calling_library_context,
 )
 from ..base import InstrumentationBase
 from ..http import HttpSpanData, HttpTransformEngine
@@ -122,28 +123,34 @@ class RequestsInstrumentation(InstrumentationBase):
             if sdk.mode == TuskDriftMode.DISABLED:
                 return original_send(session_self, request, **kwargs)
 
-            # Extract URL for default response handler
-            url = request.url
+            # Set calling_library_context to suppress socket instrumentation warnings
+            # for internal socket calls made by requests or its dependencies (urllib3)
+            context_token = calling_library_context.set("requests")
+            try:
+                # Extract URL for default response handler
+                url = request.url
 
-            def original_call():
-                return original_send(session_self, request, **kwargs)
+                def original_call():
+                    return original_send(session_self, request, **kwargs)
 
-            # REPLAY mode: Use handle_replay_mode for proper background request handling
-            if sdk.mode == TuskDriftMode.REPLAY:
-                return handle_replay_mode(
-                    replay_mode_handler=lambda: instrumentation_self._handle_replay_send(sdk, request, **kwargs),
-                    no_op_request_handler=lambda: instrumentation_self._get_default_response(url),
-                    is_server_request=False,
+                # REPLAY mode: Use handle_replay_mode for proper background request handling
+                if sdk.mode == TuskDriftMode.REPLAY:
+                    return handle_replay_mode(
+                        replay_mode_handler=lambda: instrumentation_self._handle_replay_send(sdk, request, **kwargs),
+                        no_op_request_handler=lambda: instrumentation_self._get_default_response(url),
+                        is_server_request=False,
+                    )
+
+                # RECORD mode: Use handle_record_mode for proper is_pre_app_start handling
+                return handle_record_mode(
+                    original_function_call=original_call,
+                    record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record_send(
+                        session_self, request, is_pre_app_start, original_send, **kwargs
+                    ),
+                    span_kind=OTelSpanKind.CLIENT,
                 )
-
-            # RECORD mode: Use handle_record_mode for proper is_pre_app_start handling
-            return handle_record_mode(
-                original_function_call=original_call,
-                record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record_send(
-                    session_self, request, is_pre_app_start, original_send, **kwargs
-                ),
-                span_kind=OTelSpanKind.CLIENT,
-            )
+            finally:
+                calling_library_context.reset(context_token)
 
         # Apply patch
         module.Session.send = patched_send
