@@ -980,6 +980,88 @@ def test_date_time_types():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/test/inet-cidr-types")
+def test_inet_cidr_types():
+    """Test PostgreSQL inet/cidr network types.
+
+    BUG INVESTIGATION: Network types may have serialization issues.
+    """
+    try:
+        from ipaddress import IPv4Address, IPv4Network
+
+        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
+            # Create temp table with network columns
+            cur.execute("""
+                CREATE TEMP TABLE network_test (
+                    id INT,
+                    ip_addr INET,
+                    network CIDR
+                )
+            """)
+
+            # Insert network data
+            cur.execute(
+                "INSERT INTO network_test VALUES (%s, %s, %s)",
+                (1, "192.168.1.100", "10.0.0.0/8")
+            )
+
+            # Query back
+            cur.execute("SELECT * FROM network_test WHERE id = 1")
+            row = cur.fetchone()
+            conn.commit()
+
+        return jsonify({
+            "id": row[0],
+            "ip_addr": str(row[1]) if row[1] else None,
+            "network": str(row[2]) if row[2] else None
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/range-types")
+def test_range_types():
+    """Test PostgreSQL range types.
+
+    BUG INVESTIGATION: Range types may have serialization issues.
+    """
+    try:
+        from psycopg.types.range import Range
+
+        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
+            # Create temp table with range columns
+            cur.execute("""
+                CREATE TEMP TABLE range_test (
+                    id INT,
+                    int_range INT4RANGE,
+                    ts_range TSRANGE
+                )
+            """)
+
+            # Insert range data
+            from datetime import datetime
+            int_range = Range(1, 10)
+            ts_range = Range(datetime(2024, 1, 1, 0, 0), datetime(2024, 12, 31, 23, 59))
+
+            cur.execute(
+                "INSERT INTO range_test VALUES (%s, %s, %s)",
+                (1, int_range, ts_range)
+            )
+
+            # Query back
+            cur.execute("SELECT * FROM range_test WHERE id = 1")
+            row = cur.fetchone()
+            conn.commit()
+
+        return jsonify({
+            "id": row[0],
+            "int_range": str(row[1]) if row[1] else None,
+            "ts_range": str(row[2]) if row[2] else None
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     sdk.mark_app_as_ready()
     app.run(host="0.0.0.0", port=8000, debug=False)

@@ -87,4 +87,9 @@ if __name__ == "__main__":
     make_request("GET", "/test/decimal-types")
     make_request("GET", "/test/date-time-types")
 
+    # Bug-exposing tests for network and range type serialization issues
+    # These tests expose serialization bugs with inet/cidr and range types
+    make_request("GET", "/test/inet-cidr-types")
+    make_request("GET", "/test/range-types")
+
     print_request_summary()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import datetime
+import ipaddress
 import uuid
 from decimal import Decimal
 from typing import Any
@@ -51,6 +52,20 @@ def serialize_value(val: Any) -> Any:
         return {"__decimal__": str(val)}
     elif isinstance(val, uuid.UUID):
         return {"__uuid__": str(val)}
+    elif isinstance(
+        val,
+        (
+            ipaddress.IPv4Address,
+            ipaddress.IPv6Address,
+            ipaddress.IPv4Interface,
+            ipaddress.IPv6Interface,
+            ipaddress.IPv4Network,
+            ipaddress.IPv6Network,
+        ),
+    ):
+        # Serialize ipaddress types to string for inet/cidr PostgreSQL columns
+        # These are returned by psycopg when querying inet and cidr columns
+        return str(val)
     elif isinstance(val, memoryview):
         # Convert memoryview to bytes first, then serialize
         return _serialize_bytes(bytes(val))
