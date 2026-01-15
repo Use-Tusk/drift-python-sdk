@@ -7,8 +7,9 @@ without a real PostgreSQL database connection during replay.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ...core.drift_sdk import TuskDrift
@@ -217,7 +218,7 @@ class MockCursor:
     @property
     def statusmessage(self):
         """Return the mock status message if set, otherwise None."""
-        return getattr(self, '_mock_statusmessage', None)
+        return getattr(self, "_mock_statusmessage", None)
 
     def execute(self, query, params=None, **kwargs):
         """Will be replaced by instrumentation."""

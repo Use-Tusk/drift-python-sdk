@@ -447,9 +447,7 @@ class Psycopg2Instrumentation(InstrumentationBase):
             raise RuntimeError("Error creating span in replay mode")
 
         with SpanUtils.with_span(span_info):
-            mock_result = self._try_get_mock(
-                sdk, query_str, params, span_info.trace_id, span_info.span_id
-            )
+            mock_result = self._try_get_mock(sdk, query_str, params, span_info.trace_id, span_info.span_id)
 
             if mock_result is None:
                 is_pre_app_start = not sdk.app_ready

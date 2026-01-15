@@ -5,7 +5,8 @@ These wrappers intercept operations to capture data for recording.
 
 from __future__ import annotations
 
-from typing import Any, Iterator
+from collections.abc import Iterator
+from typing import Any
 
 
 class TracedCopyWrapper:

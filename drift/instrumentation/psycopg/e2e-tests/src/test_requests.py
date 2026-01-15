@@ -78,16 +78,12 @@ if __name__ == "__main__":
     # JSON/JSONB and array types tests
     make_request("GET", "/test/json-jsonb")
     make_request("GET", "/test/array-types")
-
-    # Bug-exposing tests - kept for regression testing
     make_request("GET", "/test/cursor-set-result")
 
-    # Bug-exposing tests for parameter serialization issues
     # These tests expose hash mismatch bugs with Decimal and date/time types
     make_request("GET", "/test/decimal-types")
     make_request("GET", "/test/date-time-types")
 
-    # Bug-exposing tests for network and range type serialization issues
     # These tests expose serialization bugs with inet/cidr and range types
     make_request("GET", "/test/inet-cidr-types")
     make_request("GET", "/test/range-types")

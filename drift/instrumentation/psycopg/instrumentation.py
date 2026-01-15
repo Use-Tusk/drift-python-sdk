@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import weakref
+from collections.abc import Iterator
 from contextlib import contextmanager
 from types import ModuleType
-from typing import Any, Iterator
+from typing import Any
 
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind as OTelSpanKind
@@ -52,10 +53,10 @@ class _CursorInstrumentationMixin:
     @property
     def rownumber(self):
         # In captured mode (after fetchall in _finalize_query_span), return tracked index
-        if hasattr(self, '_tusk_rows') and self._tusk_rows is not None:
+        if hasattr(self, "_tusk_rows") and self._tusk_rows is not None:
             return self._tusk_index
         # In replay mode with mock data, return mock index
-        if hasattr(self, '_mock_rows') and self._mock_rows is not None:
+        if hasattr(self, "_mock_rows") and self._mock_rows is not None:
             return self._mock_index
         # Otherwise, return real cursor's rownumber
         return super().rownumber
@@ -63,7 +64,7 @@ class _CursorInstrumentationMixin:
     @property
     def statusmessage(self):
         # In replay mode with mock data, return mock statusmessage
-        if hasattr(self, '_mock_statusmessage'):
+        if hasattr(self, "_mock_statusmessage"):
             return self._mock_statusmessage
         # Otherwise, return real cursor's statusmessage
         return super().statusmessage
@@ -71,20 +72,20 @@ class _CursorInstrumentationMixin:
     def __iter__(self):
         # Support direct cursor iteration (for row in cursor)
         # In replay mode with mock data (_mock_rows) or record mode with captured data (_tusk_rows)
-        if hasattr(self, '_mock_rows') and self._mock_rows is not None:
+        if hasattr(self, "_mock_rows") and self._mock_rows is not None:
             return self
-        if hasattr(self, '_tusk_rows') and self._tusk_rows is not None:
+        if hasattr(self, "_tusk_rows") and self._tusk_rows is not None:
             return self
         return super().__iter__()
 
     def __next__(self):
         # In replay mode with mock data, iterate over mock rows
-        if hasattr(self, '_mock_rows') and self._mock_rows is not None:
+        if hasattr(self, "_mock_rows") and self._mock_rows is not None:
             if self._mock_index < len(self._mock_rows):
                 row = self._mock_rows[self._mock_index]
                 self._mock_index += 1
                 # Apply row transformation if fetchone is patched
-                if hasattr(self, 'fetchone') and callable(self.fetchone):
+                if hasattr(self, "fetchone") and callable(self.fetchone):
                     # Reset index, get transformed row, restore index
                     self._mock_index -= 1
                     result = self.fetchone()
@@ -92,7 +93,7 @@ class _CursorInstrumentationMixin:
                 return tuple(row) if isinstance(row, list) else row
             raise StopIteration
         # In record mode with captured data, iterate over stored rows
-        if hasattr(self, '_tusk_rows') and self._tusk_rows is not None:
+        if hasattr(self, "_tusk_rows") and self._tusk_rows is not None:
             if self._tusk_index < len(self._tusk_rows):
                 row = self._tusk_rows[self._tusk_index]
                 self._tusk_index += 1
@@ -193,15 +194,16 @@ class PsycopgInstrumentation(InstrumentationBase):
         instrumentation = self
 
         # Store originals for potential unpatch
-        self._original_pipeline_sync = getattr(Pipeline, 'sync', None)
-        self._original_pipeline_exit = getattr(Pipeline, '__exit__', None)
+        self._original_pipeline_sync = getattr(Pipeline, "sync", None)
+        self._original_pipeline_exit = getattr(Pipeline, "__exit__", None)
 
         if self._original_pipeline_sync:
+
             def patched_sync(pipeline_self):
                 """Patched Pipeline.sync that finalizes pending spans."""
                 result = instrumentation._original_pipeline_sync(pipeline_self)
                 # _conn is the connection associated with the pipeline
-                conn = getattr(pipeline_self, '_conn', None)
+                conn = getattr(pipeline_self, "_conn", None)
                 if conn:
                     instrumentation._finalize_pending_pipeline_spans(conn)
                 return result
@@ -210,13 +212,12 @@ class PsycopgInstrumentation(InstrumentationBase):
             logger.debug("psycopg.Pipeline.sync instrumented")
 
         if self._original_pipeline_exit:
+
             def patched_exit(pipeline_self, exc_type, exc_val, exc_tb):
                 """Patched Pipeline.__exit__ that finalizes any remaining spans."""
-                result = instrumentation._original_pipeline_exit(
-                    pipeline_self, exc_type, exc_val, exc_tb
-                )
+                result = instrumentation._original_pipeline_exit(pipeline_self, exc_type, exc_val, exc_tb)
                 # Finalize any remaining pending spans (handles implicit sync on exit)
-                conn = getattr(pipeline_self, '_conn', None)
+                conn = getattr(pipeline_self, "_conn", None)
                 if conn:
                     instrumentation._finalize_pending_pipeline_spans(conn)
                 return result
@@ -335,9 +336,7 @@ class PsycopgInstrumentation(InstrumentationBase):
             raise RuntimeError("Error creating span in replay mode")
 
         with SpanUtils.with_span(span_info):
-            mock_result = self._try_get_mock(
-                sdk, query_str, params, span_info.trace_id, span_info.span_id
-            )
+            mock_result = self._try_get_mock(sdk, query_str, params, span_info.trace_id, span_info.span_id)
 
             if mock_result is None:
                 is_pre_app_start = not sdk.app_ready
@@ -366,9 +365,9 @@ class PsycopgInstrumentation(InstrumentationBase):
         # Reset cursor state from any previous execute() on this cursor.
         # Delete instance attribute overrides to expose original class methods.
         # This is safer than saving/restoring bound methods which can become stale.
-        if hasattr(cursor, '_tusk_patched'):
+        if hasattr(cursor, "_tusk_patched"):
             # Remove patched instance attributes to expose class methods
-            for attr in ('fetchone', 'fetchmany', 'fetchall', 'scroll'):
+            for attr in ("fetchone", "fetchmany", "fetchall", "scroll"):
                 if attr in cursor.__dict__:
                     delattr(cursor, attr)
             cursor._tusk_rows = None
@@ -433,9 +432,7 @@ class PsycopgInstrumentation(InstrumentationBase):
 
         if sdk.mode == TuskDriftMode.REPLAY:
             return handle_replay_mode(
-                replay_mode_handler=lambda: self._replay_executemany(
-                    cursor, sdk, query_str, params_list, returning
-                ),
+                replay_mode_handler=lambda: self._replay_executemany(cursor, sdk, query_str, params_list, returning),
                 no_op_request_handler=lambda: self._noop_execute(cursor),
                 is_server_request=False,
             )
@@ -464,9 +461,7 @@ class PsycopgInstrumentation(InstrumentationBase):
             if returning:
                 params_for_mock["_returning"] = True
 
-            mock_result = self._try_get_mock(
-                sdk, query_str, params_for_mock, span_info.trace_id, span_info.span_id
-            )
+            mock_result = self._try_get_mock(sdk, query_str, params_for_mock, span_info.trace_id, span_info.span_id)
 
             if mock_result is None:
                 is_pre_app_start = not sdk.app_ready
@@ -609,9 +604,7 @@ class PsycopgInstrumentation(InstrumentationBase):
             raise RuntimeError("Error creating span in replay mode")
 
         with SpanUtils.with_span(span_info):
-            mock_result = self._try_get_mock(
-                sdk, query_str, params, span_info.trace_id, span_info.span_id
-            )
+            mock_result = self._try_get_mock(sdk, query_str, params, span_info.trace_id, span_info.span_id)
 
             if mock_result is None:
                 is_pre_app_start = not sdk.app_ready
@@ -677,9 +670,7 @@ class PsycopgInstrumentation(InstrumentationBase):
         except Exception as e:
             logger.error(f"Error finalizing stream span: {e}")
 
-    def _traced_copy(
-        self, cursor: Any, original_copy: Any, sdk: TuskDrift, query: str, params=None, **kwargs
-    ) -> Any:
+    def _traced_copy(self, cursor: Any, original_copy: Any, sdk: TuskDrift, query: str, params=None, **kwargs) -> Any:
         """Traced cursor.copy method - returns a context manager."""
         if sdk.mode == TuskDriftMode.DISABLED:
             return original_copy(query, params, **kwargs)
@@ -751,9 +742,7 @@ class PsycopgInstrumentation(InstrumentationBase):
             raise RuntimeError("Error creating span in replay mode")
 
         with SpanUtils.with_span(span_info):
-            mock_result = self._try_get_copy_mock(
-                sdk, query_str, span_info.trace_id, span_info.span_id
-            )
+            mock_result = self._try_get_copy_mock(sdk, query_str, span_info.trace_id, span_info.span_id)
 
             if mock_result is None:
                 is_pre_app_start = not sdk.app_ready
@@ -920,6 +909,7 @@ class PsycopgInstrumentation(InstrumentationBase):
         Returns:
             Tuple of (fetchone, fetchmany, fetchall) functions
         """
+
         def fetchone():
             rows = getattr(cursor, rows_attr)
             idx = getattr(cursor, index_attr)
@@ -962,6 +952,7 @@ class PsycopgInstrumentation(InstrumentationBase):
         Returns:
             scroll function
         """
+
         def scroll(value: int, mode: str = "relative") -> None:
             rows = getattr(cursor, rows_attr)
             idx = getattr(cursor, index_attr)
@@ -992,11 +983,11 @@ class PsycopgInstrumentation(InstrumentationBase):
         Returns:
             The row_factory or None if not found
         """
-        row_factory = getattr(cursor, 'row_factory', None)
+        row_factory = getattr(cursor, "row_factory", None)
         if row_factory is None:
-            conn = getattr(cursor, 'connection', None)
+            conn = getattr(cursor, "connection", None)
             if conn:
-                row_factory = getattr(conn, 'row_factory', None)
+                row_factory = getattr(conn, "row_factory", None)
         return row_factory
 
     def _set_cursor_description(self, cursor: Any, description_data: list | None) -> None:
@@ -1031,7 +1022,8 @@ class PsycopgInstrumentation(InstrumentationBase):
         RowClass = None
         if row_factory_type in ("namedtuple", "class") and column_names:
             from collections import namedtuple
-            RowClass = namedtuple('Row', column_names)
+
+            RowClass = namedtuple("Row", column_names)
 
         def transform_row(row):
             """Transform raw row data according to row factory type."""
@@ -1041,7 +1033,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                 return row[0] if isinstance(row, list) and len(row) > 0 else row
             values = tuple(row) if isinstance(row, list) else row
             if row_factory_type == "dict" and column_names:
-                return dict(zip(column_names, values))
+                return dict(zip(column_names, values, strict=False))
             elif row_factory_type in ("namedtuple", "class") and RowClass is not None:
                 return RowClass(*values)
             return values
@@ -1088,20 +1080,20 @@ class PsycopgInstrumentation(InstrumentationBase):
             return "tuple"
 
         # Check by function/class name
-        factory_name = getattr(row_factory, '__name__', '')
+        factory_name = getattr(row_factory, "__name__", "")
         if not factory_name:
             factory_name = str(type(row_factory).__name__)
 
         factory_name_lower = factory_name.lower()
-        if 'dict' in factory_name_lower:
+        if "dict" in factory_name_lower:
             return "dict"
-        elif 'namedtuple' in factory_name_lower:
+        elif "namedtuple" in factory_name_lower:
             return "namedtuple"
-        elif 'kwargs' in factory_name_lower:
+        elif "kwargs" in factory_name_lower:
             return "kwargs"
-        elif 'scalar' in factory_name_lower:
+        elif "scalar" in factory_name_lower:
             return "scalar"
-        elif 'class' in factory_name_lower:
+        elif "class" in factory_name_lower:
             return "class"
 
         return "tuple"
@@ -1112,20 +1104,20 @@ class PsycopgInstrumentation(InstrumentationBase):
         In psycopg3, when conn.pipeline() is active, connection._pipeline is set.
         """
         try:
-            conn = getattr(cursor, 'connection', None)
+            conn = getattr(cursor, "connection", None)
             if conn is None:
                 return False
             # MockConnection doesn't have real pipeline mode
             if isinstance(conn, MockConnection):
                 return False
-            pipeline = getattr(conn, '_pipeline', None)
+            pipeline = getattr(conn, "_pipeline", None)
             return pipeline is not None
         except Exception:
             return False
 
     def _get_connection_from_cursor(self, cursor: Any) -> Any:
         """Get the connection object from a cursor."""
-        return getattr(cursor, 'connection', None)
+        return getattr(cursor, "connection", None)
 
     def _add_pending_pipeline_span(
         self,
@@ -1139,12 +1131,14 @@ class PsycopgInstrumentation(InstrumentationBase):
         if connection not in self._pending_pipeline_spans:
             self._pending_pipeline_spans[connection] = []
 
-        self._pending_pipeline_spans[connection].append({
-            'span_info': span_info,
-            'cursor': cursor,
-            'query': query,
-            'params': params,
-        })
+        self._pending_pipeline_spans[connection].append(
+            {
+                "span_info": span_info,
+                "cursor": cursor,
+                "query": query,
+                "params": params,
+            }
+        )
         logger.debug(f"[PIPELINE] Deferred span for query: {query[:50]}...")
 
     def _finalize_pending_pipeline_spans(self, connection: Any) -> None:
@@ -1156,10 +1150,10 @@ class PsycopgInstrumentation(InstrumentationBase):
         logger.debug(f"[PIPELINE] Finalizing {len(pending)} pending pipeline spans")
 
         for item in pending:
-            span_info = item['span_info']
-            cursor = item['cursor']
-            query = item['query']
-            params = item['params']
+            span_info = item["span_info"]
+            cursor = item["cursor"]
+            query = item["query"]
+            params = item["params"]
 
             try:
                 span_finalized = self._finalize_query_span(span_info.span, cursor, query, params, error=None)
@@ -1258,14 +1252,12 @@ class PsycopgInstrumentation(InstrumentationBase):
         cursor._mock_index = 0  # pyright: ignore[reportAttributeAccessIssue]
 
         # Use helper methods to create fetch and scroll methods
-        fetchone, fetchmany, fetchall = self._create_fetch_methods(
-            cursor, '_mock_rows', '_mock_index', transform_row
-        )
+        fetchone, fetchmany, fetchall = self._create_fetch_methods(cursor, "_mock_rows", "_mock_index", transform_row)
         cursor.fetchone = fetchone  # pyright: ignore[reportAttributeAccessIssue]
         cursor.fetchmany = fetchmany  # pyright: ignore[reportAttributeAccessIssue]
         cursor.fetchall = fetchall  # pyright: ignore[reportAttributeAccessIssue]
 
-        cursor.scroll = self._create_scroll_method(cursor, '_mock_rows', '_mock_index')  # pyright: ignore[reportAttributeAccessIssue]
+        cursor.scroll = self._create_scroll_method(cursor, "_mock_rows", "_mock_index")  # pyright: ignore[reportAttributeAccessIssue]
 
         # Note: __iter__ and __next__ are handled at the class level in InstrumentedCursor
         # and MockCursor classes, as Python looks up special methods on the type, not instance
@@ -1327,7 +1319,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                 return row
             values = tuple(row) if isinstance(row, list) else row
             if row_factory_type == "dict" and col_names:
-                return dict(zip(col_names, values))
+                return dict(zip(col_names, values, strict=False))
             elif row_factory_type == "namedtuple" and RowClass is not None:
                 return RowClass(*values)
             return values
@@ -1345,8 +1337,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                 description_data = result_set.get("description")
                 if description_data:
                     desc = [
-                        (col["name"], col.get("type_code"), None, None, None, None, None)
-                        for col in description_data
+                        (col["name"], col.get("type_code"), None, None, None, None, None) for col in description_data
                     ]
                     try:
                         cursor._tusk_description = desc  # pyright: ignore[reportAttributeAccessIssue]
@@ -1428,6 +1419,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                         cursor._mock_index += 1  # pyright: ignore[reportAttributeAccessIssue]
                         return transform_row(row, cn, RC)
                     return None
+
                 return fetchone
 
             def make_fetchmany_replay(cn, RC):
@@ -1441,13 +1433,15 @@ class PsycopgInstrumentation(InstrumentationBase):
                         else:
                             break
                     return rows
+
                 return fetchmany
 
             def make_fetchall_replay(cn, RC):
                 def fetchall():
-                    rows = cursor._mock_rows[cursor._mock_index:]  # pyright: ignore[reportAttributeAccessIssue]
+                    rows = cursor._mock_rows[cursor._mock_index :]  # pyright: ignore[reportAttributeAccessIssue]
                     cursor._mock_index = len(cursor._mock_rows)  # pyright: ignore[reportAttributeAccessIssue]
                     return [transform_row(row, cn, RC) for row in rows]
+
                 return fetchall
 
             cursor.fetchone = make_fetchone_replay(first_column_names, FirstRowClass)  # pyright: ignore[reportAttributeAccessIssue]
@@ -1496,9 +1490,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                 """Navigate to a specific result set by index (supports negative indices)."""
                 num_results = len(cursor._mock_result_sets)  # pyright: ignore[reportAttributeAccessIssue]
                 if not -num_results <= index < num_results:
-                    raise IndexError(
-                        f"index {index} out of range: {num_results} result(s) available"
-                    )
+                    raise IndexError(f"index {index} out of range: {num_results} result(s) available")
                 if index < 0:
                     index = num_results + index
 
@@ -1567,7 +1559,6 @@ class PsycopgInstrumentation(InstrumentationBase):
             else:
                 # Get query results and capture for replay
                 try:
-                    rows = []
                     description = None
                     row_factory_type = "tuple"  # default
 
@@ -1584,11 +1575,11 @@ class PsycopgInstrumentation(InstrumentationBase):
                         ]
 
                         # Get row factory from cursor or connection
-                        row_factory = getattr(cursor, 'row_factory', None)
+                        row_factory = getattr(cursor, "row_factory", None)
                         if row_factory is None:
-                            conn = getattr(cursor, 'connection', None)
+                            conn = getattr(cursor, "connection", None)
                             if conn:
-                                row_factory = getattr(conn, 'row_factory', None)
+                                row_factory = getattr(conn, "row_factory", None)
 
                         # Detect row factory type BEFORE processing rows
                         row_factory_type = self._detect_row_factory_type(row_factory)
@@ -1617,7 +1608,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                     }
 
                     # Capture statusmessage for replay
-                    if hasattr(cursor, 'statusmessage') and cursor.statusmessage is not None:
+                    if hasattr(cursor, "statusmessage") and cursor.statusmessage is not None:
                         output_value["statusmessage"] = cursor.statusmessage
 
                 except Exception as e:
@@ -1646,13 +1637,11 @@ class PsycopgInstrumentation(InstrumentationBase):
         # (not instance methods which might already be patched)
         cursor_class = type(cursor)
         original_fetchall = cursor_class.fetchall
-        original_fetchone = cursor_class.fetchone
-        original_fetchmany = cursor_class.fetchmany
-        original_scroll = cursor_class.scroll if hasattr(cursor_class, 'scroll') else None
+        original_scroll = cursor_class.scroll if hasattr(cursor_class, "scroll") else None
 
         def do_lazy_capture():
             """Perform the actual capture - called on first fetch."""
-            if hasattr(cursor, '_tusk_rows') and cursor._tusk_rows is not None:
+            if hasattr(cursor, "_tusk_rows") and cursor._tusk_rows is not None:
                 return  # Already captured
 
             try:
@@ -1674,12 +1663,12 @@ class PsycopgInstrumentation(InstrumentationBase):
                         rows.append(row)
                     elif row_factory_type == "scalar":
                         rows.append([row])
-                    elif row_factory_type == "class" or hasattr(row, '__dataclass_fields__'):
+                    elif row_factory_type == "class" or hasattr(row, "__dataclass_fields__"):
                         # dataclass (from class_row): extract values by attribute name
                         rows.append([getattr(row, col, None) for col in column_names])
                     elif isinstance(row, dict):
                         rows.append([row.get(col) for col in column_names])
-                    elif hasattr(row, '_fields'):
+                    elif hasattr(row, "_fields"):
                         # namedtuple: extract values by field name
                         rows.append([getattr(row, col, None) for col in column_names])
                     else:
@@ -1704,7 +1693,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                         serialized_rows = [[serialize_value(col) for col in row] for row in rows]
                     output_value["rows"] = serialized_rows
 
-                if hasattr(cursor, 'statusmessage') and cursor.statusmessage is not None:
+                if hasattr(cursor, "statusmessage") and cursor.statusmessage is not None:
                     output_value["statusmessage"] = cursor.statusmessage
 
                 instrumentation._set_span_attributes(span, input_value, output_value)
@@ -1718,7 +1707,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                 logger.error(f"Error in lazy capture: {e}")
                 # Try to end span even on error
                 try:
-                    span = cursor._tusk_lazy_span  # pyright: ignore[reportAttributeAccessIssue]
+                    span = cursor._tusk_lazy_span
                     span.set_status(Status(OTelStatusCode.ERROR, str(e)))
                     span.end()
                 except Exception:
@@ -1726,8 +1715,14 @@ class PsycopgInstrumentation(InstrumentationBase):
 
             finally:
                 # Clean up lazy capture attributes
-                for attr in ('_tusk_lazy_span', '_tusk_lazy_input_value', '_tusk_lazy_description',
-                            '_tusk_lazy_row_factory_type', '_tusk_lazy_column_names', '_tusk_lazy_instrumentation'):
+                for attr in (
+                    "_tusk_lazy_span",
+                    "_tusk_lazy_input_value",
+                    "_tusk_lazy_description",
+                    "_tusk_lazy_row_factory_type",
+                    "_tusk_lazy_column_names",
+                    "_tusk_lazy_instrumentation",
+                ):
                     if hasattr(cursor, attr):
                         try:
                             delattr(cursor, attr)
@@ -1797,7 +1792,6 @@ class PsycopgInstrumentation(InstrumentationBase):
         be replayed with multiple result set iteration.
         """
         try:
-
             # Build input value
             input_value = {
                 "query": query.strip(),
@@ -1848,7 +1842,9 @@ class PsycopgInstrumentation(InstrumentationBase):
 
                         for row in raw_rows:
                             if isinstance(row, dict):
-                                rows.append([row.get(col) for col in column_names] if column_names else list(row.values()))
+                                rows.append(
+                                    [row.get(col) for col in column_names] if column_names else list(row.values())
+                                )
                             elif hasattr(row, "_fields"):
                                 rows.append(
                                     [getattr(row, col, None) for col in column_names] if column_names else list(row)
@@ -1927,6 +1923,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                                     cursor._tusk_index += 1  # pyright: ignore[reportAttributeAccessIssue]
                                     return row
                                 return None
+
                             return patched_fetchone
 
                         def make_patched_fetchmany_record():
@@ -1934,6 +1931,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                                 result = cursor._tusk_rows[cursor._tusk_index : cursor._tusk_index + size]  # pyright: ignore[reportAttributeAccessIssue]
                                 cursor._tusk_index += len(result)  # pyright: ignore[reportAttributeAccessIssue]
                                 return result
+
                             return patched_fetchmany
 
                         def make_patched_fetchall_record():
@@ -1941,6 +1939,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                                 result = cursor._tusk_rows[cursor._tusk_index :]  # pyright: ignore[reportAttributeAccessIssue]
                                 cursor._tusk_index = len(cursor._tusk_rows)  # pyright: ignore[reportAttributeAccessIssue]
                                 return result
+
                             return patched_fetchall
 
                         cursor.fetchone = make_patched_fetchone_record()  # pyright: ignore[reportAttributeAccessIssue]
@@ -1970,9 +1969,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                         """Navigate to a specific result set by index (supports negative indices)."""
                         num_results = len(cursor._tusk_result_sets)  # pyright: ignore[reportAttributeAccessIssue]
                         if not -num_results <= index < num_results:
-                            raise IndexError(
-                                f"index {index} out of range: {num_results} result(s) available"
-                            )
+                            raise IndexError(f"index {index} out of range: {num_results} result(s) available")
                         if index < 0:
                             index = num_results + index
 

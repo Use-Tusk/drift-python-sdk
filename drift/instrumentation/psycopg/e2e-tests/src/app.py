@@ -1,6 +1,7 @@
 """Flask app with Psycopg (v3) operations for e2e testing."""
 
 import os
+from datetime import UTC
 
 import psycopg
 from flask import Flask, jsonify, request
@@ -143,6 +144,7 @@ def db_transaction():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 @app.route("/test/cursor-stream")
 def test_cursor_stream():
     """Test cursor.stream() - generator-based result streaming.
@@ -159,6 +161,7 @@ def test_cursor_stream():
         return jsonify({"count": len(results), "data": results})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/test/server-cursor")
 def test_server_cursor():
@@ -179,6 +182,7 @@ def test_server_cursor():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 @app.route("/test/copy-to")
 def test_copy_to():
     """Test cursor.copy() with COPY TO - bulk data export.
@@ -194,10 +198,11 @@ def test_copy_to():
                     # Handle both bytes and memoryview
                     if isinstance(row, memoryview):
                         row = bytes(row)
-                    output.append(row.decode('utf-8').strip())
+                    output.append(row.decode("utf-8").strip())
         return jsonify({"count": len(output), "data": output})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/test/multiple-queries")
 def test_multiple_queries():
@@ -224,6 +229,7 @@ def test_multiple_queries():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 @app.route("/test/pipeline-mode")
 def test_pipeline_mode():
     """Test pipeline mode - batched operations.
@@ -243,12 +249,10 @@ def test_pipeline_mode():
                 rows1 = cur1.fetchall()
                 count = cur2.fetchone()[0]
 
-        return jsonify({
-            "rows": [{"id": r[0], "name": r[1]} for r in rows1],
-            "count": count
-        })
+        return jsonify({"rows": [{"id": r[0], "name": r[1]} for r in rows1], "count": count})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/test/dict-row-factory")
 def test_dict_row_factory():
@@ -265,10 +269,12 @@ def test_dict_row_factory():
                 cur.execute("SELECT id, name, email FROM users ORDER BY id LIMIT 3")
                 rows = cur.fetchall()
 
-        return jsonify({
-            "count": len(rows),
-            "data": rows  # Already dictionaries
-        })
+        return jsonify(
+            {
+                "count": len(rows),
+                "data": rows,  # Already dictionaries
+            }
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -288,12 +294,10 @@ def test_namedtuple_row_factory():
                 rows = cur.fetchall()
 
         # Convert named tuples to dicts for JSON serialization
-        return jsonify({
-            "count": len(rows),
-            "data": [{"id": r.id, "name": r.name, "email": r.email} for r in rows]
-        })
+        return jsonify({"count": len(rows), "data": [{"id": r.id, "name": r.name, "email": r.email} for r in rows]})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/test/cursor-iteration")
 def test_cursor_iteration():
@@ -310,12 +314,10 @@ def test_cursor_iteration():
             for row in cur:
                 results.append({"id": row[0], "name": row[1]})
 
-        return jsonify({
-            "count": len(results),
-            "data": results
-        })
+        return jsonify({"count": len(results), "data": results})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/test/executemany-returning")
 def test_executemany_returning():
@@ -330,11 +332,7 @@ def test_executemany_returning():
 
             # Use executemany with returning
             params = [("Batch User 1",), ("Batch User 2",), ("Batch User 3",)]
-            cur.executemany(
-                "INSERT INTO batch_test (name) VALUES (%s) RETURNING id, name",
-                params,
-                returning=True
-            )
+            cur.executemany("INSERT INTO batch_test (name) VALUES (%s) RETURNING id, name", params, returning=True)
 
             # Fetch results from each batch
             results = []
@@ -345,12 +343,10 @@ def test_executemany_returning():
 
             conn.commit()
 
-        return jsonify({
-            "count": len(results),
-            "data": results
-        })
+        return jsonify({"count": len(results), "data": results})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/test/rownumber")
 def test_rownumber():
@@ -375,21 +371,14 @@ def test_rownumber():
             cur.fetchmany(2)
             positions.append({"after_fetchmany_2": cur.rownumber})
 
-        return jsonify({
-            "positions": positions
-        })
+        return jsonify({"positions": positions})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 @app.route("/test/statusmessage")
 def test_statusmessage():
-    """Test cursor.statusmessage property.
-
-    BUG: The statusmessage property is not captured during RECORD mode
-    and not mocked during REPLAY mode. During RECORD, statusmessage
-    returns the command status (e.g., "SELECT 5", "INSERT 0 1"), but
-    during REPLAY it returns null because this property is not tracked.
-    """
+    """Test cursor.statusmessage property."""
     try:
         with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
             # SELECT should return something like "SELECT 5"
@@ -399,20 +388,17 @@ def test_statusmessage():
 
             # INSERT should return something like "INSERT 0 1"
             cur.execute(
-                "INSERT INTO users (name, email) VALUES (%s, %s) RETURNING id",
-                ("StatusTest", "status@test.com")
+                "INSERT INTO users (name, email) VALUES (%s, %s) RETURNING id", ("StatusTest", "status@test.com")
             )
             insert_status = cur.statusmessage
             cur.fetchone()
 
             conn.rollback()  # Don't actually insert
 
-        return jsonify({
-            "select_status": select_status,
-            "insert_status": insert_status
-        })
+        return jsonify({"select_status": select_status, "insert_status": insert_status})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/test/nextset")
 def test_nextset():
@@ -429,7 +415,7 @@ def test_nextset():
             cur.executemany(
                 "INSERT INTO nextset_test (val) VALUES (%s) RETURNING id, val",
                 [("First",), ("Second",), ("Third",)],
-                returning=True
+                returning=True,
             )
 
             # Use nextset to iterate through result sets
@@ -443,12 +429,10 @@ def test_nextset():
 
             conn.commit()
 
-        return jsonify({
-            "count": len(results),
-            "data": results
-        })
+        return jsonify({"count": len(results), "data": results})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/test/cursor-scroll")
 def test_cursor_scroll():
@@ -464,18 +448,21 @@ def test_cursor_scroll():
             first = cur.fetchone()
 
             # Scroll back to start
-            cur.scroll(0, mode='absolute')
+            cur.scroll(0, mode="absolute")
 
             # Fetch first row again
             first_again = cur.fetchone()
 
-        return jsonify({
-            "first": {"id": first[0], "name": first[1]} if first else None,
-            "first_again": {"id": first_again[0], "name": first_again[1]} if first_again else None,
-            "match": first == first_again
-        })
+        return jsonify(
+            {
+                "first": {"id": first[0], "name": first[1]} if first else None,
+                "first_again": {"id": first_again[0], "name": first_again[1]} if first_again else None,
+                "match": first == first_again,
+            }
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/test/server-cursor-scroll")
 def test_server_cursor_scroll():
@@ -493,18 +480,21 @@ def test_server_cursor_scroll():
                 first = cur.fetchone()
 
                 # Scroll back to start
-                cur.scroll(0, mode='absolute')
+                cur.scroll(0, mode="absolute")
 
                 # Fetch first row again
                 first_again = cur.fetchone()
 
-        return jsonify({
-            "first": {"id": first[0], "name": first[1]} if first else None,
-            "first_again": {"id": first_again[0], "name": first_again[1]} if first_again else None,
-            "match": first == first_again
-        })
+        return jsonify(
+            {
+                "first": {"id": first[0], "name": first[1]} if first else None,
+                "first_again": {"id": first_again[0], "name": first_again[1]} if first_again else None,
+                "match": first == first_again,
+            }
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/test/cursor-reuse")
 def test_cursor_reuse():
@@ -526,13 +516,16 @@ def test_cursor_reuse():
             cur.execute("SELECT COUNT(*) FROM users")
             count = cur.fetchone()[0]
 
-        return jsonify({
-            "row1": {"id": row1[0], "name": row1[1]} if row1 else None,
-            "row2": {"id": row2[0], "name": row2[1]} if row2 else None,
-            "count": count
-        })
+        return jsonify(
+            {
+                "row1": {"id": row1[0], "name": row1[1]} if row1 else None,
+                "row2": {"id": row2[0], "name": row2[1]} if row2 else None,
+                "count": count,
+            }
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/test/sql-composed")
 def test_sql_composed():
@@ -542,22 +535,16 @@ def test_sql_composed():
 
         with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
             table = sql.Identifier("users")
-            columns = sql.SQL(", ").join([
-                sql.Identifier("id"),
-                sql.Identifier("name"),
-                sql.Identifier("email")
-            ])
+            columns = sql.SQL(", ").join([sql.Identifier("id"), sql.Identifier("name"), sql.Identifier("email")])
 
             query = sql.SQL("SELECT {} FROM {} ORDER BY id LIMIT 3").format(columns, table)
             cur.execute(query)
             rows = cur.fetchall()
 
-        return jsonify({
-            "count": len(rows),
-            "data": [{"id": r[0], "name": r[1], "email": r[2]} for r in rows]
-        })
+        return jsonify({"count": len(rows), "data": [{"id": r[0], "name": r[1], "email": r[2]} for r in rows]})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/test/binary-uuid")
 def test_binary_uuid():
@@ -574,10 +561,7 @@ def test_binary_uuid():
 
             # Insert a UUID
             test_uuid = uuid.uuid4()
-            cur.execute(
-                "INSERT INTO uuid_test (id, name) VALUES (%s, %s) RETURNING id, name",
-                (test_uuid, "UUID Test")
-            )
+            cur.execute("INSERT INTO uuid_test (id, name) VALUES (%s, %s) RETURNING id, name", (test_uuid, "UUID Test"))
             inserted = cur.fetchone()
 
             # Query it back
@@ -586,13 +570,16 @@ def test_binary_uuid():
 
             conn.commit()
 
-        return jsonify({
-            "inserted_uuid": str(inserted[0]) if inserted else None,
-            "queried_uuid": str(queried[0]) if queried else None,
-            "match": str(inserted[0]) == str(queried[0]) if inserted and queried else False
-        })
+        return jsonify(
+            {
+                "inserted_uuid": str(inserted[0]) if inserted else None,
+                "queried_uuid": str(queried[0]) if queried else None,
+                "match": str(inserted[0]) == str(queried[0]) if inserted and queried else False,
+            }
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/test/binary-bytea")
 def test_binary_bytea():
@@ -606,23 +593,23 @@ def test_binary_bytea():
             cur.execute("CREATE TEMP TABLE bytea_test (id SERIAL, data BYTEA)")
 
             # Insert binary data
-            test_data = b'\x00\x01\x02\x03\xff\xfe\xfd'
-            cur.execute(
-                "INSERT INTO bytea_test (data) VALUES (%s) RETURNING id, data",
-                (test_data,)
-            )
+            test_data = b"\x00\x01\x02\x03\xff\xfe\xfd"
+            cur.execute("INSERT INTO bytea_test (data) VALUES (%s) RETURNING id, data", (test_data,))
             inserted = cur.fetchone()
 
             conn.commit()
 
         # Convert bytes to hex for JSON serialization
-        return jsonify({
-            "inserted_id": inserted[0] if inserted else None,
-            "data_hex": inserted[1].hex() if inserted and inserted[1] else None,
-            "data_length": len(inserted[1]) if inserted and inserted[1] else 0
-        })
+        return jsonify(
+            {
+                "inserted_id": inserted[0] if inserted else None,
+                "data_hex": inserted[1].hex() if inserted and inserted[1] else None,
+                "data_length": len(inserted[1]) if inserted and inserted[1] else 0,
+            }
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/test/class-row-factory")
 def test_class_row_factory():
@@ -632,8 +619,9 @@ def test_class_row_factory():
     which return instances of a custom class.
     """
     try:
-        from psycopg.rows import class_row
         from dataclasses import dataclass
+
+        from psycopg.rows import class_row
 
         @dataclass
         class User:
@@ -646,10 +634,7 @@ def test_class_row_factory():
                 cur.execute("SELECT id, name, email FROM users ORDER BY id LIMIT 3")
                 rows = cur.fetchall()
 
-        return jsonify({
-            "count": len(rows),
-            "data": [{"id": r.id, "name": r.name, "email": r.email} for r in rows]
-        })
+        return jsonify({"count": len(rows), "data": [{"id": r.id, "name": r.name, "email": r.email} for r in rows]})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -672,12 +657,15 @@ def test_kwargs_row_factory():
                 cur.execute("SELECT id, name, email FROM users ORDER BY id LIMIT 3")
                 rows = cur.fetchall()
 
-        return jsonify({
-            "count": len(rows),
-            "data": rows  # Already processed dictionaries
-        })
+        return jsonify(
+            {
+                "count": len(rows),
+                "data": rows,  # Already processed dictionaries
+            }
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/test/scalar-row-factory")
 def test_scalar_row_factory():
@@ -694,12 +682,15 @@ def test_scalar_row_factory():
                 cur.execute("SELECT name FROM users ORDER BY id LIMIT 5")
                 rows = cur.fetchall()
 
-        return jsonify({
-            "count": len(rows),
-            "data": rows  # Just names as scalars
-        })
+        return jsonify(
+            {
+                "count": len(rows),
+                "data": rows,  # Just names as scalars
+            }
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/test/binary-format")
 def test_binary_format():
@@ -710,18 +701,13 @@ def test_binary_format():
     try:
         with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
             # Execute with binary=True
-            cur.execute(
-                "SELECT id, name FROM users ORDER BY id LIMIT 3",
-                binary=True
-            )
+            cur.execute("SELECT id, name FROM users ORDER BY id LIMIT 3", binary=True)
             rows = cur.fetchall()
 
-        return jsonify({
-            "count": len(rows),
-            "data": [{"id": r[0], "name": r[1]} for r in rows]
-        })
+        return jsonify({"count": len(rows), "data": [{"id": r[0], "name": r[1]} for r in rows]})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/test/null-values")
 def test_null_values():
@@ -751,18 +737,14 @@ def test_null_values():
             rows = cur.fetchall()
             conn.commit()
 
-        return jsonify({
-            "count": len(rows),
-            "data": [
-                {
-                    "id": r[0],
-                    "nullable_text": r[1],
-                    "nullable_int": r[2],
-                    "nullable_bool": r[3]
-                }
-                for r in rows
-            ]
-        })
+        return jsonify(
+            {
+                "count": len(rows),
+                "data": [
+                    {"id": r[0], "nullable_text": r[1], "nullable_int": r[2], "nullable_bool": r[3]} for r in rows
+                ],
+            }
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -795,10 +777,7 @@ def test_transaction_context():
 
 @app.route("/test/json-jsonb")
 def test_json_jsonb():
-    """Test JSON and JSONB data types.
-
-    BUG INVESTIGATION: JSON types may have serialization issues.
-    """
+    """Test JSON and JSONB data types."""
     try:
         with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
             # Create temp table with JSON columns
@@ -812,32 +791,23 @@ def test_json_jsonb():
 
             # Insert JSON data
             import json
+
             test_json = {"name": "test", "values": [1, 2, 3], "nested": {"key": "value"}}
-            cur.execute(
-                "INSERT INTO json_test VALUES (%s, %s, %s)",
-                (1, json.dumps(test_json), json.dumps(test_json))
-            )
+            cur.execute("INSERT INTO json_test VALUES (%s, %s, %s)", (1, json.dumps(test_json), json.dumps(test_json)))
 
             # Query back
             cur.execute("SELECT * FROM json_test WHERE id = 1")
             row = cur.fetchone()
             conn.commit()
 
-        return jsonify({
-            "id": row[0],
-            "json_col": row[1],
-            "jsonb_col": row[2]
-        })
+        return jsonify({"id": row[0], "json_col": row[1], "jsonb_col": row[2]})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
 @app.route("/test/array-types")
 def test_array_types():
-    """Test PostgreSQL array types.
-
-    BUG INVESTIGATION: Array types may have serialization issues.
-    """
+    """Test PostgreSQL array types."""
     try:
         with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
             # Create temp table with array columns
@@ -850,23 +820,23 @@ def test_array_types():
             """)
 
             # Insert array data
-            cur.execute(
-                "INSERT INTO array_test VALUES (%s, %s, %s)",
-                (1, [10, 20, 30], ["a", "b", "c"])
-            )
+            cur.execute("INSERT INTO array_test VALUES (%s, %s, %s)", (1, [10, 20, 30], ["a", "b", "c"]))
 
             # Query back
             cur.execute("SELECT * FROM array_test WHERE id = 1")
             row = cur.fetchone()
             conn.commit()
 
-        return jsonify({
-            "id": row[0],
-            "int_array": list(row[1]) if row[1] else None,
-            "text_array": list(row[2]) if row[2] else None
-        })
+        return jsonify(
+            {
+                "id": row[0],
+                "int_array": list(row[1]) if row[1] else None,
+                "text_array": list(row[2]) if row[2] else None,
+            }
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/test/cursor-set-result")
 def test_cursor_set_result():
@@ -883,7 +853,7 @@ def test_cursor_set_result():
             cur.executemany(
                 "INSERT INTO setresult_test (val) VALUES (%s) RETURNING id, val",
                 [("First",), ("Second",), ("Third",)],
-                returning=True
+                returning=True,
             )
 
             # Use set_result to navigate to specific result sets
@@ -923,21 +893,16 @@ def test_decimal_types():
             """)
 
             # Insert decimal data
-            cur.execute(
-                "INSERT INTO decimal_test VALUES (%s, %s, %s)",
-                (1, Decimal("123.45"), Decimal("0.00000001"))
-            )
+            cur.execute("INSERT INTO decimal_test VALUES (%s, %s, %s)", (1, Decimal("123.45"), Decimal("0.00000001")))
 
             # Query back
             cur.execute("SELECT * FROM decimal_test WHERE id = 1")
             row = cur.fetchone()
             conn.commit()
 
-        return jsonify({
-            "id": row[0],
-            "price": str(row[1]) if row[1] else None,
-            "rate": str(row[2]) if row[2] else None
-        })
+        return jsonify(
+            {"id": row[0], "price": str(row[1]) if row[1] else None, "rate": str(row[2]) if row[2] else None}
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -962,7 +927,7 @@ def test_date_time_types():
             # Insert date/time data
             cur.execute(
                 "INSERT INTO datetime_test VALUES (%s, %s, %s, %s)",
-                (1, date(1990, 5, 15), time(8, 30, 0), timedelta(hours=2, minutes=30))
+                (1, date(1990, 5, 15), time(8, 30, 0), timedelta(hours=2, minutes=30)),
             )
 
             # Query back
@@ -970,12 +935,14 @@ def test_date_time_types():
             row = cur.fetchone()
             conn.commit()
 
-        return jsonify({
-            "id": row[0],
-            "birth_date": str(row[1]) if row[1] else None,
-            "wake_time": str(row[2]) if row[2] else None,
-            "duration": str(row[3]) if row[3] else None
-        })
+        return jsonify(
+            {
+                "id": row[0],
+                "birth_date": str(row[1]) if row[1] else None,
+                "wake_time": str(row[2]) if row[2] else None,
+                "duration": str(row[3]) if row[3] else None,
+            }
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -997,31 +964,23 @@ def test_inet_cidr_types():
             """)
 
             # Insert network data
-            cur.execute(
-                "INSERT INTO network_test VALUES (%s, %s, %s)",
-                (1, "192.168.1.100", "10.0.0.0/8")
-            )
+            cur.execute("INSERT INTO network_test VALUES (%s, %s, %s)", (1, "192.168.1.100", "10.0.0.0/8"))
 
             # Query back
             cur.execute("SELECT * FROM network_test WHERE id = 1")
             row = cur.fetchone()
             conn.commit()
 
-        return jsonify({
-            "id": row[0],
-            "ip_addr": str(row[1]) if row[1] else None,
-            "network": str(row[2]) if row[2] else None
-        })
+        return jsonify(
+            {"id": row[0], "ip_addr": str(row[1]) if row[1] else None, "network": str(row[2]) if row[2] else None}
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
 @app.route("/test/range-types")
 def test_range_types():
-    """Test PostgreSQL range types.
-
-    BUG INVESTIGATION: Range types may have serialization issues.
-    """
+    """Test PostgreSQL range types."""
     try:
         from psycopg.types.range import Range
 
@@ -1037,24 +996,20 @@ def test_range_types():
 
             # Insert range data
             from datetime import datetime
+
             int_range = Range(1, 10)
             ts_range = Range(datetime(2024, 1, 1, 0, 0), datetime(2024, 12, 31, 23, 59))
 
-            cur.execute(
-                "INSERT INTO range_test VALUES (%s, %s, %s)",
-                (1, int_range, ts_range)
-            )
+            cur.execute("INSERT INTO range_test VALUES (%s, %s, %s)", (1, int_range, ts_range))
 
             # Query back
             cur.execute("SELECT * FROM range_test WHERE id = 1")
             row = cur.fetchone()
             conn.commit()
 
-        return jsonify({
-            "id": row[0],
-            "int_range": str(row[1]) if row[1] else None,
-            "ts_range": str(row[2]) if row[2] else None
-        })
+        return jsonify(
+            {"id": row[0], "int_range": str(row[1]) if row[1] else None, "ts_range": str(row[2]) if row[2] else None}
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
