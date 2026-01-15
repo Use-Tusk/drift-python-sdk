@@ -1,0 +1,5 @@
+# Benchmark results (regenerated each run)
+results/
+
+# Trace directories created during benchmarks
+.benchmark-traces*/
