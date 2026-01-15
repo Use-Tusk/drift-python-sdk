@@ -16,9 +16,12 @@ __all__ = [
     "CliMessage",
     "InstrumentationVersionMismatchAlert",
     "MessageType",
+    "Runtime",
     "SdkMessage",
     "SendAlertRequest",
     "SendInboundSpanForReplayRequest",
+    "SetTimeTravelRequest",
+    "SetTimeTravelResponse",
     "UnpatchedDependencyAlert",
     # Aliases
     "SDKMessageType",
@@ -43,9 +46,12 @@ from tusk.drift.core.v1 import (
     CliMessage,
     InstrumentationVersionMismatchAlert,
     MessageType,
+    Runtime,
     SdkMessage,
     SendAlertRequest,
     SendInboundSpanForReplayRequest,
+    SetTimeTravelRequest,
+    SetTimeTravelResponse,
     UnpatchedDependencyAlert,
 )
 from tusk.drift.core.v1 import (
@@ -136,6 +142,9 @@ class ConnectRequest:
     metadata: dict[str, str] = field(default_factory=dict)
     """Additional metadata."""
 
+    runtime: Runtime = Runtime.PYTHON
+    """SDK runtime environment (node, python)."""
+
     def to_proto(self) -> ProtoConnectRequest:
         """Convert to protobuf message."""
         from betterproto.lib.google.protobuf import Struct
@@ -150,6 +159,7 @@ class ConnectRequest:
             sdk_version=self.sdk_version,
             min_cli_version=self.min_cli_version,
             metadata=metadata_struct,
+            runtime=self.runtime,
         )
 
 
