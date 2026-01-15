@@ -82,4 +82,9 @@ if __name__ == "__main__":
     # Bug-exposing tests - kept for regression testing
     make_request("GET", "/test/cursor-set-result")
 
+    # Bug-exposing tests for parameter serialization issues
+    # These tests expose hash mismatch bugs with Decimal and date/time types
+    make_request("GET", "/test/decimal-types")
+    make_request("GET", "/test/date-time-types")
+
     print_request_summary()

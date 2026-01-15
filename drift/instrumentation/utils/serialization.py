@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import datetime
 import uuid
+from decimal import Decimal
 from typing import Any
 
 
@@ -32,7 +33,7 @@ def _serialize_bytes(val: bytes) -> Any:
 def serialize_value(val: Any) -> Any:
     """Convert non-JSON-serializable values to JSON-compatible types.
 
-    Handles datetime objects, bytes, and nested structures (lists, tuples, dicts).
+    Handles datetime objects, bytes, Decimal, and nested structures (lists, tuples, dicts).
 
     Args:
         val: The value to serialize.
@@ -42,6 +43,12 @@ def serialize_value(val: Any) -> Any:
     """
     if isinstance(val, (datetime.datetime, datetime.date, datetime.time)):
         return val.isoformat()
+    elif isinstance(val, datetime.timedelta):
+        # Serialize timedelta as total seconds for consistent hashing
+        return {"__timedelta__": val.total_seconds()}
+    elif isinstance(val, Decimal):
+        # Serialize Decimal as string to preserve precision and ensure consistent hashing
+        return {"__decimal__": str(val)}
     elif isinstance(val, uuid.UUID):
         return {"__uuid__": str(val)}
     elif isinstance(val, memoryview):

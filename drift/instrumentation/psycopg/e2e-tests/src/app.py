@@ -906,6 +906,86 @@ def test_cursor_set_result():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/test/decimal-types")
+def test_decimal_types():
+    """Test Decimal/numeric types.
+
+    BUG INVESTIGATION: Decimal types may have serialization/precision issues.
+    """
+    try:
+        from decimal import Decimal
+
+        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
+            # Create temp table with numeric columns
+            cur.execute("""
+                CREATE TEMP TABLE decimal_test (
+                    id INT,
+                    price DECIMAL(10, 2),
+                    rate DECIMAL(18, 8)
+                )
+            """)
+
+            # Insert decimal data
+            cur.execute(
+                "INSERT INTO decimal_test VALUES (%s, %s, %s)",
+                (1, Decimal("123.45"), Decimal("0.00000001"))
+            )
+
+            # Query back
+            cur.execute("SELECT * FROM decimal_test WHERE id = 1")
+            row = cur.fetchone()
+            conn.commit()
+
+        return jsonify({
+            "id": row[0],
+            "price": str(row[1]) if row[1] else None,
+            "rate": str(row[2]) if row[2] else None
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/date-time-types")
+def test_date_time_types():
+    """Test date/time types.
+
+    BUG INVESTIGATION: Date, time, and interval types may have issues.
+    """
+    try:
+        from datetime import date, time, timedelta
+
+        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
+            # Create temp table with date/time columns
+            cur.execute("""
+                CREATE TEMP TABLE datetime_test (
+                    id INT,
+                    birth_date DATE,
+                    wake_time TIME,
+                    duration INTERVAL
+                )
+            """)
+
+            # Insert date/time data
+            cur.execute(
+                "INSERT INTO datetime_test VALUES (%s, %s, %s, %s)",
+                (1, date(1990, 5, 15), time(8, 30, 0), timedelta(hours=2, minutes=30))
+            )
+
+            # Query back
+            cur.execute("SELECT * FROM datetime_test WHERE id = 1")
+            row = cur.fetchone()
+            conn.commit()
+
+        return jsonify({
+            "id": row[0],
+            "birth_date": str(row[1]) if row[1] else None,
+            "wake_time": str(row[2]) if row[2] else None,
+            "duration": str(row[3]) if row[3] else None
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     sdk.mark_app_as_ready()
     app.run(host="0.0.0.0", port=8000, debug=False)

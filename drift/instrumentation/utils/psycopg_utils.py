@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import datetime as dt
 import uuid
+from decimal import Decimal
 from typing import Any
 
 
@@ -33,6 +34,12 @@ def deserialize_db_value(val: Any) -> Any:
         # Check for UUID tagged structure
         if "__uuid__" in val and len(val) == 1:
             return uuid.UUID(val["__uuid__"])
+        # Check for Decimal tagged structure
+        if "__decimal__" in val and len(val) == 1:
+            return Decimal(val["__decimal__"])
+        # Check for timedelta tagged structure
+        if "__timedelta__" in val and len(val) == 1:
+            return dt.timedelta(seconds=val["__timedelta__"])
         # Recursively deserialize dict values
         return {k: deserialize_db_value(v) for k, v in val.items()}
     elif isinstance(val, str):
