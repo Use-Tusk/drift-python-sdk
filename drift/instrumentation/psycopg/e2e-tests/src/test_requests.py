@@ -79,4 +79,7 @@ if __name__ == "__main__":
     make_request("GET", "/test/json-jsonb")
     make_request("GET", "/test/array-types")
 
+    # Bug-exposing tests - kept for regression testing
+    make_request("GET", "/test/cursor-set-result")
+
     print_request_summary()

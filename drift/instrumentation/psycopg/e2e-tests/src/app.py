@@ -868,6 +868,44 @@ def test_array_types():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/test/cursor-set-result")
+def test_cursor_set_result():
+    """Test cursor.set_result() method.
+
+    This tests whether the instrumentation correctly handles
+    set_result() for navigating between result sets.
+    """
+    try:
+        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
+            # Create temp table and insert with returning
+            cur.execute("CREATE TEMP TABLE setresult_test (id SERIAL, val TEXT)")
+
+            cur.executemany(
+                "INSERT INTO setresult_test (val) VALUES (%s) RETURNING id, val",
+                [("First",), ("Second",), ("Third",)],
+                returning=True
+            )
+
+            # Use set_result to navigate to specific result sets
+            results = []
+
+            # Go to the last result set
+            cur.set_result(-1)
+            row = cur.fetchone()
+            results.append({"set": "last", "data": {"id": row[0], "val": row[1]} if row else None})
+
+            # Go to the first result set
+            cur.set_result(0)
+            row = cur.fetchone()
+            results.append({"set": "first", "data": {"id": row[0], "val": row[1]} if row else None})
+
+            conn.commit()
+
+        return jsonify({"results": results})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     sdk.mark_app_as_ready()
     app.run(host="0.0.0.0", port=8000, debug=False)

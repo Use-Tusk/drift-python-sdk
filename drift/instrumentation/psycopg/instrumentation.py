@@ -1559,6 +1559,48 @@ class PsycopgInstrumentation(InstrumentationBase):
 
             cursor.nextset = patched_nextset  # pyright: ignore[reportAttributeAccessIssue]
 
+            # Patch set_result() to work with _mock_result_sets
+            def patched_set_result(index: int):
+                """Navigate to a specific result set by index (supports negative indices)."""
+                num_results = len(cursor._mock_result_sets)  # pyright: ignore[reportAttributeAccessIssue]
+                if not -num_results <= index < num_results:
+                    raise IndexError(
+                        f"index {index} out of range: {num_results} result(s) available"
+                    )
+                if index < 0:
+                    index = num_results + index
+
+                cursor._mock_result_set_index = index  # pyright: ignore[reportAttributeAccessIssue]
+                target_set = cursor._mock_result_sets[index]  # pyright: ignore[reportAttributeAccessIssue]
+                cursor._mock_rows = target_set["rows"]  # pyright: ignore[reportAttributeAccessIssue]
+                cursor._mock_index = 0  # pyright: ignore[reportAttributeAccessIssue]
+
+                # Update fetch methods for the target result set
+                target_column_names = target_set.get("column_names")
+                TargetRowClass = create_row_class(target_column_names)
+                cursor.fetchone = make_fetchone_replay(target_column_names, TargetRowClass)  # pyright: ignore[reportAttributeAccessIssue]
+                cursor.fetchmany = make_fetchmany_replay(target_column_names, TargetRowClass)  # pyright: ignore[reportAttributeAccessIssue]
+                cursor.fetchall = make_fetchall_replay(target_column_names, TargetRowClass)  # pyright: ignore[reportAttributeAccessIssue]
+
+                # Update description for target result set
+                target_description_data = target_set.get("description")
+                if target_description_data:
+                    target_desc = [
+                        (col["name"], col.get("type_code"), None, None, None, None, None)
+                        for col in target_description_data
+                    ]
+                    try:
+                        cursor._tusk_description = target_desc  # pyright: ignore[reportAttributeAccessIssue]
+                    except AttributeError:
+                        try:
+                            cursor.description = target_desc  # pyright: ignore[reportAttributeAccessIssue]
+                        except AttributeError:
+                            pass
+
+                return cursor
+
+            cursor.set_result = patched_set_result  # pyright: ignore[reportAttributeAccessIssue]
+
     def _finalize_query_span(
         self,
         span: trace.Span,
@@ -2014,6 +2056,30 @@ class PsycopgInstrumentation(InstrumentationBase):
                         return None
 
                     cursor.nextset = patched_nextset  # pyright: ignore[reportAttributeAccessIssue]
+
+                    # Patch set_result() to work with _tusk_result_sets
+                    def patched_set_result_record(index: int):
+                        """Navigate to a specific result set by index (supports negative indices)."""
+                        num_results = len(cursor._tusk_result_sets)  # pyright: ignore[reportAttributeAccessIssue]
+                        if not -num_results <= index < num_results:
+                            raise IndexError(
+                                f"index {index} out of range: {num_results} result(s) available"
+                            )
+                        if index < 0:
+                            index = num_results + index
+
+                        cursor._tusk_result_set_index = index  # pyright: ignore[reportAttributeAccessIssue]
+                        cursor._tusk_rows = cursor._tusk_result_sets[index]  # pyright: ignore[reportAttributeAccessIssue]
+                        cursor._tusk_index = 0  # pyright: ignore[reportAttributeAccessIssue]
+
+                        # Update fetch methods for the target result set
+                        cursor.fetchone = make_patched_fetchone_record()  # pyright: ignore[reportAttributeAccessIssue]
+                        cursor.fetchmany = make_patched_fetchmany_record()  # pyright: ignore[reportAttributeAccessIssue]
+                        cursor.fetchall = make_patched_fetchall_record()  # pyright: ignore[reportAttributeAccessIssue]
+
+                        return cursor
+
+                    cursor.set_result = patched_set_result_record  # pyright: ignore[reportAttributeAccessIssue]
 
                 else:
                     output_value = {"rowcount": cursor.rowcount if hasattr(cursor, "rowcount") else -1}
