@@ -70,12 +70,14 @@ if __name__ == "__main__":
     make_request("GET", "/test/binary-format")
 
     # =====================================================================
-    # BUG-EXPOSING TEST ENDPOINTS (SKIPPED)
-    # These endpoints expose confirmed bugs and cause the app to hang.
+    # PREVIOUSLY BUG-EXPOSING TEST ENDPOINTS
     # See BUG_TRACKING.md for detailed analysis.
     # =====================================================================
 
-    # make_request("GET", "/test/null-values")
+    # Test 3: NULL values handling - FIXED (lazy capture mechanism)
+    make_request("GET", "/test/null-values")
+
+    # These still need investigation:
     # make_request("GET", "/test/transaction-context")
     # make_request("GET", "/test/json-jsonb")
     # make_request("GET", "/test/array-types")
