@@ -329,21 +329,7 @@ class PsycopgInstrumentation(InstrumentationBase):
 
     def _replay_execute(self, cursor: Any, sdk: TuskDrift, query_str: str, params: Any) -> Any:
         """Handle REPLAY mode for execute - fetch mock from CLI."""
-        span_info = SpanUtils.create_span(
-            CreateSpanOptions(
-                name="psycopg.query",
-                kind=OTelSpanKind.CLIENT,
-                attributes={
-                    TdSpanAttributes.NAME: "psycopg.query",
-                    TdSpanAttributes.PACKAGE_NAME: "psycopg",
-                    TdSpanAttributes.INSTRUMENTATION_NAME: "PsycopgInstrumentation",
-                    TdSpanAttributes.SUBMODULE_NAME: "query",
-                    TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
-                    TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
-                },
-                is_pre_app_start=not sdk.app_ready,
-            )
-        )
+        span_info = self._create_query_span(sdk, "query")
 
         if not span_info:
             raise RuntimeError("Error creating span in replay mode")
@@ -389,21 +375,7 @@ class PsycopgInstrumentation(InstrumentationBase):
             cursor._tusk_index = 0
             del cursor._tusk_patched
 
-        span_info = SpanUtils.create_span(
-            CreateSpanOptions(
-                name="psycopg.query",
-                kind=OTelSpanKind.CLIENT,
-                attributes={
-                    TdSpanAttributes.NAME: "psycopg.query",
-                    TdSpanAttributes.PACKAGE_NAME: "psycopg",
-                    TdSpanAttributes.INSTRUMENTATION_NAME: "PsycopgInstrumentation",
-                    TdSpanAttributes.SUBMODULE_NAME: "query",
-                    TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
-                    TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
-                },
-                is_pre_app_start=is_pre_app_start,
-            )
-        )
+        span_info = self._create_query_span(sdk, "query", is_pre_app_start)
 
         if not span_info:
             # Fallback to original call if span creation fails
@@ -481,21 +453,7 @@ class PsycopgInstrumentation(InstrumentationBase):
         self, cursor: Any, sdk: TuskDrift, query_str: str, params_list: list, returning: bool = False
     ) -> Any:
         """Handle REPLAY mode for executemany - fetch mock from CLI."""
-        span_info = SpanUtils.create_span(
-            CreateSpanOptions(
-                name="psycopg.query",
-                kind=OTelSpanKind.CLIENT,
-                attributes={
-                    TdSpanAttributes.NAME: "psycopg.query",
-                    TdSpanAttributes.PACKAGE_NAME: "psycopg",
-                    TdSpanAttributes.INSTRUMENTATION_NAME: "PsycopgInstrumentation",
-                    TdSpanAttributes.SUBMODULE_NAME: "query",
-                    TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
-                    TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
-                },
-                is_pre_app_start=not sdk.app_ready,
-            )
-        )
+        span_info = self._create_query_span(sdk, "query")
 
         if not span_info:
             raise RuntimeError("Error creating span in replay mode")
@@ -544,21 +502,7 @@ class PsycopgInstrumentation(InstrumentationBase):
         returning: bool = False,
     ) -> Any:
         """Handle RECORD mode for executemany - create span and execute query."""
-        span_info = SpanUtils.create_span(
-            CreateSpanOptions(
-                name="psycopg.query",
-                kind=OTelSpanKind.CLIENT,
-                attributes={
-                    TdSpanAttributes.NAME: "psycopg.query",
-                    TdSpanAttributes.PACKAGE_NAME: "psycopg",
-                    TdSpanAttributes.INSTRUMENTATION_NAME: "PsycopgInstrumentation",
-                    TdSpanAttributes.SUBMODULE_NAME: "query",
-                    TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
-                    TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
-                },
-                is_pre_app_start=is_pre_app_start,
-            )
-        )
+        span_info = self._create_query_span(sdk, "query", is_pre_app_start)
 
         if not span_info:
             # Fallback to original call if span creation fails
@@ -636,21 +580,7 @@ class PsycopgInstrumentation(InstrumentationBase):
         kwargs: dict,
     ):
         """Handle RECORD mode for stream - wrap generator with tracing."""
-        span_info = SpanUtils.create_span(
-            CreateSpanOptions(
-                name="psycopg.query",
-                kind=OTelSpanKind.CLIENT,
-                attributes={
-                    TdSpanAttributes.NAME: "psycopg.query",
-                    TdSpanAttributes.PACKAGE_NAME: "psycopg",
-                    TdSpanAttributes.INSTRUMENTATION_NAME: "PsycopgInstrumentation",
-                    TdSpanAttributes.SUBMODULE_NAME: "query",
-                    TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
-                    TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
-                },
-                is_pre_app_start=is_pre_app_start,
-            )
-        )
+        span_info = self._create_query_span(sdk, "query", is_pre_app_start)
 
         if not span_info:
             yield from original_stream(query, params, **kwargs)
@@ -673,21 +603,7 @@ class PsycopgInstrumentation(InstrumentationBase):
 
     def _replay_stream(self, cursor: Any, sdk: TuskDrift, query_str: str, params: Any):
         """Handle REPLAY mode for stream - return mock generator."""
-        span_info = SpanUtils.create_span(
-            CreateSpanOptions(
-                name="psycopg.query",
-                kind=OTelSpanKind.CLIENT,
-                attributes={
-                    TdSpanAttributes.NAME: "psycopg.query",
-                    TdSpanAttributes.PACKAGE_NAME: "psycopg",
-                    TdSpanAttributes.INSTRUMENTATION_NAME: "PsycopgInstrumentation",
-                    TdSpanAttributes.SUBMODULE_NAME: "query",
-                    TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
-                    TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
-                },
-                is_pre_app_start=not sdk.app_ready,
-            )
-        )
+        span_info = self._create_query_span(sdk, "query")
 
         if not span_info:
             raise RuntimeError("Error creating span in replay mode")
@@ -797,23 +713,7 @@ class PsycopgInstrumentation(InstrumentationBase):
         kwargs: dict,
     ) -> Iterator[TracedCopyWrapper]:
         """Handle RECORD mode for copy - wrap Copy object with tracing."""
-        is_pre_app_start = not sdk.app_ready
-
-        span_info = SpanUtils.create_span(
-            CreateSpanOptions(
-                name="psycopg.copy",
-                kind=OTelSpanKind.CLIENT,
-                attributes={
-                    TdSpanAttributes.NAME: "psycopg.copy",
-                    TdSpanAttributes.PACKAGE_NAME: "psycopg",
-                    TdSpanAttributes.INSTRUMENTATION_NAME: "PsycopgInstrumentation",
-                    TdSpanAttributes.SUBMODULE_NAME: "copy",
-                    TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
-                    TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
-                },
-                is_pre_app_start=is_pre_app_start,
-            )
-        )
+        span_info = self._create_query_span(sdk, "copy")
 
         if not span_info:
             # Fallback to original if span creation fails
@@ -845,21 +745,7 @@ class PsycopgInstrumentation(InstrumentationBase):
     @contextmanager
     def _replay_copy(self, cursor: Any, sdk: TuskDrift, query_str: str) -> Iterator[MockCopy]:
         """Handle REPLAY mode for copy - return mock Copy object."""
-        span_info = SpanUtils.create_span(
-            CreateSpanOptions(
-                name="psycopg.copy",
-                kind=OTelSpanKind.CLIENT,
-                attributes={
-                    TdSpanAttributes.NAME: "psycopg.copy",
-                    TdSpanAttributes.PACKAGE_NAME: "psycopg",
-                    TdSpanAttributes.INSTRUMENTATION_NAME: "PsycopgInstrumentation",
-                    TdSpanAttributes.SUBMODULE_NAME: "copy",
-                    TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
-                    TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
-                },
-                is_pre_app_start=not sdk.app_ready,
-            )
-        )
+        span_info = self._create_query_span(sdk, "copy")
 
         if not span_info:
             raise RuntimeError("Error creating span in replay mode")
@@ -987,6 +873,180 @@ class PsycopgInstrumentation(InstrumentationBase):
             pass
 
         return str(query) if not isinstance(query, str) else query
+
+    def _create_query_span(self, sdk: TuskDrift, submodule: str = "query", is_pre_app_start: bool | None = None):
+        """Create a span for psycopg operations.
+
+        This helper reduces code duplication across replay/record methods.
+
+        Args:
+            sdk: The TuskDrift instance
+            submodule: The submodule name ("query" or "copy")
+            is_pre_app_start: Override for pre-app-start flag; if None, derived from sdk.app_ready
+
+        Returns:
+            SpanInfo object or None if span creation fails
+        """
+        if is_pre_app_start is None:
+            is_pre_app_start = not sdk.app_ready
+        span_name = f"psycopg.{submodule}"
+        return SpanUtils.create_span(
+            CreateSpanOptions(
+                name=span_name,
+                kind=OTelSpanKind.CLIENT,
+                attributes={
+                    TdSpanAttributes.NAME: span_name,
+                    TdSpanAttributes.PACKAGE_NAME: "psycopg",
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "PsycopgInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: submodule,
+                    TdSpanAttributes.PACKAGE_TYPE: PackageType.PG.name,
+                    TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
+                },
+                is_pre_app_start=is_pre_app_start,
+            )
+        )
+
+    def _create_fetch_methods(self, cursor: Any, rows_attr: str, index_attr: str, transform_row=None):
+        """Create fetch method closures for cursor mocking.
+
+        This helper reduces code duplication in mock/replay cursor setup.
+
+        Args:
+            cursor: The cursor object to operate on
+            rows_attr: Attribute name for stored rows (e.g., '_mock_rows', '_tusk_rows')
+            index_attr: Attribute name for current index (e.g., '_mock_index', '_tusk_index')
+            transform_row: Optional function to transform each row before returning
+
+        Returns:
+            Tuple of (fetchone, fetchmany, fetchall) functions
+        """
+        def fetchone():
+            rows = getattr(cursor, rows_attr)
+            idx = getattr(cursor, index_attr)
+            if idx < len(rows):
+                row = rows[idx]
+                setattr(cursor, index_attr, idx + 1)
+                return transform_row(row) if transform_row else row
+            return None
+
+        def fetchmany(size=None):
+            if size is None:
+                size = cursor.arraysize
+            result = []
+            for _ in range(size):
+                row = fetchone()
+                if row is None:
+                    break
+                result.append(row)
+            return result
+
+        def fetchall():
+            rows = getattr(cursor, rows_attr)
+            idx = getattr(cursor, index_attr)
+            remaining = rows[idx:]
+            setattr(cursor, index_attr, len(rows))
+            if transform_row:
+                return [transform_row(row) for row in remaining]
+            return list(remaining)
+
+        return fetchone, fetchmany, fetchall
+
+    def _create_scroll_method(self, cursor: Any, rows_attr: str, index_attr: str):
+        """Create scroll method closure for cursor mocking.
+
+        Args:
+            cursor: The cursor object to operate on
+            rows_attr: Attribute name for stored rows
+            index_attr: Attribute name for current index
+
+        Returns:
+            scroll function
+        """
+        def scroll(value: int, mode: str = "relative") -> None:
+            rows = getattr(cursor, rows_attr)
+            idx = getattr(cursor, index_attr)
+            if mode == "relative":
+                newpos = idx + value
+            elif mode == "absolute":
+                newpos = value
+            else:
+                raise ValueError(f"bad mode: {mode}. It should be 'relative' or 'absolute'")
+
+            num_rows = len(rows)
+            if num_rows > 0:
+                if not (0 <= newpos < num_rows):
+                    raise IndexError("position out of bound")
+            elif newpos != 0:
+                raise IndexError("position out of bound")
+
+            setattr(cursor, index_attr, newpos)
+
+        return scroll
+
+    def _get_row_factory_from_cursor(self, cursor: Any):
+        """Get row_factory from cursor or its connection.
+
+        Args:
+            cursor: The cursor object
+
+        Returns:
+            The row_factory or None if not found
+        """
+        row_factory = getattr(cursor, 'row_factory', None)
+        if row_factory is None:
+            conn = getattr(cursor, 'connection', None)
+            if conn:
+                row_factory = getattr(conn, 'row_factory', None)
+        return row_factory
+
+    def _set_cursor_description(self, cursor: Any, description_data: list | None) -> None:
+        """Set description on cursor from description data.
+
+        Args:
+            cursor: The cursor object
+            description_data: List of column description dicts with 'name' and 'type_code' keys
+        """
+        if not description_data:
+            return
+
+        desc = [(col["name"], col.get("type_code"), None, None, None, None, None) for col in description_data]
+        try:
+            cursor._tusk_description = desc
+        except AttributeError:
+            try:
+                cursor.description = desc
+            except AttributeError:
+                pass
+
+    def _create_row_transformer(self, row_factory_type: str, column_names: list | None):
+        """Create a row transformation function based on row factory type.
+
+        Args:
+            row_factory_type: The detected row factory type ('dict', 'namedtuple', etc.)
+            column_names: List of column names for the result set
+
+        Returns:
+            A function that transforms a raw row into the appropriate format
+        """
+        RowClass = None
+        if row_factory_type in ("namedtuple", "class") and column_names:
+            from collections import namedtuple
+            RowClass = namedtuple('Row', column_names)
+
+        def transform_row(row):
+            """Transform raw row data according to row factory type."""
+            if row_factory_type == "kwargs":
+                return row
+            if row_factory_type == "scalar":
+                return row[0] if isinstance(row, list) and len(row) > 0 else row
+            values = tuple(row) if isinstance(row, list) else row
+            if row_factory_type == "dict" and column_names:
+                return dict(zip(column_names, values))
+            elif row_factory_type in ("namedtuple", "class") and RowClass is not None:
+                return RowClass(*values)
+            return values
+
+        return transform_row
 
     def _set_span_attributes(
         self,
@@ -1174,63 +1234,22 @@ class PsycopgInstrumentation(InstrumentationBase):
             object.__setattr__(cursor, "rowcount", actual_data.get("rowcount", -1))
 
         description_data = actual_data.get("description")
-        if description_data:
-            desc = [(col["name"], col.get("type_code"), None, None, None, None, None) for col in description_data]
-            # Set mock description - InstrumentedCursor has _tusk_description property
-            # MockCursor uses regular description attribute
-            try:
-                cursor._tusk_description = desc
-            except AttributeError:
-                # For MockCursor, set description directly
-                try:
-                    cursor.description = desc
-                except AttributeError:
-                    pass
+        self._set_cursor_description(cursor, description_data)
 
         # Set mock statusmessage for replay
         statusmessage = actual_data.get("statusmessage")
         if statusmessage is not None:
             cursor._mock_statusmessage = statusmessage
 
-        # Get row_factory from cursor or connection for row transformation
-        row_factory = getattr(cursor, 'row_factory', None)
-        if row_factory is None:
-            conn = getattr(cursor, 'connection', None)
-            if conn:
-                row_factory = getattr(conn, 'row_factory', None)
-
-        # Extract column names from description for row factory transformations
-        column_names = None
-        if description_data:
-            column_names = [col["name"] for col in description_data]
-
-        # Detect row factory type for transformation
+        # Get row_factory and detect type for row transformation
+        row_factory = self._get_row_factory_from_cursor(cursor)
         row_factory_type = self._detect_row_factory_type(row_factory)
 
-        # Create namedtuple class once if needed (avoid recreating for each row)
-        # Used for both namedtuple_row and class_row (class_row returns dataclass instances,
-        # but in replay we can't recreate the exact class, so we use namedtuple as a compatible substitute)
-        RowClass = None
-        if row_factory_type in ("namedtuple", "class") and column_names:
-            from collections import namedtuple
-            RowClass = namedtuple('Row', column_names)
+        # Extract column names from description for row factory transformations
+        column_names = [col["name"] for col in description_data] if description_data else None
 
-        def transform_row(row):
-            """Transform raw row data according to row factory type."""
-            if row_factory_type == "kwargs":
-                # kwargs_row: return stored dict as-is (already in correct format)
-                return row
-            if row_factory_type == "scalar":
-                # scalar_row: unwrap the single-element list to get the scalar value
-                return row[0] if isinstance(row, list) and len(row) > 0 else row
-            values = tuple(row) if isinstance(row, list) else row
-            if row_factory_type == "dict" and column_names:
-                return dict(zip(column_names, values))
-            elif row_factory_type in ("namedtuple", "class") and RowClass is not None:
-                # For class_row, we use namedtuple as a compatible substitute that supports
-                # attribute access (row.id, row.name, etc.)
-                return RowClass(*values)
-            return values
+        # Create row transformer using helper
+        transform_row = self._create_row_transformer(row_factory_type, column_names)
 
         mock_rows = actual_data.get("rows", [])
         # Deserialize datetime strings back to datetime objects for consistent Flask serialization
@@ -1238,50 +1257,15 @@ class PsycopgInstrumentation(InstrumentationBase):
         cursor._mock_rows = mock_rows  # pyright: ignore[reportAttributeAccessIssue]
         cursor._mock_index = 0  # pyright: ignore[reportAttributeAccessIssue]
 
-        def mock_fetchone():
-            if cursor._mock_index < len(cursor._mock_rows):  # pyright: ignore[reportAttributeAccessIssue]
-                row = cursor._mock_rows[cursor._mock_index]  # pyright: ignore[reportAttributeAccessIssue]
-                cursor._mock_index += 1  # pyright: ignore[reportAttributeAccessIssue]
-                return transform_row(row)
-            return None
+        # Use helper methods to create fetch and scroll methods
+        fetchone, fetchmany, fetchall = self._create_fetch_methods(
+            cursor, '_mock_rows', '_mock_index', transform_row
+        )
+        cursor.fetchone = fetchone  # pyright: ignore[reportAttributeAccessIssue]
+        cursor.fetchmany = fetchmany  # pyright: ignore[reportAttributeAccessIssue]
+        cursor.fetchall = fetchall  # pyright: ignore[reportAttributeAccessIssue]
 
-        def mock_fetchmany(size=cursor.arraysize):
-            rows = []
-            for _ in range(size):
-                row = mock_fetchone()
-                if row is None:
-                    break
-                rows.append(row)
-            return rows
-
-        def mock_fetchall():
-            rows = cursor._mock_rows[cursor._mock_index :]  # pyright: ignore[reportAttributeAccessIssue]
-            cursor._mock_index = len(cursor._mock_rows)  # pyright: ignore[reportAttributeAccessIssue]
-            return [transform_row(row) for row in rows]
-
-        cursor.fetchone = mock_fetchone  # pyright: ignore[reportAttributeAccessIssue]
-        cursor.fetchmany = mock_fetchmany  # pyright: ignore[reportAttributeAccessIssue]
-        cursor.fetchall = mock_fetchall  # pyright: ignore[reportAttributeAccessIssue]
-
-        def mock_scroll(value: int, mode: str = "relative") -> None:
-            """Scroll the cursor to a new position in the mock result set."""
-            if mode == "relative":
-                newpos = cursor._mock_index + value  # pyright: ignore[reportAttributeAccessIssue]
-            elif mode == "absolute":
-                newpos = value
-            else:
-                raise ValueError(f"bad mode: {mode}. It should be 'relative' or 'absolute'")
-
-            num_rows = len(cursor._mock_rows)  # pyright: ignore[reportAttributeAccessIssue]
-            if num_rows > 0:
-                if not (0 <= newpos < num_rows):
-                    raise IndexError("position out of bound")
-            elif newpos != 0:
-                raise IndexError("position out of bound")
-
-            cursor._mock_index = newpos  # pyright: ignore[reportAttributeAccessIssue]
-
-        cursor.scroll = mock_scroll  # pyright: ignore[reportAttributeAccessIssue]
+        cursor.scroll = self._create_scroll_method(cursor, '_mock_rows', '_mock_index')  # pyright: ignore[reportAttributeAccessIssue]
 
         # Note: __iter__ and __next__ are handled at the class level in InstrumentedCursor
         # and MockCursor classes, as Python looks up special methods on the type, not instance
@@ -1301,13 +1285,8 @@ class PsycopgInstrumentation(InstrumentationBase):
             cursor._mock_index = 0  # pyright: ignore[reportAttributeAccessIssue]
             return
 
-        # Get row_factory from cursor or connection
-        row_factory = getattr(cursor, "row_factory", None)
-        if row_factory is None:
-            conn = getattr(cursor, "connection", None)
-            if conn:
-                row_factory = getattr(conn, "row_factory", None)
-
+        # Get row_factory and detect type using helpers
+        row_factory = self._get_row_factory_from_cursor(cursor)
         row_factory_type = self._detect_row_factory_type(row_factory)
 
         # Store all result sets for iteration
@@ -1435,20 +1414,8 @@ class PsycopgInstrumentation(InstrumentationBase):
             cursor._mock_rows = first_set["rows"]  # pyright: ignore[reportAttributeAccessIssue]
             cursor._mock_index = 0  # pyright: ignore[reportAttributeAccessIssue]
 
-            # Set description for first result set
-            description_data = first_set.get("description")
-            if description_data:
-                desc = [
-                    (col["name"], col.get("type_code"), None, None, None, None, None)
-                    for col in description_data
-                ]
-                try:
-                    cursor._tusk_description = desc  # pyright: ignore[reportAttributeAccessIssue]
-                except AttributeError:
-                    try:
-                        cursor.description = desc  # pyright: ignore[reportAttributeAccessIssue]
-                    except AttributeError:
-                        pass
+            # Set description for first result set using helper
+            self._set_cursor_description(cursor, first_set.get("description"))
 
             # Set up initial fetch methods for the first result set (for code that uses nextset() instead of results())
             first_column_names = first_set.get("column_names")

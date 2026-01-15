@@ -908,10 +908,7 @@ def test_cursor_set_result():
 
 @app.route("/test/decimal-types")
 def test_decimal_types():
-    """Test Decimal/numeric types.
-
-    BUG INVESTIGATION: Decimal types may have serialization/precision issues.
-    """
+    """Test Decimal/numeric types."""
     try:
         from decimal import Decimal
 
@@ -947,10 +944,7 @@ def test_decimal_types():
 
 @app.route("/test/date-time-types")
 def test_date_time_types():
-    """Test date/time types.
-
-    BUG INVESTIGATION: Date, time, and interval types may have issues.
-    """
+    """Test date/time types."""
     try:
         from datetime import date, time, timedelta
 
