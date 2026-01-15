@@ -14,15 +14,36 @@ on:
   workflow_dispatch: {}
 
 jobs:
+  discover:
+    name: Discover E2E Tests
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Find all e2e-tests directories
+        id: set-matrix
+        run: |
+          # Find all directories with e2e-tests and convert to JSON array
+          LIBRARIES=$(find drift/instrumentation -type d -name "e2e-tests" \
+            | sed 's|drift/instrumentation/||' | sed 's|/e2e-tests||' | sort \
+            | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          
+          echo "Found libraries with e2e-tests: $LIBRARIES"
+          echo "matrix=$LIBRARIES" >> $GITHUB_OUTPUT
+
   e2e:
     name: E2E Tests - ${{ matrix.library }}
+    needs: discover
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       max-parallel: 6
       matrix:
-        library: [flask, fastapi, django, redis, requests, httpx, psycopg, psycopg2, urllib3]
+        library: ${{ fromJSON(needs.discover.outputs.matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
