@@ -14,8 +14,10 @@ from __future__ import annotations
 import gzip
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, override
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any
+
+from typing_extensions import override
 
 from ...resilience import (
     CircuitBreaker,
@@ -270,7 +272,7 @@ class ApiSpanAdapter(SpanExportAdapter):
 
         timestamp = datetime.fromtimestamp(
             clean_span.timestamp.seconds + clean_span.timestamp.nanos / 1_000_000_000,
-            tz=UTC,
+            tz=timezone.utc,
         )
 
         duration = timedelta(

@@ -6,13 +6,13 @@ import json
 import logging
 import time
 from types import ModuleType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Union
 
 if TYPE_CHECKING:
     from psycopg2.extensions import cursor as BaseCursorType
     from psycopg2.sql import Composable
 
-    QueryType = str | bytes | Composable
+    QueryType = Union[str, bytes, Composable]
 
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind as OTelSpanKind
@@ -843,7 +843,7 @@ class Psycopg2Instrumentation(InstrumentationBase):
         # If it's a dict cursor and we have description, convert rows to dicts
         if is_dict_cursor and description_data:
             column_names = [col["name"] for col in description_data]
-            mock_rows = [dict(zip(column_names, row, strict=True)) for row in mock_rows]
+            mock_rows = [dict(zip(column_names, row)) for row in mock_rows]
 
         cursor._mock_rows = mock_rows  # pyright: ignore[reportAttributeAccessIssue]
         cursor._mock_index = 0  # pyright: ignore[reportAttributeAccessIssue]

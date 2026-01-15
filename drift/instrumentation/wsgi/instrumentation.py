@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import logging
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, override
+from typing import TYPE_CHECKING, Any
+
+from typing_extensions import override
 
 if TYPE_CHECKING:
     from _typeshed.wsgi import WSGIApplication
