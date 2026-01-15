@@ -150,8 +150,8 @@ class E2ETestRunnerBase:
         self.app_process = subprocess.Popen(
             ["python", "src/app.py"],
             env={**os.environ, **env},
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             text=True,
         )
 

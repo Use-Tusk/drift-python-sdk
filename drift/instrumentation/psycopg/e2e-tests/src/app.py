@@ -723,14 +723,6 @@ def test_binary_format():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
-# =====================================================================
-# BUG-EXPOSING TEST ENDPOINTS
-# These endpoints expose confirmed bugs in the psycopg instrumentation.
-# See BUG_TRACKING.md for detailed analysis.
-# =====================================================================
-
-
 @app.route("/test/null-values")
 def test_null_values():
     """Test handling of NULL values in results."""

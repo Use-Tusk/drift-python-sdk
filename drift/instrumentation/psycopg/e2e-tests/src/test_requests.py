@@ -75,8 +75,8 @@ if __name__ == "__main__":
     # Test: Transaction context manager
     make_request("GET", "/test/transaction-context")
 
-    # These still need investigation:
-    # make_request("GET", "/test/json-jsonb")
-    # make_request("GET", "/test/array-types")
+    # JSON/JSONB and array types tests
+    make_request("GET", "/test/json-jsonb")
+    make_request("GET", "/test/array-types")
 
     print_request_summary()

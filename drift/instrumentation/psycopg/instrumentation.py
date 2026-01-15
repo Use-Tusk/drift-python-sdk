@@ -1202,7 +1202,6 @@ class PsycopgInstrumentation(InstrumentationBase):
         # The SDK communicator already extracts response.body from the CLI's MockInteraction structure
         # So mock_data should already contain: {"rowcount": ..., "description": [...], "rows": [...]}
         actual_data = mock_data
-        logger.debug(f"[MOCK_DATA] mock_data: {mock_data}")
 
         try:
             cursor._rowcount = actual_data.get("rowcount", -1)
