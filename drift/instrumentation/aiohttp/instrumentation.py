@@ -818,10 +818,21 @@ class _MockClientResponse:
         """Return headers as a dict-like object."""
         return self._headers
 
+    def _get_header(self, name: str) -> str | None:
+        """Get header value with case-insensitive lookup.
+
+        HTTP headers are case-insensitive per RFC 7230.
+        """
+        name_lower = name.lower()
+        for key, value in self._headers.items():
+            if key.lower() == name_lower:
+                return value
+        return None
+
     @property
     def content_type(self) -> str:
-        """Return content type from headers."""
-        return self._headers.get("content-type", "application/octet-stream")
+        """Return content type from headers (case-insensitive lookup)."""
+        return self._get_header("content-type") or "application/octet-stream"
 
     async def read(self) -> bytes:
         """Read response body."""
