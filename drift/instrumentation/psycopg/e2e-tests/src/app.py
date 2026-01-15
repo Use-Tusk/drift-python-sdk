@@ -777,10 +777,7 @@ def test_null_values():
 
 @app.route("/test/transaction-context")
 def test_transaction_context():
-    """Test conn.transaction() context manager.
-
-    BUG INVESTIGATION: Explicit transaction context manager may not work correctly.
-    """
+    """Test conn.transaction() context manager."""
     try:
         results = []
         with psycopg.connect(get_conn_string()) as conn:
