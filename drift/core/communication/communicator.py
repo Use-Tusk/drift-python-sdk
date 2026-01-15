@@ -554,7 +554,7 @@ class ProtobufCommunicator:
 
         # If background reader is running, wait on event instead of reading socket
         if self._background_reader_thread and self._background_reader_thread.is_alive():
-            return self._wait_for_response(request_id)
+            return await self._wait_for_response_async(request_id)
 
         # No background reader - read directly from socket (async connect path)
         self._socket.settimeout(self.config.request_timeout)
@@ -623,6 +623,16 @@ class ProtobufCommunicator:
             with self._response_lock:
                 self._response_events.pop(request_id, None)
                 self._response_data.pop(request_id, None)  # In case of timeout
+
+    async def _wait_for_response_async(self, request_id: str) -> MockResponseOutput:
+        """Async version of _wait_for_response that doesn't block the event loop.
+
+        Uses asyncio.to_thread() to run the blocking Event.wait() in a thread pool,
+        allowing other async tasks to run while waiting for the response.
+        """
+        import asyncio
+
+        return await asyncio.to_thread(self._wait_for_response, request_id)
 
     def _recv_exact(self, n: int) -> bytes | None:
         """Receive exactly n bytes from socket."""
