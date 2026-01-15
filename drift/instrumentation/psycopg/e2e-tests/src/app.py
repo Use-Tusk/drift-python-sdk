@@ -679,8 +679,6 @@ def test_kwargs_row_factory():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# BUG HUNTING TEST ENDPOINTS
-
 @app.route("/test/scalar-row-factory")
 def test_scalar_row_factory():
     """Test scalar_row row factory.
@@ -703,6 +701,186 @@ def test_scalar_row_factory():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/test/binary-format")
+def test_binary_format():
+    """Test execute with binary=True parameter.
+
+    Tests whether the instrumentation correctly handles binary format transfers.
+    """
+    try:
+        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
+            # Execute with binary=True
+            cur.execute(
+                "SELECT id, name FROM users ORDER BY id LIMIT 3",
+                binary=True
+            )
+            rows = cur.fetchall()
+
+        return jsonify({
+            "count": len(rows),
+            "data": [{"id": r[0], "name": r[1]} for r in rows]
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# =====================================================================
+# BUG-EXPOSING TEST ENDPOINTS
+# These endpoints expose confirmed bugs in the psycopg instrumentation.
+# See BUG_TRACKING.md for detailed analysis.
+# =====================================================================
+
+
+@app.route("/test/null-values")
+def test_null_values():
+    """Test handling of NULL values in results.
+
+    BUG INVESTIGATION: NULL value serialization/deserialization may have issues.
+    """
+    try:
+        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
+            # Create temp table with nullable columns
+            cur.execute("""
+                CREATE TEMP TABLE null_test (
+                    id INT,
+                    nullable_text TEXT,
+                    nullable_int INT,
+                    nullable_bool BOOLEAN
+                )
+            """)
+
+            # Insert rows with NULL values
+            cur.execute("""
+                INSERT INTO null_test VALUES
+                    (1, 'has_value', 42, TRUE),
+                    (2, NULL, NULL, NULL),
+                    (3, 'another', NULL, FALSE)
+            """)
+
+            # Query rows
+            cur.execute("SELECT * FROM null_test ORDER BY id")
+            rows = cur.fetchall()
+            conn.commit()
+
+        return jsonify({
+            "count": len(rows),
+            "data": [
+                {
+                    "id": r[0],
+                    "nullable_text": r[1],
+                    "nullable_int": r[2],
+                    "nullable_bool": r[3]
+                }
+                for r in rows
+            ]
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/transaction-context")
+def test_transaction_context():
+    """Test conn.transaction() context manager.
+
+    BUG INVESTIGATION: Explicit transaction context manager may not work correctly.
+    """
+    try:
+        results = []
+        with psycopg.connect(get_conn_string()) as conn:
+            # Use explicit transaction
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    cur.execute("CREATE TEMP TABLE tx_test (id INT, val TEXT)")
+                    cur.execute("INSERT INTO tx_test VALUES (1, 'first')")
+                    cur.execute("SELECT * FROM tx_test")
+                    rows = cur.fetchall()
+                    results.append({"phase": "inside_transaction", "rows": [list(r) for r in rows]})
+
+            # After transaction commit
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM tx_test")
+                rows = cur.fetchall()
+                results.append({"phase": "after_commit", "rows": [list(r) for r in rows]})
+
+        return jsonify({"results": results})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/json-jsonb")
+def test_json_jsonb():
+    """Test JSON and JSONB data types.
+
+    BUG INVESTIGATION: JSON types may have serialization issues.
+    """
+    try:
+        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
+            # Create temp table with JSON columns
+            cur.execute("""
+                CREATE TEMP TABLE json_test (
+                    id INT,
+                    json_col JSON,
+                    jsonb_col JSONB
+                )
+            """)
+
+            # Insert JSON data
+            import json
+            test_json = {"name": "test", "values": [1, 2, 3], "nested": {"key": "value"}}
+            cur.execute(
+                "INSERT INTO json_test VALUES (%s, %s, %s)",
+                (1, json.dumps(test_json), json.dumps(test_json))
+            )
+
+            # Query back
+            cur.execute("SELECT * FROM json_test WHERE id = 1")
+            row = cur.fetchone()
+            conn.commit()
+
+        return jsonify({
+            "id": row[0],
+            "json_col": row[1],
+            "jsonb_col": row[2]
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/array-types")
+def test_array_types():
+    """Test PostgreSQL array types.
+
+    BUG INVESTIGATION: Array types may have serialization issues.
+    """
+    try:
+        with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
+            # Create temp table with array columns
+            cur.execute("""
+                CREATE TEMP TABLE array_test (
+                    id INT,
+                    int_array INTEGER[],
+                    text_array TEXT[]
+                )
+            """)
+
+            # Insert array data
+            cur.execute(
+                "INSERT INTO array_test VALUES (%s, %s, %s)",
+                (1, [10, 20, 30], ["a", "b", "c"])
+            )
+
+            # Query back
+            cur.execute("SELECT * FROM array_test WHERE id = 1")
+            row = cur.fetchone()
+            conn.commit()
+
+        return jsonify({
+            "id": row[0],
+            "int_array": list(row[1]) if row[1] else None,
+            "text_array": list(row[2]) if row[2] else None
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     sdk.mark_app_as_ready()

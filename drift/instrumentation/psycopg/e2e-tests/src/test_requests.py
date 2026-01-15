@@ -67,5 +67,17 @@ if __name__ == "__main__":
     make_request("GET", "/test/class-row-factory")
     make_request("GET", "/test/kwargs-row-factory")
     make_request("GET", "/test/scalar-row-factory")
+    make_request("GET", "/test/binary-format")
+
+    # =====================================================================
+    # BUG-EXPOSING TEST ENDPOINTS (SKIPPED)
+    # These endpoints expose confirmed bugs and cause the app to hang.
+    # See BUG_TRACKING.md for detailed analysis.
+    # =====================================================================
+
+    # make_request("GET", "/test/null-values")
+    # make_request("GET", "/test/transaction-context")
+    # make_request("GET", "/test/json-jsonb")
+    # make_request("GET", "/test/array-types")
 
     print_request_summary()

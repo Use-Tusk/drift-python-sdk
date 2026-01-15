@@ -478,9 +478,13 @@ class PsycopgInstrumentation(InstrumentationBase):
                         self._finalize_query_span(span_info.span, cursor, query_str, params, None)
                         span_info.span.end()
                 else:
-                    # Normal mode: finalize immediately
-                    self._finalize_query_span(span_info.span, cursor, query_str, params, None)
-                    span_info.span.end()
+                    # Normal mode: finalize immediately (unless lazy capture was set up)
+                    span_finalized = self._finalize_query_span(span_info.span, cursor, query_str, params, None)
+                    if span_finalized:
+                        # Span was fully finalized, end it now
+                        span_info.span.end()
+                    # If span_finalized is False, lazy capture was set up and span will be
+                    # ended when user code calls a fetch method
 
     def _traced_executemany(
         self, cursor: Any, original_executemany: Any, sdk: TuskDrift, query: str, params_seq, **kwargs
@@ -620,16 +624,20 @@ class PsycopgInstrumentation(InstrumentationBase):
                         {"_batch": params_list, "_returning": True},
                         error,
                     )
+                    span_info.span.end()
                 else:
                     # Existing behavior for executemany without returning
-                    self._finalize_query_span(
+                    span_finalized = self._finalize_query_span(
                         span_info.span,
                         cursor,
                         query_str,
                         {"_batch": params_list},
                         error,
                     )
-                span_info.span.end()
+                    if span_finalized:
+                        span_info.span.end()
+                    # Note: executemany without returning typically has no results,
+                    # so lazy capture is unlikely but we handle it for safety
 
     def _traced_stream(
         self, cursor: Any, original_stream: Any, sdk: TuskDrift, query: str, params=None, **kwargs
@@ -1048,7 +1056,8 @@ class PsycopgInstrumentation(InstrumentationBase):
         """Detect the type of row factory for mock transformations.
 
         Returns:
-            "dict" for dict_row, "namedtuple" for namedtuple_row, "tuple" otherwise
+            "dict" for dict_row, "namedtuple" for namedtuple_row,
+            "class" for class_row, "tuple" otherwise
         """
         if row_factory is None:
             return "tuple"
@@ -1067,6 +1076,8 @@ class PsycopgInstrumentation(InstrumentationBase):
             return "kwargs"
         elif 'scalar' in factory_name_lower:
             return "scalar"
+        elif 'class' in factory_name_lower:
+            return "class"
 
         return "tuple"
 
@@ -1126,8 +1137,10 @@ class PsycopgInstrumentation(InstrumentationBase):
             params = item['params']
 
             try:
-                self._finalize_query_span(span_info.span, cursor, query, params, error=None)
-                span_info.span.end()
+                span_finalized = self._finalize_query_span(span_info.span, cursor, query, params, error=None)
+                if span_finalized:
+                    span_info.span.end()
+                # If lazy capture was set up, span will be ended when user fetches
             except Exception as e:
                 logger.error(f"[PIPELINE] Error finalizing deferred span: {e}")
                 try:
@@ -1231,8 +1244,10 @@ class PsycopgInstrumentation(InstrumentationBase):
         row_factory_type = self._detect_row_factory_type(row_factory)
 
         # Create namedtuple class once if needed (avoid recreating for each row)
+        # Used for both namedtuple_row and class_row (class_row returns dataclass instances,
+        # but in replay we can't recreate the exact class, so we use namedtuple as a compatible substitute)
         RowClass = None
-        if row_factory_type == "namedtuple" and column_names:
+        if row_factory_type in ("namedtuple", "class") and column_names:
             from collections import namedtuple
             RowClass = namedtuple('Row', column_names)
 
@@ -1247,7 +1262,9 @@ class PsycopgInstrumentation(InstrumentationBase):
             values = tuple(row) if isinstance(row, list) else row
             if row_factory_type == "dict" and column_names:
                 return dict(zip(column_names, values))
-            elif row_factory_type == "namedtuple" and RowClass is not None:
+            elif row_factory_type in ("namedtuple", "class") and RowClass is not None:
+                # For class_row, we use namedtuple as a compatible substitute that supports
+                # attribute access (row.id, row.name, etc.)
                 return RowClass(*values)
             return values
 
@@ -1550,8 +1567,12 @@ class PsycopgInstrumentation(InstrumentationBase):
         query: str,
         params: Any,
         error: Exception | None,
-    ) -> None:
-        """Finalize span with query data."""
+    ) -> bool:
+        """Finalize span with query data.
+
+        Returns True if span was fully finalized, False if lazy capture was set up
+        (meaning caller should NOT end the span - it will be ended by lazy fetch).
+        """
         try:
             # Build input value
             input_value = {
@@ -1575,6 +1596,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                 try:
                     rows = []
                     description = None
+                    row_factory_type = "tuple"  # default
 
                     # Try to fetch results if available
                     if hasattr(cursor, "description") and cursor.description:
@@ -1588,110 +1610,38 @@ class PsycopgInstrumentation(InstrumentationBase):
                             for desc in cursor.description
                         ]
 
-                        # Fetch all rows for recording
-                        # We need to capture these for replay mode
-                        try:
-                            all_rows = cursor.fetchall()
-                            # Convert rows to lists for JSON serialization
-                            # Handle dict_row (returns dicts) and namedtuple_row (returns namedtuples)
-                            column_names = [d["name"] for d in description]
+                        # Get row factory from cursor or connection
+                        row_factory = getattr(cursor, 'row_factory', None)
+                        if row_factory is None:
+                            conn = getattr(cursor, 'connection', None)
+                            if conn:
+                                row_factory = getattr(conn, 'row_factory', None)
 
-                            # Get row factory from cursor or connection
-                            row_factory = getattr(cursor, 'row_factory', None)
-                            if row_factory is None:
-                                conn = getattr(cursor, 'connection', None)
-                                if conn:
-                                    row_factory = getattr(conn, 'row_factory', None)
+                        # Detect row factory type BEFORE processing rows
+                        row_factory_type = self._detect_row_factory_type(row_factory)
+                        column_names = [d["name"] for d in description]
 
-                            # Detect row factory type BEFORE processing rows
-                            row_factory_type = self._detect_row_factory_type(row_factory)
+                        # Use LAZY CAPTURE to avoid hanging with binary=True and other edge cases.
+                        # Instead of calling fetchall() immediately (which can hang), we set up
+                        # wrappers that capture results when the user first calls a fetch method.
+                        # Store context needed for lazy capture
+                        cursor._tusk_lazy_span = span  # pyright: ignore[reportAttributeAccessIssue]
+                        cursor._tusk_lazy_input_value = input_value  # pyright: ignore[reportAttributeAccessIssue]
+                        cursor._tusk_lazy_description = description  # pyright: ignore[reportAttributeAccessIssue]
+                        cursor._tusk_lazy_row_factory_type = row_factory_type  # pyright: ignore[reportAttributeAccessIssue]
+                        cursor._tusk_lazy_column_names = column_names  # pyright: ignore[reportAttributeAccessIssue]
+                        cursor._tusk_lazy_instrumentation = self  # pyright: ignore[reportAttributeAccessIssue]
 
-                            rows = []
-                            for row in all_rows:
-                                if row_factory_type == "kwargs":
-                                    # kwargs_row: store the entire dict as-is (it has custom keys, not column names)
-                                    rows.append(row)
-                                elif row_factory_type == "scalar":
-                                    # scalar_row: returns single values - wrap in list for consistent storage
-                                    rows.append([row])
-                                elif isinstance(row, dict):
-                                    # dict_row: extract values in column order
-                                    rows.append([row.get(col) for col in column_names])
-                                elif hasattr(row, '_fields'):
-                                    # namedtuple: extract values in column order
-                                    rows.append([getattr(row, col, None) for col in column_names])
-                                else:
-                                    # tuple or list: convert directly
-                                    rows.append(list(row))
+                        # Set up lazy capture wrappers
+                        self._setup_lazy_capture(cursor)
 
-                            # CRITICAL: Re-populate cursor so user code can still fetch
-                            # We'll store the rows and patch fetch methods
-                            cursor._tusk_rows = all_rows  # pyright: ignore[reportAttributeAccessIssue]
-                            cursor._tusk_index = 0  # pyright: ignore[reportAttributeAccessIssue]
+                        logger.debug("[PSYCOPG] Lazy capture set up, deferring span finalization")
+                        return False  # Signal caller NOT to end span
 
-                            # Replace with our versions that return stored rows
-                            def patched_fetchone():
-                                if cursor._tusk_index < len(cursor._tusk_rows):  # pyright: ignore[reportAttributeAccessIssue]
-                                    row = cursor._tusk_rows[cursor._tusk_index]  # pyright: ignore[reportAttributeAccessIssue]
-                                    cursor._tusk_index += 1  # pyright: ignore[reportAttributeAccessIssue]
-                                    return row
-                                return None
-
-                            def patched_fetchmany(size=cursor.arraysize):
-                                result = cursor._tusk_rows[cursor._tusk_index : cursor._tusk_index + size]  # pyright: ignore[reportAttributeAccessIssue]
-                                cursor._tusk_index += len(result)  # pyright: ignore[reportAttributeAccessIssue]
-                                return result
-
-                            def patched_fetchall():
-                                result = cursor._tusk_rows[cursor._tusk_index :]  # pyright: ignore[reportAttributeAccessIssue]
-                                cursor._tusk_index = len(cursor._tusk_rows)  # pyright: ignore[reportAttributeAccessIssue]
-                                return result
-
-                            def patched_scroll(value: int, mode: str = "relative") -> None:
-                                """Scroll the cursor to a new position in the captured result set."""
-                                if mode == "relative":
-                                    newpos = cursor._tusk_index + value  # pyright: ignore[reportAttributeAccessIssue]
-                                elif mode == "absolute":
-                                    newpos = value
-                                else:
-                                    raise ValueError(f"bad mode: {mode}. It should be 'relative' or 'absolute'")
-
-                                num_rows = len(cursor._tusk_rows)  # pyright: ignore[reportAttributeAccessIssue]
-                                if num_rows > 0:
-                                    if not (0 <= newpos < num_rows):
-                                        raise IndexError("cursor position out of range")
-                                elif newpos != 0:
-                                    raise IndexError("cursor position out of range")
-
-                                cursor._tusk_index = newpos  # pyright: ignore[reportAttributeAccessIssue]
-
-                            # Patch fetch methods with our versions that return stored rows
-                            cursor.fetchone = patched_fetchone  # pyright: ignore[reportAttributeAccessIssue]
-                            cursor.fetchmany = patched_fetchmany  # pyright: ignore[reportAttributeAccessIssue]
-                            cursor.fetchall = patched_fetchall  # pyright: ignore[reportAttributeAccessIssue]
-                            cursor.scroll = patched_scroll  # pyright: ignore[reportAttributeAccessIssue]
-                            cursor._tusk_patched = True  # pyright: ignore[reportAttributeAccessIssue]
-
-                        except Exception as fetch_error:
-                            logger.debug(f"Could not fetch rows (query might not return rows): {fetch_error}")
-                            rows = []
-
+                    # No description means no results expected (e.g., INSERT without RETURNING)
                     output_value = {
                         "rowcount": cursor.rowcount if hasattr(cursor, "rowcount") else -1,
                     }
-
-                    if description:
-                        output_value["description"] = description
-
-                    if rows:
-                        # Convert rows to JSON-serializable format (handle datetime objects, etc.)
-                        # For kwargs_row, rows are custom dicts - serialize each row as a complete dict
-                        # For other types, rows are lists of column values
-                        if row_factory_type == "kwargs":
-                            serialized_rows = [serialize_value(row) for row in rows]
-                        else:
-                            serialized_rows = [[serialize_value(col) for col in row] for row in rows]
-                        output_value["rows"] = serialized_rows
 
                     # Capture statusmessage for replay
                     if hasattr(cursor, 'statusmessage') and cursor.statusmessage is not None:
@@ -1718,9 +1668,170 @@ class PsycopgInstrumentation(InstrumentationBase):
                 span.set_status(Status(OTelStatusCode.OK))
 
             logger.debug("[PSYCOPG] Span finalized successfully")
+            return True  # Span fully finalized
 
         except Exception as e:
             logger.error(f"Error creating query span: {e}")
+            return True  # Return True to end span on error
+
+    def _setup_lazy_capture(self, cursor: Any) -> None:
+        """Set up lazy capture wrappers on cursor fetch methods.
+
+        These wrappers defer the actual fetchall() call until the user's code
+        requests results. This avoids issues with binary format and other cases
+        where calling fetchall() immediately after execute() can hang.
+        """
+        # Get references to original fetch methods from the cursor's class
+        # (not instance methods which might already be patched)
+        cursor_class = type(cursor)
+        original_fetchall = cursor_class.fetchall
+        original_fetchone = cursor_class.fetchone
+        original_fetchmany = cursor_class.fetchmany
+        original_scroll = cursor_class.scroll if hasattr(cursor_class, 'scroll') else None
+
+        def do_lazy_capture():
+            """Perform the actual capture - called on first fetch."""
+            if hasattr(cursor, '_tusk_rows') and cursor._tusk_rows is not None:
+                return  # Already captured
+
+            try:
+                # Get the actual rows from psycopg
+                all_rows = original_fetchall(cursor)
+
+                # Store for subsequent fetch calls
+                cursor._tusk_rows = all_rows  # pyright: ignore[reportAttributeAccessIssue]
+                cursor._tusk_index = 0  # pyright: ignore[reportAttributeAccessIssue]
+
+                # Process rows for trace capture
+                description = cursor._tusk_lazy_description  # pyright: ignore[reportAttributeAccessIssue]
+                row_factory_type = cursor._tusk_lazy_row_factory_type  # pyright: ignore[reportAttributeAccessIssue]
+                column_names = cursor._tusk_lazy_column_names  # pyright: ignore[reportAttributeAccessIssue]
+
+                rows = []
+                for row in all_rows:
+                    if row_factory_type == "kwargs":
+                        rows.append(row)
+                    elif row_factory_type == "scalar":
+                        rows.append([row])
+                    elif row_factory_type == "class" or hasattr(row, '__dataclass_fields__'):
+                        # dataclass (from class_row): extract values by attribute name
+                        rows.append([getattr(row, col, None) for col in column_names])
+                    elif isinstance(row, dict):
+                        rows.append([row.get(col) for col in column_names])
+                    elif hasattr(row, '_fields'):
+                        # namedtuple: extract values by field name
+                        rows.append([getattr(row, col, None) for col in column_names])
+                    else:
+                        rows.append(list(row))
+
+                # Finalize the span with captured data
+                span = cursor._tusk_lazy_span  # pyright: ignore[reportAttributeAccessIssue]
+                input_value = cursor._tusk_lazy_input_value  # pyright: ignore[reportAttributeAccessIssue]
+                instrumentation = cursor._tusk_lazy_instrumentation  # pyright: ignore[reportAttributeAccessIssue]
+
+                output_value = {
+                    "rowcount": cursor.rowcount if hasattr(cursor, "rowcount") else -1,
+                }
+
+                if description:
+                    output_value["description"] = description
+
+                if rows:
+                    if row_factory_type == "kwargs":
+                        serialized_rows = [serialize_value(row) for row in rows]
+                    else:
+                        serialized_rows = [[serialize_value(col) for col in row] for row in rows]
+                    output_value["rows"] = serialized_rows
+
+                if hasattr(cursor, 'statusmessage') and cursor.statusmessage is not None:
+                    output_value["statusmessage"] = cursor.statusmessage
+
+                # Generate schemas and hashes
+                input_result = JsonSchemaHelper.generate_schema_and_hash(input_value, {})
+                output_result = JsonSchemaHelper.generate_schema_and_hash(output_value, {})
+
+                # Set span attributes
+                span.set_attribute(TdSpanAttributes.INPUT_VALUE, json.dumps(input_value))
+                span.set_attribute(TdSpanAttributes.OUTPUT_VALUE, json.dumps(output_value))
+                span.set_attribute(TdSpanAttributes.INPUT_SCHEMA, json.dumps(input_result.schema.to_primitive()))
+                span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA, json.dumps(output_result.schema.to_primitive()))
+                span.set_attribute(TdSpanAttributes.INPUT_SCHEMA_HASH, input_result.decoded_schema_hash)
+                span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA_HASH, output_result.decoded_schema_hash)
+                span.set_attribute(TdSpanAttributes.INPUT_VALUE_HASH, input_result.decoded_value_hash)
+                span.set_attribute(TdSpanAttributes.OUTPUT_VALUE_HASH, output_result.decoded_value_hash)
+
+                span.set_status(Status(OTelStatusCode.OK))
+                span.end()
+
+                logger.debug("[PSYCOPG] Lazy capture completed, span finalized")
+
+            except Exception as e:
+                logger.error(f"Error in lazy capture: {e}")
+                # Try to end span even on error
+                try:
+                    span = cursor._tusk_lazy_span  # pyright: ignore[reportAttributeAccessIssue]
+                    span.set_status(Status(OTelStatusCode.ERROR, str(e)))
+                    span.end()
+                except Exception:
+                    pass
+
+            finally:
+                # Clean up lazy capture attributes
+                for attr in ('_tusk_lazy_span', '_tusk_lazy_input_value', '_tusk_lazy_description',
+                            '_tusk_lazy_row_factory_type', '_tusk_lazy_column_names', '_tusk_lazy_instrumentation'):
+                    if hasattr(cursor, attr):
+                        try:
+                            delattr(cursor, attr)
+                        except AttributeError:
+                            pass
+
+        def lazy_fetchone():
+            do_lazy_capture()
+            if cursor._tusk_index < len(cursor._tusk_rows):  # pyright: ignore[reportAttributeAccessIssue]
+                row = cursor._tusk_rows[cursor._tusk_index]  # pyright: ignore[reportAttributeAccessIssue]
+                cursor._tusk_index += 1  # pyright: ignore[reportAttributeAccessIssue]
+                return row
+            return None
+
+        def lazy_fetchmany(size=None):
+            do_lazy_capture()
+            if size is None:
+                size = cursor.arraysize
+            result = cursor._tusk_rows[cursor._tusk_index : cursor._tusk_index + size]  # pyright: ignore[reportAttributeAccessIssue]
+            cursor._tusk_index += len(result)  # pyright: ignore[reportAttributeAccessIssue]
+            return result
+
+        def lazy_fetchall():
+            do_lazy_capture()
+            result = cursor._tusk_rows[cursor._tusk_index :]  # pyright: ignore[reportAttributeAccessIssue]
+            cursor._tusk_index = len(cursor._tusk_rows)  # pyright: ignore[reportAttributeAccessIssue]
+            return result
+
+        def lazy_scroll(value: int, mode: str = "relative") -> None:
+            do_lazy_capture()
+            if mode == "relative":
+                newpos = cursor._tusk_index + value  # pyright: ignore[reportAttributeAccessIssue]
+            elif mode == "absolute":
+                newpos = value
+            else:
+                raise ValueError(f"bad mode: {mode}. It should be 'relative' or 'absolute'")
+
+            num_rows = len(cursor._tusk_rows)  # pyright: ignore[reportAttributeAccessIssue]
+            if num_rows > 0:
+                if not (0 <= newpos < num_rows):
+                    raise IndexError("cursor position out of range")
+            elif newpos != 0:
+                raise IndexError("cursor position out of range")
+
+            cursor._tusk_index = newpos  # pyright: ignore[reportAttributeAccessIssue]
+
+        # Patch the cursor with lazy wrappers
+        cursor.fetchone = lazy_fetchone  # pyright: ignore[reportAttributeAccessIssue]
+        cursor.fetchmany = lazy_fetchmany  # pyright: ignore[reportAttributeAccessIssue]
+        cursor.fetchall = lazy_fetchall  # pyright: ignore[reportAttributeAccessIssue]
+        if original_scroll:
+            cursor.scroll = lazy_scroll  # pyright: ignore[reportAttributeAccessIssue]
+        cursor._tusk_patched = True  # pyright: ignore[reportAttributeAccessIssue]
 
     def _finalize_executemany_returning_span(
         self,
