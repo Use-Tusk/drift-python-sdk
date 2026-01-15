@@ -471,13 +471,6 @@ class TuskDrift:
             except Exception as e:
                 logger.debug(f"Socket instrumentation initialization failed: {e}")
 
-            # try:
-            #     from ..instrumentation.kinde import KindeInstrumentation
-            #     _ = KindeInstrumentation(enabled=True)
-            #     logger.debug("Kinde instrumentation initialized (REPLAY mode - auth token validation)")
-            # except Exception as e:
-            #     logger.debug(f"Kinde instrumentation initialization failed: {e}")
-
     def create_env_vars_snapshot(self) -> None:
         """Create a span capturing all environment variables.
 
