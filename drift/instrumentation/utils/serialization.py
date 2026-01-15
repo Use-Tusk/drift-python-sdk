@@ -11,7 +11,7 @@ from typing import Any
 
 # Try to import psycopg Range type for serialization support
 try:
-    from psycopg.types.range import Range as PsycopgRange
+    from psycopg.types.range import Range as PsycopgRange  # type: ignore[import-untyped]
 
     HAS_PSYCOPG_RANGE = True
 except ImportError:
@@ -61,7 +61,7 @@ def serialize_value(val: Any) -> Any:
         return {"__decimal__": str(val)}
     elif isinstance(val, uuid.UUID):
         return {"__uuid__": str(val)}
-    elif HAS_PSYCOPG_RANGE and isinstance(val, PsycopgRange):
+    elif HAS_PSYCOPG_RANGE and PsycopgRange is not None and isinstance(val, PsycopgRange):
         # Serialize psycopg Range objects to a deterministic dict format
         # This handles INT4RANGE, TSRANGE, and other PostgreSQL range types
         if val.isempty:

@@ -10,7 +10,7 @@ from typing import Any
 
 # Try to import psycopg Range type for deserialization support
 try:
-    from psycopg.types.range import Range as PsycopgRange
+    from psycopg.types.range import Range as PsycopgRange  # type: ignore[import-untyped]
 
     HAS_PSYCOPG_RANGE = True
 except ImportError:

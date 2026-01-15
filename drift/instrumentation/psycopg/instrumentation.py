@@ -34,74 +34,6 @@ logger = logging.getLogger(__name__)
 _instance: PsycopgInstrumentation | None = None
 
 
-class _CursorInstrumentationMixin:
-    """Mixin providing common functionality for instrumented cursor classes.
-
-    This mixin contains shared properties and methods used by both
-    InstrumentedCursor and InstrumentedServerCursor to avoid code duplication.
-    """
-
-    _tusk_description = None  # Store mock description for replay mode
-
-    @property
-    def description(self):
-        # In replay mode, return mock description if set; otherwise use base
-        if self._tusk_description is not None:
-            return self._tusk_description
-        return super().description
-
-    @property
-    def rownumber(self):
-        # In captured mode (after fetchall in _finalize_query_span), return tracked index
-        if hasattr(self, "_tusk_rows") and self._tusk_rows is not None:
-            return self._tusk_index
-        # In replay mode with mock data, return mock index
-        if hasattr(self, "_mock_rows") and self._mock_rows is not None:
-            return self._mock_index
-        # Otherwise, return real cursor's rownumber
-        return super().rownumber
-
-    @property
-    def statusmessage(self):
-        # In replay mode with mock data, return mock statusmessage
-        if hasattr(self, "_mock_statusmessage"):
-            return self._mock_statusmessage
-        # Otherwise, return real cursor's statusmessage
-        return super().statusmessage
-
-    def __iter__(self):
-        # Support direct cursor iteration (for row in cursor)
-        # In replay mode with mock data (_mock_rows) or record mode with captured data (_tusk_rows)
-        if hasattr(self, "_mock_rows") and self._mock_rows is not None:
-            return self
-        if hasattr(self, "_tusk_rows") and self._tusk_rows is not None:
-            return self
-        return super().__iter__()
-
-    def __next__(self):
-        # In replay mode with mock data, iterate over mock rows
-        if hasattr(self, "_mock_rows") and self._mock_rows is not None:
-            if self._mock_index < len(self._mock_rows):
-                row = self._mock_rows[self._mock_index]
-                self._mock_index += 1
-                # Apply row transformation if fetchone is patched
-                if hasattr(self, "fetchone") and callable(self.fetchone):
-                    # Reset index, get transformed row, restore index
-                    self._mock_index -= 1
-                    result = self.fetchone()
-                    return result
-                return tuple(row) if isinstance(row, list) else row
-            raise StopIteration
-        # In record mode with captured data, iterate over stored rows
-        if hasattr(self, "_tusk_rows") and self._tusk_rows is not None:
-            if self._tusk_index < len(self._tusk_rows):
-                row = self._tusk_rows[self._tusk_index]
-                self._tusk_index += 1
-                return row
-            raise StopIteration
-        return super().__next__()
-
-
 class PsycopgInstrumentation(InstrumentationBase):
     """Instrumentation for psycopg (psycopg3) PostgreSQL client library.
 
@@ -198,10 +130,11 @@ class PsycopgInstrumentation(InstrumentationBase):
         self._original_pipeline_exit = getattr(Pipeline, "__exit__", None)
 
         if self._original_pipeline_sync:
+            original_sync = self._original_pipeline_sync
 
             def patched_sync(pipeline_self):
                 """Patched Pipeline.sync that finalizes pending spans."""
-                result = instrumentation._original_pipeline_sync(pipeline_self)
+                result = original_sync(pipeline_self)
                 # _conn is the connection associated with the pipeline
                 conn = getattr(pipeline_self, "_conn", None)
                 if conn:
@@ -212,10 +145,11 @@ class PsycopgInstrumentation(InstrumentationBase):
             logger.debug("psycopg.Pipeline.sync instrumented")
 
         if self._original_pipeline_exit:
+            original_exit = self._original_pipeline_exit
 
             def patched_exit(pipeline_self, exc_type, exc_val, exc_tb):
                 """Patched Pipeline.__exit__ that finalizes any remaining spans."""
-                result = instrumentation._original_pipeline_exit(pipeline_self, exc_type, exc_val, exc_tb)
+                result = original_exit(pipeline_self, exc_type, exc_val, exc_tb)
                 # Finalize any remaining pending spans (handles implicit sync on exit)
                 conn = getattr(pipeline_self, "_conn", None)
                 if conn:
@@ -243,12 +177,68 @@ class PsycopgInstrumentation(InstrumentationBase):
 
         base = base_factory or BaseCursor
 
-        class InstrumentedCursor(_CursorInstrumentationMixin, base):  # type: ignore
-            """Instrumented cursor with tracing support.
+        class InstrumentedCursor(base):  # type: ignore
+            """Instrumented cursor with tracing support."""
 
-            Inherits common properties (description, rownumber, statusmessage)
-            and iteration methods (__iter__, __next__) from _CursorInstrumentationMixin.
-            """
+            _tusk_description = None  # Store mock description for replay mode
+
+            @property
+            def description(self):
+                # In replay mode, return mock description if set; otherwise use base
+                if self._tusk_description is not None:
+                    return self._tusk_description
+                return super().description
+
+            @property
+            def rownumber(self):
+                # In captured mode (after fetchall in _finalize_query_span), return tracked index
+                if hasattr(self, "_tusk_rows") and self._tusk_rows is not None:
+                    return self._tusk_index
+                # In replay mode with mock data, return mock index
+                if hasattr(self, "_mock_rows") and self._mock_rows is not None:
+                    return self._mock_index
+                # Otherwise, return real cursor's rownumber
+                return super().rownumber
+
+            @property
+            def statusmessage(self):
+                # In replay mode with mock data, return mock statusmessage
+                if hasattr(self, "_mock_statusmessage"):
+                    return self._mock_statusmessage
+                # Otherwise, return real cursor's statusmessage
+                return super().statusmessage
+
+            def __iter__(self):
+                # Support direct cursor iteration (for row in cursor)
+                # In replay mode with mock data (_mock_rows) or record mode with captured data (_tusk_rows)
+                if hasattr(self, "_mock_rows") and self._mock_rows is not None:
+                    return self
+                if hasattr(self, "_tusk_rows") and self._tusk_rows is not None:
+                    return self
+                return super().__iter__()
+
+            def __next__(self):
+                # In replay mode with mock data, iterate over mock rows
+                if hasattr(self, "_mock_rows") and self._mock_rows is not None:
+                    if self._mock_index < len(self._mock_rows):
+                        row = self._mock_rows[self._mock_index]
+                        self._mock_index += 1
+                        # Apply row transformation if fetchone is patched
+                        if hasattr(self, "fetchone") and callable(self.fetchone):
+                            # Reset index, get transformed row, restore index
+                            self._mock_index -= 1
+                            result = self.fetchone()
+                            return result
+                        return tuple(row) if isinstance(row, list) else row
+                    raise StopIteration
+                # In record mode with captured data, iterate over stored rows
+                if hasattr(self, "_tusk_rows") and self._tusk_rows is not None:
+                    if self._tusk_index < len(self._tusk_rows):
+                        row = self._tusk_rows[self._tusk_index]
+                        self._tusk_index += 1
+                        return row
+                    raise StopIteration
+                return super().__next__()
 
             def execute(self, query, params=None, **kwargs):
                 return instrumentation._traced_execute(self, super().execute, sdk, query, params, **kwargs)
@@ -281,15 +271,72 @@ class PsycopgInstrumentation(InstrumentationBase):
 
         base = base_factory or BaseServerCursor
 
-        class InstrumentedServerCursor(_CursorInstrumentationMixin, base):  # type: ignore
+        class InstrumentedServerCursor(base):  # type: ignore
             """Instrumented server cursor with tracing support.
-
-            Inherits common properties (description, rownumber, statusmessage)
-            and iteration methods (__iter__, __next__) from _CursorInstrumentationMixin.
 
             Note: ServerCursor doesn't support executemany().
             Note: ServerCursor has stream-like iteration via fetchmany/itersize.
             """
+
+            _tusk_description = None  # Store mock description for replay mode
+
+            @property
+            def description(self):
+                # In replay mode, return mock description if set; otherwise use base
+                if self._tusk_description is not None:
+                    return self._tusk_description
+                return super().description
+
+            @property
+            def rownumber(self):
+                # In captured mode (after fetchall in _finalize_query_span), return tracked index
+                if hasattr(self, "_tusk_rows") and self._tusk_rows is not None:
+                    return self._tusk_index
+                # In replay mode with mock data, return mock index
+                if hasattr(self, "_mock_rows") and self._mock_rows is not None:
+                    return self._mock_index
+                # Otherwise, return real cursor's rownumber
+                return super().rownumber
+
+            @property
+            def statusmessage(self):
+                # In replay mode with mock data, return mock statusmessage
+                if hasattr(self, "_mock_statusmessage"):
+                    return self._mock_statusmessage
+                # Otherwise, return real cursor's statusmessage
+                return super().statusmessage
+
+            def __iter__(self):
+                # Support direct cursor iteration (for row in cursor)
+                # In replay mode with mock data (_mock_rows) or record mode with captured data (_tusk_rows)
+                if hasattr(self, "_mock_rows") and self._mock_rows is not None:
+                    return self
+                if hasattr(self, "_tusk_rows") and self._tusk_rows is not None:
+                    return self
+                return super().__iter__()
+
+            def __next__(self):
+                # In replay mode with mock data, iterate over mock rows
+                if hasattr(self, "_mock_rows") and self._mock_rows is not None:
+                    if self._mock_index < len(self._mock_rows):
+                        row = self._mock_rows[self._mock_index]
+                        self._mock_index += 1
+                        # Apply row transformation if fetchone is patched
+                        if hasattr(self, "fetchone") and callable(self.fetchone):
+                            # Reset index, get transformed row, restore index
+                            self._mock_index -= 1
+                            result = self.fetchone()
+                            return result
+                        return tuple(row) if isinstance(row, list) else row
+                    raise StopIteration
+                # In record mode with captured data, iterate over stored rows
+                if hasattr(self, "_tusk_rows") and self._tusk_rows is not None:
+                    if self._tusk_index < len(self._tusk_rows):
+                        row = self._tusk_rows[self._tusk_index]
+                        self._tusk_index += 1
+                        return row
+                    raise StopIteration
+                return super().__next__()
 
             def execute(self, query, params=None, **kwargs):
                 # Note: ServerCursor.execute() doesn't support 'prepare' parameter
@@ -1712,6 +1759,8 @@ class PsycopgInstrumentation(InstrumentationBase):
                     span.end()
                 except Exception:
                     pass
+                # Re-raise the original exception so the user sees the actual database error
+                raise
 
             finally:
                 # Clean up lazy capture attributes
@@ -1847,7 +1896,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                                 )
                             elif hasattr(row, "_fields"):
                                 rows.append(
-                                    [getattr(row, col, None) for col in column_names] if column_names else list(row)
+                                    [getattr(row, str(col), None) for col in column_names] if column_names else list(row)
                                 )
                             else:
                                 rows.append(list(row))
