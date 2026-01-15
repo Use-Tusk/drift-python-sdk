@@ -43,7 +43,7 @@ def serialize_value(val: Any) -> Any:
     if isinstance(val, (datetime.datetime, datetime.date, datetime.time)):
         return val.isoformat()
     elif isinstance(val, uuid.UUID):
-        return str(val)
+        return {"__uuid__": str(val)}
     elif isinstance(val, memoryview):
         # Convert memoryview to bytes first, then serialize
         return _serialize_bytes(bytes(val))
