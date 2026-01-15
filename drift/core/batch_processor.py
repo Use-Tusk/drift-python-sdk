@@ -5,9 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+from .metrics import get_metrics_collector
 
 if TYPE_CHECKING:
     from .tracing.span_exporter import TdSpanExporter
@@ -63,6 +66,10 @@ class BatchSpanProcessor:
         self._started = False
         self._dropped_spans = 0
 
+        # Set up metrics
+        self._metrics = get_metrics_collector()
+        self._metrics.set_queue_max_size(self._config.max_queue_size)
+
     def start(self) -> None:
         """Start the background export thread."""
         if self._started:
@@ -110,11 +117,30 @@ class BatchSpanProcessor:
             span: The span to add
 
         Returns:
-            True if span was added, False if queue is full and span was dropped
+            True if span was added, False if queue is full or trace is blocked
         """
+        from .trace_blocking_manager import TraceBlockingManager, should_block_span
+
+        # Check blocking conditions outside lock (read-only checks)
+        is_blocked = should_block_span(span)
+        is_trace_blocked = TraceBlockingManager.get_instance().is_trace_blocked(span.trace_id)
+
         with self._condition:
+            # Handle blocked spans (increment counter under lock)
+            if is_blocked:
+                self._dropped_spans += 1
+                self._metrics.record_spans_dropped()
+                return False
+
+            if is_trace_blocked:
+                logger.debug(f"Skipping span '{span.name}' - trace {span.trace_id} is blocked")
+                self._dropped_spans += 1
+                self._metrics.record_spans_dropped()
+                return False
+
             if len(self._queue) >= self._config.max_queue_size:
                 self._dropped_spans += 1
+                self._metrics.record_spans_dropped()
                 logger.warning(
                     f"Span queue full ({self._config.max_queue_size}), dropping span. "
                     f"Total dropped: {self._dropped_spans}"
@@ -122,6 +148,7 @@ class BatchSpanProcessor:
                 return False
 
             self._queue.append(span)
+            self._metrics.update_queue_size(len(self._queue))
 
             # Trigger immediate export if batch size reached
             if len(self._queue) >= self._config.max_export_batch_size:
@@ -149,6 +176,7 @@ class BatchSpanProcessor:
         with self._condition:
             while self._queue and len(batch) < self._config.max_export_batch_size:
                 batch.append(self._queue.popleft())
+            self._metrics.update_queue_size(len(self._queue))
 
         if not batch:
             return
@@ -158,6 +186,7 @@ class BatchSpanProcessor:
 
         # Export to all adapters
         for adapter in adapters:
+            start_time = time.monotonic()
             try:
                 # Handle async adapters (create new event loop for this thread)
                 if asyncio.iscoroutinefunction(adapter.export_spans):
@@ -170,8 +199,13 @@ class BatchSpanProcessor:
                 else:
                     adapter.export_spans(batch)  # type: ignore
 
+                latency_ms = (time.monotonic() - start_time) * 1000
+                self._metrics.record_spans_exported(len(batch))
+                self._metrics.record_export_latency(latency_ms)
+
             except Exception as e:
                 logger.error(f"Failed to export batch via {adapter.name}: {e}")
+                self._metrics.record_spans_failed(len(batch))
 
     def _force_flush(self) -> None:
         """Force export all remaining spans in the queue."""

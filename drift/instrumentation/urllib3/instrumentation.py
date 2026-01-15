@@ -44,6 +44,7 @@ from ...core.types import (
     SpanStatus,
     StatusCode,
     TuskDriftMode,
+    calling_library_context,
 )
 from ..base import InstrumentationBase
 from ..http import HttpSpanData, HttpTransformEngine
@@ -163,25 +164,32 @@ class Urllib3Instrumentation(InstrumentationBase):
             if instrumentation_self._is_already_instrumented_by_higher_level():
                 return original_urlopen(pool_self, method, url, redirect=redirect, **kw)
 
-            def original_call():
-                return original_urlopen(pool_self, method, url, redirect=redirect, **kw)
+            # Set calling_library_context to suppress socket instrumentation warnings
+            # for internal socket calls made by urllib3
+            context_token = calling_library_context.set("urllib3")
+            try:
 
-            if sdk.mode == TuskDriftMode.REPLAY:
-                return handle_replay_mode(
-                    replay_mode_handler=lambda: instrumentation_self._handle_replay_urlopen(
-                        sdk, module, method, url, **kw
+                def original_call():
+                    return original_urlopen(pool_self, method, url, redirect=redirect, **kw)
+
+                if sdk.mode == TuskDriftMode.REPLAY:
+                    return handle_replay_mode(
+                        replay_mode_handler=lambda: instrumentation_self._handle_replay_urlopen(
+                            sdk, module, method, url, **kw
+                        ),
+                        no_op_request_handler=lambda: instrumentation_self._get_default_response(module, url),
+                        is_server_request=False,
+                    )
+
+                return handle_record_mode(
+                    original_function_call=original_call,
+                    record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record_urlopen(
+                        pool_self, method, url, is_pre_app_start, original_urlopen, redirect=redirect, **kw
                     ),
-                    no_op_request_handler=lambda: instrumentation_self._get_default_response(module, url),
-                    is_server_request=False,
+                    span_kind=OTelSpanKind.CLIENT,
                 )
-
-            return handle_record_mode(
-                original_function_call=original_call,
-                record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record_urlopen(
-                    pool_self, method, url, is_pre_app_start, original_urlopen, redirect=redirect, **kw
-                ),
-                span_kind=OTelSpanKind.CLIENT,
-            )
+            finally:
+                calling_library_context.reset(context_token)
 
         module.PoolManager.urlopen = patched_urlopen
         logger.info("urllib3.PoolManager.urlopen instrumented")
@@ -264,70 +272,79 @@ class Urllib3Instrumentation(InstrumentationBase):
                     **response_kw,
                 )
 
-            def original_call():
-                return original_urlopen(
-                    pool_self,
-                    method,
-                    url,
-                    body=body,
-                    headers=headers,
-                    retries=retries,
-                    redirect=redirect,
-                    assert_same_host=assert_same_host,
-                    timeout=timeout,
-                    pool_timeout=pool_timeout,
-                    release_conn=release_conn,
-                    chunked=chunked,
-                    body_pos=body_pos,
-                    preload_content=preload_content,
-                    decode_content=decode_content,
-                    **response_kw,
-                )
+            # Set calling_library_context to suppress socket instrumentation warnings
+            # for internal socket calls made by urllib3
+            context_token = calling_library_context.set("urllib3")
+            try:
 
-            # Import urllib3 module for mock response creation
-            import urllib3 as urllib3_module
-
-            # REPLAY mode
-            if sdk.mode == TuskDriftMode.REPLAY:
-                return handle_replay_mode(
-                    replay_mode_handler=lambda: instrumentation_self._handle_replay_urlopen(
-                        sdk,
-                        urllib3_module,
+                def original_call():
+                    return original_urlopen(
+                        pool_self,
                         method,
-                        full_url,
+                        url,
                         body=body,
                         headers=headers,
-                    ),
-                    no_op_request_handler=lambda: instrumentation_self._get_default_response(urllib3_module, full_url),
-                    is_server_request=False,
-                )
+                        retries=retries,
+                        redirect=redirect,
+                        assert_same_host=assert_same_host,
+                        timeout=timeout,
+                        pool_timeout=pool_timeout,
+                        release_conn=release_conn,
+                        chunked=chunked,
+                        body_pos=body_pos,
+                        preload_content=preload_content,
+                        decode_content=decode_content,
+                        **response_kw,
+                    )
 
-            # RECORD mode
-            return handle_record_mode(
-                original_function_call=original_call,
-                record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record_connection_pool_urlopen(
-                    pool_self,
-                    method,
-                    url,
-                    full_url,
-                    is_pre_app_start,
-                    original_urlopen,
-                    body=body,
-                    headers=headers,
-                    retries=retries,
-                    redirect=redirect,
-                    assert_same_host=assert_same_host,
-                    timeout=timeout,
-                    pool_timeout=pool_timeout,
-                    release_conn=release_conn,
-                    chunked=chunked,
-                    body_pos=body_pos,
-                    preload_content=preload_content,
-                    decode_content=decode_content,
-                    **response_kw,
-                ),
-                span_kind=OTelSpanKind.CLIENT,
-            )
+                # Import urllib3 module for mock response creation
+                import urllib3 as urllib3_module
+
+                # REPLAY mode
+                if sdk.mode == TuskDriftMode.REPLAY:
+                    return handle_replay_mode(
+                        replay_mode_handler=lambda: instrumentation_self._handle_replay_urlopen(
+                            sdk,
+                            urllib3_module,
+                            method,
+                            full_url,
+                            body=body,
+                            headers=headers,
+                        ),
+                        no_op_request_handler=lambda: instrumentation_self._get_default_response(
+                            urllib3_module, full_url
+                        ),
+                        is_server_request=False,
+                    )
+
+                # RECORD mode
+                return handle_record_mode(
+                    original_function_call=original_call,
+                    record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record_connection_pool_urlopen(
+                        pool_self,
+                        method,
+                        url,
+                        full_url,
+                        is_pre_app_start,
+                        original_urlopen,
+                        body=body,
+                        headers=headers,
+                        retries=retries,
+                        redirect=redirect,
+                        assert_same_host=assert_same_host,
+                        timeout=timeout,
+                        pool_timeout=pool_timeout,
+                        release_conn=release_conn,
+                        chunked=chunked,
+                        body_pos=body_pos,
+                        preload_content=preload_content,
+                        decode_content=decode_content,
+                        **response_kw,
+                    ),
+                    span_kind=OTelSpanKind.CLIENT,
+                )
+            finally:
+                calling_library_context.reset(context_token)
 
         module.HTTPConnectionPool.urlopen = patched_urlopen
         logger.info("urllib3.HTTPConnectionPool.urlopen instrumented")

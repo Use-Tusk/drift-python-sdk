@@ -1,4 +1,4 @@
-"""Instrumentation for requests HTTP client library."""
+"""Instrumentation for aiohttp HTTP client library."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ from ...core.drift_sdk import TuskDrift
 from ...core.json_schema_helper import DecodedType, EncodingType, SchemaMerge
 from ...core.mode_utils import handle_record_mode, handle_replay_mode
 from ...core.tracing import TdSpanAttributes
-from ...core.tracing.span_utils import CreateSpanOptions, SpanUtils
+from ...core.tracing.span_utils import CreateSpanOptions, SpanInfo, SpanUtils
 from ...core.types import (
     PackageType,
     SpanKind,
@@ -57,23 +57,22 @@ HEADER_SCHEMA_MERGES = {
 }
 
 
-class RequestsInstrumentation(InstrumentationBase):
-    """Instrumentation for the requests HTTP client library.
+class AiohttpInstrumentation(InstrumentationBase):
+    """Instrumentation for the aiohttp HTTP client library.
 
-    Patches requests.Session.send() to:
+    Patches aiohttp.ClientSession._request() to:
     - Intercept HTTP requests in REPLAY mode and return mocked responses
     - Capture request/response data as CLIENT spans in RECORD mode
 
-    We patch send() instead of request() because all HTTP calls flow through
-    send(), including session.get(), session.post(), session.request(), and
-    direct session.send(PreparedRequest) calls. This ensures complete coverage.
+    aiohttp is an async HTTP client library commonly used for making
+    async HTTP requests in Python asyncio applications.
     """
 
     def __init__(self, enabled: bool = True, transforms: dict[str, Any] | None = None) -> None:
         self._transform_engine = HttpTransformEngine(self._resolve_http_transforms(transforms))
         super().__init__(
-            name="RequestsInstrumentation",
-            module_name="requests",
+            name="AiohttpInstrumentation",
+            module_name="aiohttp",
             supported_versions="*",
             enabled=enabled,
         )
@@ -94,120 +93,51 @@ class RequestsInstrumentation(InstrumentationBase):
         return None
 
     def patch(self, module: Any) -> None:
-        """Patch the requests module.
+        """Patch the aiohttp module."""
+        # Patch ClientSession._request
+        if hasattr(module, "ClientSession"):
+            self._patch_client_session(module)
+        else:
+            logger.warning("aiohttp.ClientSession not found, skipping instrumentation")
 
-        Patches Session.send() instead of Session.request() because all requests
-        (including session.get(), session.post(), session.request(), and direct
-        session.send() calls) flow through send(). This ensures complete coverage
-        including direct PreparedRequest usage.
-        """
-        if not hasattr(module, "Session"):
-            logger.warning("requests.Session not found, skipping instrumentation")
-            return
-
-        # Store original method
-        original_send = module.Session.send
-        instrumentation_self = self
-
-        def patched_send(session_self, request, **kwargs):
-            """Patched Session.send method.
-
-            Args:
-                session_self: Session instance
-                request: PreparedRequest object
-                **kwargs: Additional args (timeout, verify, cert, proxies, etc.)
-            """
-            sdk = TuskDrift.get_instance()
-
-            # Pass through if SDK is disabled
-            if sdk.mode == TuskDriftMode.DISABLED:
-                return original_send(session_self, request, **kwargs)
-
-            # Set calling_library_context to suppress socket instrumentation warnings
-            # for internal socket calls made by requests or its dependencies (urllib3)
-            context_token = calling_library_context.set("requests")
-            try:
-                # Extract URL for default response handler
-                url = request.url
-
-                def original_call():
-                    return original_send(session_self, request, **kwargs)
-
-                # REPLAY mode: Use handle_replay_mode for proper background request handling
-                if sdk.mode == TuskDriftMode.REPLAY:
-                    return handle_replay_mode(
-                        replay_mode_handler=lambda: instrumentation_self._handle_replay_send(sdk, request, **kwargs),
-                        no_op_request_handler=lambda: instrumentation_self._get_default_response(url),
-                        is_server_request=False,
-                    )
-
-                # RECORD mode: Use handle_record_mode for proper is_pre_app_start handling
-                return handle_record_mode(
-                    original_function_call=original_call,
-                    record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record_send(
-                        session_self, request, is_pre_app_start, original_send, **kwargs
-                    ),
-                    span_kind=OTelSpanKind.CLIENT,
-                )
-            finally:
-                calling_library_context.reset(context_token)
-
-        # Apply patch
-        module.Session.send = patched_send
-        logger.info("requests.Session.send instrumented")
-
-    def _get_default_response(self, url: str) -> Any:
+    def _get_default_response(self, aiohttp_module: Any, method: str, url: str) -> Any:
         """Return default response for background requests in REPLAY mode.
 
         Background requests (health checks, metrics, etc.) that happen outside
         of any trace context should return a default response instead of failing.
         """
-        import requests
+        # Create a minimal mock response
+        return _MockClientResponse(
+            method=method,
+            url=url,
+            status=200,
+            headers={},
+            body=b"",
+        )
 
-        response = requests.Response()
-        response.status_code = 200
-        response.reason = "OK"
-        response.url = url
-        response._content = b""
-        response.encoding = "utf-8"
-        response._content_consumed = True
-        logger.debug(f"[RequestsInstrumentation] Returning default response for background request to {url}")
-        return response
-
-    def _handle_record_send(
-        self,
-        session_self: Any,
-        prepared_request: Any,
-        is_pre_app_start: bool,
-        original_send: Any,
-        **kwargs,
-    ) -> Any:
-        """Handle send() in RECORD mode.
-
-        Similar to _handle_record but works with PreparedRequest objects.
+    def _create_client_span(self, method: str, url: str, is_pre_app_start: bool) -> SpanInfo | None:
+        """Create a client span for HTTP requests.
 
         Args:
-            session_self: Session instance
-            prepared_request: PreparedRequest object
+            method: HTTP method
+            url: Request URL
             is_pre_app_start: Whether this is before app start
-            original_send: Original Session.send method
-            **kwargs: Additional send() kwargs (timeout, verify, etc.)
-        """
-        method = prepared_request.method
-        url = prepared_request.url
-        parsed_url = urlparse(url)
-        span_name = f"{method.upper()} {parsed_url.path or '/'}"
 
-        # Create span using SpanUtils
-        span_info = SpanUtils.create_span(
+        Returns:
+            SpanInfo if successful, None if span creation failed
+        """
+        parsed_url = urlparse(url)
+        span_name = f"{method} {parsed_url.path or '/'}"
+
+        return SpanUtils.create_span(
             CreateSpanOptions(
                 name=span_name,
                 kind=OTelSpanKind.CLIENT,
                 attributes={
                     TdSpanAttributes.NAME: span_name,
                     TdSpanAttributes.PACKAGE_NAME: parsed_url.scheme,
-                    TdSpanAttributes.INSTRUMENTATION_NAME: "RequestsInstrumentation",
-                    TdSpanAttributes.SUBMODULE_NAME: method.upper(),
+                    TdSpanAttributes.INSTRUMENTATION_NAME: "AiohttpInstrumentation",
+                    TdSpanAttributes.SUBMODULE_NAME: method,
                     TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
                     TdSpanAttributes.IS_PRE_APP_START: is_pre_app_start,
                 },
@@ -215,19 +145,129 @@ class RequestsInstrumentation(InstrumentationBase):
             )
         )
 
+    def _patch_client_session(self, module: Any) -> None:
+        """Patch aiohttp.ClientSession._request for async HTTP calls."""
+        original_request = module.ClientSession._request
+        instrumentation_self = self
+
+        async def patched_request(
+            client_self,
+            method: str,
+            str_or_url,
+            **kwargs,
+        ):
+            """Patched ClientSession._request method."""
+            # Convert URL to string
+            url_str = str(str_or_url)
+            sdk = TuskDrift.get_instance()
+
+            # Pass through if SDK is disabled
+            if sdk.mode == TuskDriftMode.DISABLED:
+                return await original_request(client_self, method, str_or_url, **kwargs)
+
+            # Set calling_library_context to suppress socket instrumentation warnings
+            # for internal socket calls (e.g., aiohappyeyeballs connection management)
+            context_token = calling_library_context.set("aiohttp")
+            try:
+
+                async def original_call():
+                    return await original_request(client_self, method, str_or_url, **kwargs)
+
+                # REPLAY mode
+                if sdk.mode == TuskDriftMode.REPLAY:
+                    return await handle_replay_mode(
+                        replay_mode_handler=lambda: instrumentation_self._handle_replay_request(
+                            sdk, module, method, url_str, **kwargs
+                        ),
+                        no_op_request_handler=lambda: instrumentation_self._get_default_response(
+                            module, method, url_str
+                        ),
+                        is_server_request=False,
+                    )
+
+                # RECORD mode
+                return await handle_record_mode(
+                    original_function_call=original_call,
+                    record_mode_handler=lambda is_pre_app_start: instrumentation_self._handle_record_request(
+                        client_self,
+                        method,
+                        str_or_url,
+                        is_pre_app_start,
+                        original_request,
+                        **kwargs,
+                    ),
+                    span_kind=OTelSpanKind.CLIENT,
+                )
+            finally:
+                calling_library_context.reset(context_token)
+
+        # Apply patch
+        module.ClientSession._request = patched_request
+        logger.info("aiohttp.ClientSession._request instrumented")
+
+    async def _handle_replay_request(
+        self,
+        sdk: TuskDrift,
+        aiohttp_module: Any,
+        method: str,
+        url: str,
+        **kwargs,
+    ) -> Any:
+        """Handle request in REPLAY mode (async).
+
+        Creates a span, fetches mock response.
+        Raises RuntimeError if no mock is found.
+        """
+        span_info = self._create_client_span(method, url, not sdk.app_ready)
+        if not span_info:
+            raise RuntimeError(f"Error creating span in replay mode for {method} {url}")
+
+        try:
+            with SpanUtils.with_span(span_info):
+                mock_response = await self._try_get_mock(
+                    sdk,
+                    aiohttp_module,
+                    method,
+                    url,
+                    span_info.trace_id,
+                    span_info.span_id,
+                    **kwargs,
+                )
+
+                if mock_response is not None:
+                    return mock_response
+
+                # No mock found - raise error in REPLAY mode
+                raise RuntimeError(f"No mock found for {method} {url} in REPLAY mode")
+        finally:
+            span_info.span.end()
+
+    async def _handle_record_request(
+        self,
+        client_self: Any,
+        method: str,
+        str_or_url: Any,
+        is_pre_app_start: bool,
+        original_request: Any,
+        **kwargs,
+    ) -> Any:
+        """Handle request in RECORD mode (async).
+
+        Creates a span, makes the real request, and records the response.
+        """
+        url_str = str(str_or_url)
+
+        span_info = self._create_client_span(method, url_str, is_pre_app_start)
         if not span_info:
             # Span creation failed (trace blocked, etc.) - just make the request
-            return original_send(session_self, prepared_request, **kwargs)
-
-        # Extract kwargs from PreparedRequest for _finalize_span
-        request_kwargs = self._extract_kwargs_from_prepared_request(prepared_request)
+            return await original_request(client_self, method, str_or_url, **kwargs)
 
         try:
             with SpanUtils.with_span(span_info):
                 # Check drop transforms BEFORE making the request
-                headers = request_kwargs.get("headers", {})
+                headers = dict(kwargs.get("headers", {}))
                 if self._transform_engine and self._transform_engine.should_drop_outbound_request(
-                    method.upper(), url, headers
+                    method, url_str, headers
                 ):
                     # Request should be dropped - mark span and raise exception
                     span_info.span.set_attribute(
@@ -236,99 +276,35 @@ class RequestsInstrumentation(InstrumentationBase):
                     )
                     span_info.span.set_status(Status(OTelStatusCode.ERROR, "Dropped by transform"))
                     raise RequestDroppedByTransform(
-                        f"Outbound request to {url} was dropped by transform rule",
-                        method.upper(),
-                        url,
+                        f"Outbound request to {url_str} was dropped by transform rule",
+                        method,
+                        url_str,
                     )
+
+                # Capture request body before send
+                pre_captured_body = self._get_request_body_safely(kwargs)
 
                 # Make the real request
                 error = None
                 response = None
 
                 try:
-                    response = original_send(session_self, prepared_request, **kwargs)
+                    response = await original_request(client_self, method, str_or_url, **kwargs)
                     return response
                 except Exception as e:
                     error = e
                     raise
                 finally:
                     # Finalize span with request/response data
-                    self._finalize_span(
+                    await self._finalize_span(
                         span_info.span,
                         method,
-                        url,
+                        url_str,
+                        kwargs,
                         response,
                         error,
-                        request_kwargs,
+                        pre_captured_body,
                     )
-        finally:
-            span_info.span.end()
-
-    def _handle_replay_send(
-        self,
-        sdk: TuskDrift,
-        prepared_request: Any,
-        **kwargs,
-    ) -> Any:
-        """Handle send() in REPLAY mode.
-
-        Similar to _handle_replay but works with PreparedRequest objects.
-
-        Args:
-            sdk: TuskDrift instance
-            prepared_request: PreparedRequest object
-            **kwargs: Additional send() kwargs (timeout, verify, cert, proxies, etc.)
-        """
-        method = prepared_request.method
-        url = prepared_request.url
-        parsed_url = urlparse(url)
-        span_name = f"{method.upper()} {parsed_url.path or '/'}"
-
-        # Create span using SpanUtils
-        span_info = SpanUtils.create_span(
-            CreateSpanOptions(
-                name=span_name,
-                kind=OTelSpanKind.CLIENT,
-                attributes={
-                    TdSpanAttributes.NAME: span_name,
-                    TdSpanAttributes.PACKAGE_NAME: parsed_url.scheme,
-                    TdSpanAttributes.INSTRUMENTATION_NAME: "RequestsInstrumentation",
-                    TdSpanAttributes.SUBMODULE_NAME: method.upper(),
-                    TdSpanAttributes.PACKAGE_TYPE: PackageType.HTTP.name,
-                    TdSpanAttributes.IS_PRE_APP_START: not sdk.app_ready,
-                },
-                is_pre_app_start=not sdk.app_ready,
-            )
-        )
-
-        if not span_info:
-            raise RuntimeError(f"Error creating span in replay mode for {method} {url}")
-
-        # Extract kwargs from PreparedRequest for _try_get_mock
-        request_kwargs = self._extract_kwargs_from_prepared_request(prepared_request)
-
-        try:
-            with SpanUtils.with_span(span_info):
-                # Use IDs from SpanInfo (already formatted)
-                mock_response = self._try_get_mock(
-                    sdk,
-                    method,
-                    url,
-                    span_info.trace_id,
-                    span_info.span_id,
-                    **request_kwargs,
-                )
-
-                if mock_response is not None:
-                    # Dispatch response hooks (matches Session.send() behavior)
-                    # This ensures hooks registered via hooks={"response": callback} are called
-                    from requests.hooks import dispatch_hook
-
-                    mock_response = dispatch_hook("response", prepared_request.hooks, mock_response, **kwargs)
-                    return mock_response
-
-                # No mock found - raise error in REPLAY mode
-                raise RuntimeError(f"No mock found for {method} {url} in REPLAY mode")
         finally:
             span_info.span.end()
 
@@ -376,7 +352,7 @@ class RequestsInstrumentation(InstrumentationBase):
         # Extract main type (before semicolon)
         main_type = content_type.lower().split(";")[0].strip()
 
-        # Common content type mappings (subset from Node.js httpBodyEncoder.ts)
+        # Common content type mappings
         CONTENT_TYPE_MAP = {
             "application/json": DecodedType.JSON,
             "text/plain": DecodedType.PLAIN_TEXT,
@@ -396,54 +372,49 @@ class RequestsInstrumentation(InstrumentationBase):
                 return value
         return None
 
-    def _extract_kwargs_from_prepared_request(self, prepared_request: Any) -> dict[str, Any]:
-        """Extract kwargs-compatible dict from PreparedRequest.
+    def _get_request_body_safely(self, kwargs: dict) -> bytes | None:
+        """Safely get request body content from kwargs.
 
-        Converts a PreparedRequest object into a kwargs dict that can be used
-        with existing methods like _try_get_mock and _finalize_span.
+        aiohttp supports various body formats:
+        - data: bytes, str, or dict (form data)
+        - json: dict (will be JSON-encoded)
 
         Args:
-            prepared_request: requests.PreparedRequest object
+            kwargs: Request kwargs
 
         Returns:
-            Dict with headers, params, and data/json keys
+            bytes content or None if unavailable
         """
-        from urllib.parse import parse_qs
+        try:
+            # Check for json parameter first
+            if "json" in kwargs:
+                json_data = kwargs["json"]
+                if json_data is not None:
+                    return json.dumps(json_data).encode("utf-8")
 
-        parsed = urlparse(prepared_request.url)
+            # Check for data parameter
+            if "data" in kwargs:
+                data = kwargs["data"]
+                if data is None:
+                    return None
+                if isinstance(data, bytes):
+                    return data
+                if isinstance(data, str):
+                    return data.encode("utf-8")
+                if isinstance(data, dict):
+                    # Form data - encode as url-encoded
+                    from urllib.parse import urlencode
 
-        # Parse query params from URL (already encoded in PreparedRequest.url)
-        params = {}
-        if parsed.query:
-            params = {k: v[0] if len(v) == 1 else v for k, v in parse_qs(parsed.query).items()}
+                    return urlencode(data).encode("utf-8")
 
-        kwargs: dict[str, Any] = {
-            "headers": dict(prepared_request.headers) if prepared_request.headers else {},
-            "params": params,
-        }
+            return None
+        except Exception:
+            return None
 
-        # Handle body - PreparedRequest.body can be bytes, str, or None
-        body = prepared_request.body
-        if body is not None:
-            content_type = self._get_content_type_header(kwargs["headers"])
-            if content_type and "application/json" in content_type.lower():
-                try:
-                    if isinstance(body, bytes):
-                        kwargs["json"] = json.loads(body.decode("utf-8"))
-                    elif isinstance(body, str):
-                        kwargs["json"] = json.loads(body)
-                    else:
-                        kwargs["data"] = body
-                except (json.JSONDecodeError, UnicodeDecodeError):
-                    kwargs["data"] = body
-            else:
-                kwargs["data"] = body
-
-        return kwargs
-
-    def _try_get_mock(
+    async def _try_get_mock(
         self,
         sdk: TuskDrift,
+        aiohttp_module: Any,
         method: str,
         url: str,
         trace_id: str,
@@ -456,32 +427,38 @@ class RequestsInstrumentation(InstrumentationBase):
             Mocked response object if found, None otherwise
         """
         try:
-            # Build request input value
             parsed_url = urlparse(url)
 
-            # Extract request data
-            headers = kwargs.get("headers", {})
-            params = kwargs.get("params", {})
+            # Extract headers from kwargs
+            headers = dict(kwargs.get("headers", {}))
+            # Strip auth-related headers for consistent matching
+            headers.pop("authorization", None)
+            headers.pop("Authorization", None)
+            headers.pop("cookie", None)
+            headers.pop("Cookie", None)
 
-            # Handle request body - encode to base64
-            data = kwargs.get("data")
-            json_data = kwargs.get("json")
+            # Extract query params from URL
+            params = {}
+            if parsed_url.query:
+                from urllib.parse import parse_qs
+
+                params = {k: v[0] if len(v) == 1 else v for k, v in parse_qs(parsed_url.query).items()}
+
+            # Get body from kwargs
             body_base64 = None
             body_size = 0
-
-            if json_data is not None:
-                body_base64, body_size = self._encode_body_to_base64(json_data)
-            elif data is not None:
-                body_base64, body_size = self._encode_body_to_base64(data)
+            request_body = self._get_request_body_safely(kwargs)
+            if request_body:
+                body_base64, body_size = self._encode_body_to_base64(request_body)
 
             raw_input_value = {
-                "method": method.upper(),
+                "method": method,
                 "url": url,
                 "protocol": parsed_url.scheme,
                 "hostname": parsed_url.hostname,
                 "port": parsed_url.port,
                 "path": parsed_url.path or "/",
-                "headers": dict(headers),
+                "headers": headers,
                 "query": params,
             }
 
@@ -492,7 +469,7 @@ class RequestsInstrumentation(InstrumentationBase):
 
             input_value = create_mock_input_value(raw_input_value)
 
-            # Create schema merge hints for input (centralized schema generation)
+            # Create schema merge hints for input
             input_schema_merges = {
                 "headers": SchemaMerge(match_importance=0.0),
             }
@@ -503,22 +480,21 @@ class RequestsInstrumentation(InstrumentationBase):
                     decoded_type=self._get_decoded_type_from_content_type(request_content_type),
                 )
 
-            # Use centralized mock finding utility (matches Node SDK pattern)
+            # Use centralized mock finding utility
             from ...core.mock_utils import find_mock_response_sync
 
             mock_response_output = find_mock_response_sync(
                 sdk=sdk,
                 trace_id=trace_id,
                 span_id=span_id,
-                name=f"{method.upper()} {parsed_url.path or '/'}",
+                name=f"{method} {parsed_url.path or '/'}",
                 package_name=parsed_url.scheme,
                 package_type=PackageType.HTTP,
-                instrumentation_name="RequestsInstrumentation",
-                submodule_name=method.upper(),
+                instrumentation_name="AiohttpInstrumentation",
+                submodule_name=method,
                 input_value=input_value,
                 kind=SpanKind.CLIENT,
                 input_schema_merges=input_schema_merges,
-                is_pre_app_start=not sdk.app_ready,
             )
 
             if not mock_response_output or not mock_response_output.found:
@@ -529,35 +505,30 @@ class RequestsInstrumentation(InstrumentationBase):
             if mock_response_output.response is None:
                 logger.debug(f"Mock found but response data is None for {method} {url}")
                 return None
-            return self._create_mock_response(mock_response_output.response, url)
+            return self._create_mock_response(aiohttp_module, mock_response_output.response, method, url)
 
         except Exception as e:
             logger.error(f"Error getting mock for {method} {url}: {e}")
             return None
 
-    def _create_mock_response(self, mock_data: dict[str, Any], url: str) -> Any:
-        """Create a mocked requests.Response object.
+    def _create_mock_response(self, aiohttp_module: Any, mock_data: dict[str, Any], method: str, url: str) -> Any:
+        """Create a mocked aiohttp.ClientResponse-like object.
 
         Args:
+            aiohttp_module: The aiohttp module
             mock_data: Mock response data from CLI
+            method: HTTP method
             url: Request URL
 
         Returns:
-            Mocked Response object
+            Mocked response object
         """
-        import requests
-
-        # Create a mock response
-        response = requests.Response()
-        response.status_code = mock_data.get("statusCode", 200)
-        response.reason = mock_data.get("statusMessage", "OK")
-        response.url = url
-
-        # Set headers
+        # Get status code and headers
+        status_code = mock_data.get("statusCode", 200)
         headers = dict(mock_data.get("headers", {}))
 
         # Remove content-encoding and transfer-encoding headers since the body
-        # was already decompressed when recorded (requests auto-decompresses)
+        # was already decompressed when recorded
         headers_to_remove = []
         for key in headers:
             if key.lower() in ("content-encoding", "transfer-encoding"):
@@ -565,48 +536,48 @@ class RequestsInstrumentation(InstrumentationBase):
         for key in headers_to_remove:
             del headers[key]
 
-        response.headers.update(headers)
-
-        # Set body - decode from base64 if needed
+        # Get body - decode from base64 if needed
         body = mock_data.get("body", "")
+        content = b""
         if isinstance(body, str):
-            # Try to decode as base64 first (expected format from CLI)
             try:
-                # Check if it looks like base64 (only contains base64 chars)
-                # and can be successfully decoded and re-encoded to match
+                # Try to decode as base64
                 decoded = base64.b64decode(body.encode("ascii"), validate=True)
-                # Verify round-trip works (confirms it's valid base64)
                 if base64.b64encode(decoded).decode("ascii") == body:
-                    response._content = decoded
+                    content = decoded
                 else:
-                    # Not valid base64, treat as plain text
-                    response._content = body.encode("utf-8")
+                    content = body.encode("utf-8")
             except Exception:
-                # Fall back to treating as plain text
-                response._content = body.encode("utf-8")
+                content = body.encode("utf-8")
         elif isinstance(body, bytes):
-            response._content = body
+            content = body
         else:
-            # JSON or other object - serialize
-            response._content = json.dumps(body).encode("utf-8")
+            content = json.dumps(body).encode("utf-8")
 
-        response.encoding = "utf-8"
+        # Determine final URL - use from mock data if present (for redirect handling)
+        final_url = mock_data.get("finalUrl", url)
 
-        # Mark content as consumed so iter_content() uses cached _content
-        # instead of trying to stream from raw (which is None in mock responses)
-        response._content_consumed = True
+        # Create mock response
+        response = _MockClientResponse(
+            method=method,
+            url=final_url,
+            status=status_code,
+            headers=headers,
+            body=content,
+        )
 
-        logger.debug(f"Created mock response: {response.status_code} for {url}")
+        logger.debug(f"Created mock aiohttp response: {status_code} for {final_url}")
         return response
 
-    def _finalize_span(
+    async def _finalize_span(
         self,
         span: Span,
         method: str,
         url: str,
+        kwargs: dict,
         response: Any,
         error: Exception | None,
-        request_kwargs: dict[str, Any],
+        pre_captured_body: bytes | None = None,
     ) -> None:
         """Finalize span with request/response data.
 
@@ -614,36 +585,44 @@ class RequestsInstrumentation(InstrumentationBase):
             span: The OpenTelemetry span to finalize
             method: HTTP method
             url: Request URL
+            kwargs: Request kwargs
             response: Response object (if successful)
             error: Exception (if failed)
-            request_kwargs: Original request kwargs
+            pre_captured_body: Pre-captured request body bytes
         """
         try:
             parsed_url = urlparse(url)
 
             # ===== BUILD INPUT VALUE =====
-            headers = request_kwargs.get("headers", {})
-            params = request_kwargs.get("params", {})
+            headers = dict(kwargs.get("headers", {}))
+            # Strip auth-related headers for consistent matching
+            headers.pop("authorization", None)
+            headers.pop("Authorization", None)
+            headers.pop("cookie", None)
+            headers.pop("Cookie", None)
 
-            # Get request body and encode to base64
-            data = request_kwargs.get("data")
-            json_data = request_kwargs.get("json")
+            # Extract query params from URL
+            params = {}
+            if parsed_url.query:
+                from urllib.parse import parse_qs
+
+                params = {k: v[0] if len(v) == 1 else v for k, v in parse_qs(parsed_url.query).items()}
+
+            # Get request body
             body_base64 = None
             body_size = 0
-
-            if json_data is not None:
-                body_base64, body_size = self._encode_body_to_base64(json_data)
-            elif data is not None:
-                body_base64, body_size = self._encode_body_to_base64(data)
+            request_body = pre_captured_body if pre_captured_body is not None else self._get_request_body_safely(kwargs)
+            if request_body:
+                body_base64, body_size = self._encode_body_to_base64(request_body)
 
             input_value = {
-                "method": method.upper(),
+                "method": method,
                 "url": url,
                 "protocol": parsed_url.scheme,
                 "hostname": parsed_url.hostname,
                 "port": parsed_url.port,
                 "path": parsed_url.path or "/",
-                "headers": dict(headers),
+                "headers": headers,
                 "query": params,
             }
 
@@ -655,7 +634,7 @@ class RequestsInstrumentation(InstrumentationBase):
             # ===== BUILD OUTPUT VALUE =====
             output_value = {}
             status = SpanStatus(code=StatusCode.OK, message="")
-            response_body_base64 = None  # Initialize for later use in schema merges
+            response_body_base64 = None
 
             if error:
                 output_value = {
@@ -665,23 +644,33 @@ class RequestsInstrumentation(InstrumentationBase):
                 status = SpanStatus(code=StatusCode.ERROR, message=str(error))
             elif response:
                 # Extract response data
-                response_headers = dict(response.headers)
+                response_headers = {}
+                if hasattr(response, "headers"):
+                    response_headers = dict(response.headers)
+
                 response_body_size = 0
 
                 try:
-                    # Get response content as bytes (respects encoding)
-                    # No truncation at capture time - span-level 1MB blocking at export handles oversized spans
-                    response_bytes = response.content
+                    # aiohttp ClientResponse requires reading the body
+                    # Check if body has already been read
+                    if hasattr(response, "_body") and response._body is not None:
+                        response_bytes = response._body
+                    elif hasattr(response, "read"):
+                        # Read the response body
+                        response_bytes = await response.read()
+                    else:
+                        response_bytes = b""
 
-                    # Encode to base64
                     response_body_base64, response_body_size = self._encode_body_to_base64(response_bytes)
                 except Exception:
                     response_body_base64 = None
                     response_body_size = 0
 
+                status_code = response.status if hasattr(response, "status") else 200
+
                 output_value = {
-                    "statusCode": response.status_code,
-                    "statusMessage": response.reason,
+                    "statusCode": status_code,
+                    "statusMessage": response.reason if hasattr(response, "reason") else "",
                     "headers": response_headers,
                 }
 
@@ -690,10 +679,19 @@ class RequestsInstrumentation(InstrumentationBase):
                     output_value["body"] = response_body_base64
                     output_value["bodySize"] = response_body_size
 
-                if response.status_code >= 400:
+                # Capture redirect information
+                if hasattr(response, "url"):
+                    final_url = str(response.url)
+                    if final_url != url:  # Only store if redirects occurred
+                        output_value["finalUrl"] = final_url
+
+                if hasattr(response, "history") and response.history:
+                    output_value["historyCount"] = len(response.history)
+
+                if status_code >= 400:
                     status = SpanStatus(
                         code=StatusCode.ERROR,
-                        message=f"HTTP {response.status_code}",
+                        message=f"HTTP {status_code}",
                     )
 
                 # Check if response content type should block the trace
@@ -704,7 +702,6 @@ class RequestsInstrumentation(InstrumentationBase):
                 decoded_type = get_decoded_type(response_content_type)
 
                 if should_block_content_type(decoded_type):
-                    # Block PARENT trace for outbound requests with binary responses
                     span_context = span.get_span_context()
                     trace_id = format(span_context.trace_id, "032x")
 
@@ -713,12 +710,10 @@ class RequestsInstrumentation(InstrumentationBase):
                         trace_id, reason=f"outbound_binary:{decoded_type.name if decoded_type else 'unknown'}"
                     )
                     logger.warning(
-                        f"Blocking trace {trace_id} - outbound request returned binary response: {response_content_type} "
-                        f"(decoded as {decoded_type.name if decoded_type else 'unknown'})"
+                        f"Blocking trace {trace_id} - outbound request returned binary response: {response_content_type}"
                     )
-                    return  # Skip finalizing span
+                    return
             else:
-                # No response and no error
                 output_value = {}
 
             # ===== APPLY TRANSFORMS =====
@@ -731,19 +726,16 @@ class RequestsInstrumentation(InstrumentationBase):
                 )
                 self._transform_engine.apply_transforms(span_data)
 
-                # Update values with transformed data
                 input_value = span_data.input_value or input_value
                 output_value = span_data.output_value or output_value
                 transform_metadata = span_data.transform_metadata
 
             # ===== CREATE SCHEMA MERGE HINTS =====
-            # Determine decoded types from content-type headers
             request_content_type = self._get_content_type_header(headers)
             response_content_type = None
             if response and hasattr(response, "headers"):
                 response_content_type = self._get_content_type_header(dict(response.headers))
 
-            # Create schema merge hints for input
             input_schema_merges = {
                 "headers": SchemaMerge(match_importance=0.0),
             }
@@ -753,7 +745,6 @@ class RequestsInstrumentation(InstrumentationBase):
                     decoded_type=self._get_decoded_type_from_content_type(request_content_type),
                 )
 
-            # Create schema merge hints for output
             output_schema_merges = {
                 "headers": SchemaMerge(match_importance=0.0),
             }
@@ -764,13 +755,11 @@ class RequestsInstrumentation(InstrumentationBase):
                 )
 
             # ===== SET SPAN ATTRIBUTES =====
-            # Normalize values to remove None fields (matches REPLAY path behavior)
             normalized_input = remove_none_values(input_value)
             normalized_output = remove_none_values(output_value)
             span.set_attribute(TdSpanAttributes.INPUT_VALUE, json.dumps(normalized_input))
             span.set_attribute(TdSpanAttributes.OUTPUT_VALUE, json.dumps(normalized_output))
 
-            # Set schema merges (schemas will be generated at export time)
             from ..wsgi.utilities import _schema_merges_to_dict
 
             input_schema_merges_dict = _schema_merges_to_dict(input_schema_merges)
@@ -779,7 +768,6 @@ class RequestsInstrumentation(InstrumentationBase):
             span.set_attribute(TdSpanAttributes.INPUT_SCHEMA_MERGES, json.dumps(input_schema_merges_dict))
             span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA_MERGES, json.dumps(output_schema_merges_dict))
 
-            # Set transform metadata if present
             if transform_metadata:
                 span.set_attribute(TdSpanAttributes.TRANSFORM_METADATA, json.dumps(transform_metadata))
 
@@ -792,3 +780,111 @@ class RequestsInstrumentation(InstrumentationBase):
         except Exception as e:
             logger.error(f"Error finalizing span for {method} {url}: {e}")
             span.set_status(Status(OTelStatusCode.ERROR, str(e)))
+
+
+class _MockClientResponse:
+    """Mock aiohttp ClientResponse for REPLAY mode.
+
+    This class mimics the aiohttp.ClientResponse interface to provide
+    a mock response that can be used in place of a real response.
+    """
+
+    def __init__(
+        self,
+        method: str,
+        url: str,
+        status: int,
+        headers: dict,
+        body: bytes,
+    ):
+        self.method = method
+        self._url = url
+        self.status = status
+        self._headers = headers
+        self._body = body
+        self.reason = "OK" if status < 400 else "Error"
+        self.history: list = []
+
+    @property
+    def url(self):
+        """Return URL as a yarl.URL-like object."""
+        from urllib.parse import urlparse
+
+        parsed = urlparse(self._url)
+        return _MockURL(self._url, parsed)
+
+    @property
+    def headers(self):
+        """Return headers as a dict-like object."""
+        return self._headers
+
+    def _get_header(self, name: str) -> str | None:
+        """Get header value with case-insensitive lookup.
+
+        HTTP headers are case-insensitive per RFC 7230.
+        """
+        name_lower = name.lower()
+        for key, value in self._headers.items():
+            if key.lower() == name_lower:
+                return value
+        return None
+
+    @property
+    def content_type(self) -> str:
+        """Return content type from headers (case-insensitive lookup)."""
+        return self._get_header("content-type") or "application/octet-stream"
+
+    async def read(self) -> bytes:
+        """Read response body."""
+        return self._body
+
+    async def text(self, encoding: str = "utf-8") -> str:
+        """Read response body as text."""
+        return self._body.decode(encoding)
+
+    async def json(self, **kwargs) -> Any:
+        """Read response body as JSON."""
+        return json.loads(self._body)
+
+    def release(self) -> None:
+        """Release the response (no-op for mock)."""
+        pass
+
+    async def __aenter__(self):
+        """Async context manager entry."""
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit."""
+        self.release()
+
+
+class _MockURL:
+    """Mock yarl.URL-like object for mock responses."""
+
+    def __init__(self, url_str: str, parsed):
+        self._url_str = url_str
+        self._parsed = parsed
+
+    def __str__(self):
+        return self._url_str
+
+    @property
+    def scheme(self):
+        return self._parsed.scheme
+
+    @property
+    def host(self):
+        return self._parsed.hostname
+
+    @property
+    def port(self):
+        return self._parsed.port
+
+    @property
+    def path(self):
+        return self._parsed.path
+
+    @property
+    def query_string(self):
+        return self._parsed.query

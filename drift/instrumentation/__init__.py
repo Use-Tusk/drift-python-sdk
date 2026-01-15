@@ -13,5 +13,4 @@ __all__ = [
     "WsgiInstrumentation",
     "register_patch",
     "install_hooks",
-    "patch_instances_via_gc",
 ]
