@@ -393,11 +393,24 @@ class ProtobufCommunicator:
             f"[ProtobufCommunicator] Creating mock request with requestId: {request_id}, testId: {mock_request.test_id}"
         )
 
-        # Send and wait for response
-        await self._send_protobuf_message(sdk_message)
-        response = await self._receive_response(request_id)
+        # Pre-register event BEFORE sending message to avoid race condition where
+        # CLI responds before _wait_for_response registers the event
+        if self._background_reader_thread and self._background_reader_thread.is_alive():
+            with self._response_lock:
+                self._response_events[request_id] = threading.Event()
 
-        return response
+        try:
+            # Send and wait for response
+            await self._send_protobuf_message(sdk_message)
+            response = await self._receive_response(request_id)
+            return response
+        except Exception:
+            # Clean up pre-registered event on failure
+            if self._background_reader_thread and self._background_reader_thread.is_alive():
+                with self._response_lock:
+                    self._response_events.pop(request_id, None)
+                    self._response_data.pop(request_id, None)
+            raise
 
     def request_mock_sync(self, mock_request: MockRequestInput) -> MockResponseOutput:
         """Request mocked response data from CLI (synchronous).
@@ -595,14 +608,17 @@ class ProtobufCommunicator:
     def _wait_for_response(self, request_id: str) -> MockResponseOutput:
         """Wait for a response from the background reader thread.
 
-        Registers an event for the request_id, waits for the background reader
+        Uses a pre-registered event for the request_id (registered before sending
+        the message to avoid race conditions), waits for the background reader
         to signal it, then retrieves the response.
         """
-        event = threading.Event()
-
-        # Register the event for this request
+        # Use pre-registered event, or create one as fallback
         with self._response_lock:
-            self._response_events[request_id] = event
+            event = self._response_events.get(request_id)
+            if not event:
+                # Fallback: register now (shouldn't happen in normal flow)
+                event = threading.Event()
+                self._response_events[request_id] = event
 
         try:
             # Wait for the background reader to signal us
