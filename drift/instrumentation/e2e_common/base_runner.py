@@ -7,6 +7,8 @@ Each instrumentation's entrypoint.py can inherit from this class and
 customize only the setup phase.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import signal
