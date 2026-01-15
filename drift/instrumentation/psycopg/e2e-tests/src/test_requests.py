@@ -66,6 +66,6 @@ if __name__ == "__main__":
     make_request("GET", "/test/binary-bytea")
     make_request("GET", "/test/class-row-factory")
     make_request("GET", "/test/kwargs-row-factory")
-    # make_request("GET", "/test/scalar-row-factory")
+    make_request("GET", "/test/scalar-row-factory")
 
     print_request_summary()

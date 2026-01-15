@@ -1065,6 +1065,8 @@ class PsycopgInstrumentation(InstrumentationBase):
             return "namedtuple"
         elif 'kwargs' in factory_name_lower:
             return "kwargs"
+        elif 'scalar' in factory_name_lower:
+            return "scalar"
 
         return "tuple"
 
@@ -1239,6 +1241,9 @@ class PsycopgInstrumentation(InstrumentationBase):
             if row_factory_type == "kwargs":
                 # kwargs_row: return stored dict as-is (already in correct format)
                 return row
+            if row_factory_type == "scalar":
+                # scalar_row: unwrap the single-element list to get the scalar value
+                return row[0] if isinstance(row, list) and len(row) > 0 else row
             values = tuple(row) if isinstance(row, list) else row
             if row_factory_type == "dict" and column_names:
                 return dict(zip(column_names, values))
@@ -1606,6 +1611,9 @@ class PsycopgInstrumentation(InstrumentationBase):
                                 if row_factory_type == "kwargs":
                                     # kwargs_row: store the entire dict as-is (it has custom keys, not column names)
                                     rows.append(row)
+                                elif row_factory_type == "scalar":
+                                    # scalar_row: returns single values - wrap in list for consistent storage
+                                    rows.append([row])
                                 elif isinstance(row, dict):
                                     # dict_row: extract values in column order
                                     rows.append([row.get(col) for col in column_names])
