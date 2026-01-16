@@ -31,7 +31,7 @@ class TestFlaskMaskTransform:
     while preserving the value length.
     """
 
-    @pytest.fixture(scope="class")
+    @pytest.fixture(scope="class", autouse=True)
     def setup_transforms(self):
         """Set up the SDK with mask transforms configured."""
         # TODO: Configure transforms when implemented
