@@ -1,8 +1,7 @@
 """Kinde SDK instrumentation for REPLAY mode.
 
 This instrumentation patches StorageManager.get() to handle device ID mismatch
-during replay. This enables successful authentication across Flask, FastAPI,
-and other frameworks using Kinde's FrameworkAwareStorage.
+during replay. This enables successful authentication for Flask or FastAPI.
 
 Problem: During replay, Kinde's StorageManager generates a new UUID on server
 startup, but the replayed session contains data keyed with the old device ID
@@ -15,8 +14,7 @@ Solution: Patch StorageManager.get() to:
 3. Extract device ID from found key and cache it for future lookups
 4. Return the found value
 
-This approach is framework-agnostic - it works with Flask, FastAPI, or any
-framework using Kinde's FrameworkAwareStorage.
+This approach is framework-agnostic - it works with Flask or FastAPI. Kinde does not support Django.
 
 Only active in REPLAY mode.
 """
