@@ -123,6 +123,7 @@ include = [
     "drift/instrumentation/psycopg/**",
     "drift/instrumentation/psycopg2/**",
     "drift/instrumentation/redis/**",
+    "drift/instrumentation/kinde/**",
     "drift/instrumentation/http/transform_engine.py",
 ]
 
