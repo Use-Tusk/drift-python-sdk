@@ -173,11 +173,11 @@ class PsycopgInstrumentation(InstrumentationBase):
         except ImportError:
             logger.warning("[CURSOR_FACTORY] Could not import psycopg.Cursor")
             # Return a basic cursor class
-            BaseCursor = object  # type: ignore
+            BaseCursor = object
 
         base = base_factory or BaseCursor
 
-        class InstrumentedCursor(base):  # type: ignore
+        class InstrumentedCursor(base):
             """Instrumented cursor with tracing support."""
 
             _tusk_description = None  # Store mock description for replay mode
@@ -271,7 +271,7 @@ class PsycopgInstrumentation(InstrumentationBase):
 
         base = base_factory or BaseServerCursor
 
-        class InstrumentedServerCursor(base):  # type: ignore
+        class InstrumentedServerCursor(base):
             """Instrumented server cursor with tracing support.
 
             Note: ServerCursor doesn't support executemany().
@@ -1110,7 +1110,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                 return row[0] if isinstance(row, list) and len(row) > 0 else row
             values = tuple(row) if isinstance(row, list) else row
             if row_factory_type == "dict" and column_names:
-                return dict(zip(column_names, values, strict=False))
+                return dict(zip(column_names, values))
             elif row_factory_type in ("namedtuple", "class") and RowClass is not None:
                 return RowClass(*values)
             return values
@@ -1396,7 +1396,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                 return row
             values = tuple(row) if isinstance(row, list) else row
             if row_factory_type == "dict" and col_names:
-                return dict(zip(col_names, values, strict=False))
+                return dict(zip(col_names, values))
             elif row_factory_type == "namedtuple" and RowClass is not None:
                 return RowClass(*values)
             return values
@@ -1888,17 +1888,24 @@ class PsycopgInstrumentation(InstrumentationBase):
                 }
                 span.set_status(Status(OTelStatusCode.ERROR, str(error)))
             else:
-                # Iterate through cursor.results() to capture all result sets
+                # Iterate through result sets using nextset() (compatible with psycopg 3.2+)
+                # Note: results() requires psycopg 3.3+, so we use nextset() for broader compatibility
                 result_sets = []
                 all_rows_collected = []  # For re-populating cursor
 
                 try:
-                    # cursor.results() yields the cursor itself for each result set
-                    for result_cursor in cursor.results():
+
+                    def capture_current_result_set():
+                        """Capture the current result set's description and rows.
+
+                        Extracts column metadata from cursor.description, fetches all rows,
+                        normalizes row data (handling dict, namedtuple, and tuple formats),
+                        and serializes for storage. Appends raw rows to all_rows_collected
+                        for later cursor re-population.
+                        """
                         result_set_data = {}
 
-                        # Capture description for this result set
-                        if hasattr(result_cursor, "description") and result_cursor.description:
+                        if hasattr(cursor, "description") and cursor.description:
                             description = [
                                 {
                                     "name": desc[0] if hasattr(desc, "__getitem__") else desc.name,
@@ -1906,7 +1913,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                                     if hasattr(desc, "__getitem__") and len(desc) > 1
                                     else getattr(desc, "type_code", None),
                                 }
-                                for desc in result_cursor.description
+                                for desc in cursor.description
                             ]
                             result_set_data["description"] = description
                             column_names = [d["name"] for d in description]
@@ -1914,9 +1921,8 @@ class PsycopgInstrumentation(InstrumentationBase):
                             description = None
                             column_names = None
 
-                        # Fetch all rows for this result set
                         rows = []
-                        raw_rows = result_cursor.fetchall()
+                        raw_rows = cursor.fetchall()
                         all_rows_collected.append(raw_rows)
 
                         for row in raw_rows:
@@ -1933,15 +1939,18 @@ class PsycopgInstrumentation(InstrumentationBase):
                             else:
                                 rows.append(list(row))
 
-                        result_set_data["rowcount"] = (
-                            result_cursor.rowcount if hasattr(result_cursor, "rowcount") else len(rows)
-                        )
+                        result_set_data["rowcount"] = cursor.rowcount if hasattr(cursor, "rowcount") else len(rows)
                         result_set_data["rows"] = [[serialize_value(col) for col in row] for row in rows]
 
-                        result_sets.append(result_set_data)
+                        return result_set_data
+
+                    result_sets.append(capture_current_result_set())
+
+                    while cursor.nextset():
+                        result_sets.append(capture_current_result_set())
 
                 except Exception as results_error:
-                    logger.debug(f"Could not iterate results(): {results_error}")
+                    logger.debug(f"Could not iterate result sets: {results_error}")
                     # Fallback: treat as single result set
                     result_sets = []
 

@@ -54,7 +54,7 @@ jobs:
           version: "latest"
 
       - name: Setup Python
-        run: uv python install 3.12
+        run: uv python install 3.9
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3

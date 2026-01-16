@@ -397,7 +397,7 @@ class TuskDrift:
             pass
 
         try:
-            import urllib3  # type: ignore[unresolved-import]
+            import urllib3
 
             from ..instrumentation.urllib3 import Urllib3Instrumentation
 
@@ -452,7 +452,7 @@ class TuskDrift:
             pass
 
         try:
-            import django  # type: ignore[unresolved-import]
+            import django
 
             from ..instrumentation.django import DjangoInstrumentation
 

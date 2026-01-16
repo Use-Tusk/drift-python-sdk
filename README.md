@@ -39,17 +39,22 @@ For comprehensive guides and API reference, visit our [full documentation](https
 
 ## Requirements
 
-- Python 3.12+
+- Python 3.9+
 
 Tusk Drift currently supports the following packages and versions:
 
-- **Flask**: `flask>=2.0.0`
-- **FastAPI**: `fastapi>=0.68.0`
-- **Django**: `django>=3.2.0`
-- **Requests**: `requests` (all versions)
-- **HTTPX**: `httpx` (all versions)
-- **psycopg**: `psycopg>=3.0.0`, `psycopg2>=2.8.0`
-- **Redis**: `redis` (all versions)
+| Package | Supported Versions |
+|---------|-------------------|
+| Flask | `>=2.0.0` |
+| FastAPI | `>=0.68.0` |
+| Django | `>=3.2.0` |
+| Requests | all versions |
+| HTTPX | all versions |
+| aiohttp | all versions |
+| urllib3 | all versions |
+| psycopg | `>=3.1.12` |
+| psycopg2 | all versions |
+| Redis | `>=4.0.0` |
 
 If you're using packages or versions not listed above, please create an issue with the package + version you'd like an instrumentation for.
 
@@ -57,25 +62,37 @@ If you're using packages or versions not listed above, please create an issue wi
 
 ### Step 1: Install the CLI
 
-First, install and configure the Tusk Drift CLI by following our [CLI installation guide](https://github.com/Use-Tusk/tusk-drift-cli?tab=readme-ov-file#install). The CLI helps set up your Tusk configuration file and replays tests.
+First, install the Tusk Drift CLI by following our [CLI installation guide](https://github.com/Use-Tusk/tusk-drift-cli?tab=readme-ov-file#install).
 
-The wizard will eventually direct you back here when it's time to set up the SDK.
+### Step 2: Set up Tusk Drift
 
-### Step 2: Install the SDK
+#### AI-powered setup (recommended)
 
-After completing the CLI wizard, install the SDK:
+Use our AI agent to automatically set up Tusk Drift for your service:
 
 ```bash
-pip install tusk-drift-python-sdk
+cd path/to/your/service
+export ANTHROPIC_API_KEY=your-api-key
+tusk setup
 ```
 
-### Step 3: Initialize the SDK for your service
+The agent will analyze your codebase, install the SDK, instrument it into your application, create configuration files, and test the setup with recording and replay.
 
-Refer to our [initialization guide](docs/initialization.md) to set up the SDK for your service.
+#### Manual setup
 
-### Step 4: Run Your First Test
+Alternatively, you can set up Tusk Drift manually:
 
-Follow along our [quick start guide](docs/quickstart.md) to record and replay your first test!
+1. Install the SDK:
+
+   ```bash
+   pip install tusk-drift-python-sdk
+   ```
+
+2. Create configuration: Run `tusk init` to create your `.tusk/config.yaml` config file interactively, or create it manually per the [configuration docs](https://github.com/Use-Tusk/tusk-drift-cli/blob/main/docs/configuration.md).
+
+3. Initialize the SDK: Refer to the [initialization guide](docs/initialization.md) to instrument the SDK in your service.
+
+4. Record and replay: Follow the [quick start guide](docs/quickstart.md) to record and replay your first test!
 
 ## Troubleshooting
 
@@ -87,11 +104,3 @@ Having issues?
 ## Community
 
 Join our open source community on [Slack](https://join.slack.com/t/tusk-community/shared_invite/zt-3fve1s7ie-NAAUn~UpHsf1m_2tdoGjsQ).
-
-## Contributing
-
-We appreciate feedback and contributions. See [CONTRIBUTING.md](/CONTRIBUTING.md).
-
-## License
-
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.

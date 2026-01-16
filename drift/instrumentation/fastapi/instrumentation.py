@@ -7,7 +7,9 @@ import time
 from collections.abc import Callable
 from functools import wraps
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, override
+from typing import TYPE_CHECKING, Any
+
+from typing_extensions import override
 
 logger = logging.getLogger(__name__)
 

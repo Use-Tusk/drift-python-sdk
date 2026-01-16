@@ -197,7 +197,7 @@ class BatchSpanProcessor:
                     finally:
                         loop.close()
                 else:
-                    adapter.export_spans(batch)  # type: ignore
+                    adapter.export_spans(batch)
 
                 latency_ms = (time.monotonic() - start_time) * 1000
                 self._metrics.record_spans_exported(len(batch))

@@ -15,7 +15,7 @@ try:
     HAS_PSYCOPG_RANGE = True
 except ImportError:
     HAS_PSYCOPG_RANGE = False
-    PsycopgRange = None  # type: ignore[misc, assignment]
+    PsycopgRange = None
 
 
 def deserialize_db_value(val: Any) -> Any:

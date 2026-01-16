@@ -145,7 +145,7 @@ class TestAsyncErrorResilience(unittest.TestCase):
         async def timeout_export(spans):
             try:
                 return await asyncio.wait_for(slow_export(spans), timeout=0.1)
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 return ExportResult.failed("Export timed out")
 
         adapter.export_spans = timeout_export  # type: ignore[method-assign]

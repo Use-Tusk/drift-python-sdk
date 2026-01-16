@@ -7,7 +7,7 @@ This ensures all code (including third-party libraries) sees the mocked time.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ def start_time_travel(timestamp: datetime | str | int | float, trace_id: str | N
 
     # Parse timestamp to datetime if needed
     if isinstance(timestamp, (int, float)):
-        dt = datetime.fromtimestamp(timestamp, tz=UTC)
+        dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
     elif isinstance(timestamp, str):
         ts = timestamp.replace("Z", "+00:00")
         dt = datetime.fromisoformat(ts)

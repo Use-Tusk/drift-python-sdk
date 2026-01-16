@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import importlib.abc
 import importlib.machinery
 import sys
 from collections.abc import Callable, Sequence
 from types import ModuleType
-from typing import override
+
+from typing_extensions import override
 
 PatchFn = Callable[[ModuleType], None]
 

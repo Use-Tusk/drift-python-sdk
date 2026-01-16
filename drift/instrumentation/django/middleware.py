@@ -12,7 +12,7 @@ from opentelemetry.trace import SpanKind as OTelSpanKind
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from django.http import HttpRequest, HttpResponse  # type: ignore[import-not-found]
+    from django.http import HttpRequest, HttpResponse
 from ...core.mode_utils import handle_record_mode
 from ...core.tracing import TdSpanAttributes
 from ...core.tracing.span_utils import CreateSpanOptions, SpanInfo, SpanUtils

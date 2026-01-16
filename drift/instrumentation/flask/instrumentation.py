@@ -3,7 +3,9 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, override
+from typing import TYPE_CHECKING, Any
+
+from typing_extensions import override
 
 logger = logging.getLogger(__name__)
 
@@ -69,5 +71,5 @@ class FlaskInstrumentation(InstrumentationBase):
                 transform_engine=transform_engine,
             )
 
-        flask_class.wsgi_app = instrumented_wsgi_app  # type: ignore
+        flask_class.wsgi_app = instrumented_wsgi_app
         print("Flask instrumentation applied")

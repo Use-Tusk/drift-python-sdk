@@ -16,7 +16,7 @@ try:
     HAS_PSYCOPG_RANGE = True
 except ImportError:
     HAS_PSYCOPG_RANGE = False
-    PsycopgRange = None  # type: ignore[misc, assignment]
+    PsycopgRange = None
 
 
 def _serialize_bytes(val: bytes) -> Any:
