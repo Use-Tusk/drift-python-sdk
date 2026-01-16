@@ -1,18 +1,19 @@
 """Kinde SDK instrumentation for REPLAY mode.
 
-This instrumentation patches StorageManager.get() to handle device ID mismatch
-during replay. This enables successful authentication for Flask or FastAPI.
+This instrumentation patches Kinde SDK for replay compatibility using a two-tier approach:
 
-Problem: During replay, Kinde's StorageManager generates a new UUID on server
-startup, but the replayed session contains data keyed with the old device ID
-(e.g., `device:OLD-UUID:user_id`). The lookup fails because StorageManager
-looks for `device:NEW-UUID:user_id`.
+1. PRIMARY: Patch StorageManager.get() to handle device ID mismatch
+   - During replay, Kinde's StorageManager generates a new UUID on server startup
+   - But the replayed session contains data keyed with the old device ID
+   - This patch scans session keys for pattern `device:*:{key}` and extracts the correct device ID
 
-Solution: Patch StorageManager.get() to:
-1. Try normal lookup with current device_id
-2. If that fails, scan session keys for pattern `device:*:{key}`
-3. Extract device ID from found key and cache it for future lookups
-4. Return the found value
+2. FALLBACK: Patch all is_authenticated() methods/functions to return True
+   - OAuth.is_authenticated()
+   - UserSession.is_authenticated()
+   - Tokens.is_authenticated()
+   - helpers.is_authenticated()
+   - If StorageManager patch doesn't help (e.g., app stores auth state elsewhere)
+   - Return True anyway since we're replaying known-good authenticated requests
 
 This approach is framework-agnostic - it works with Flask or FastAPI. Kinde does not support Django.
 
@@ -101,11 +102,77 @@ def _scan_session_for_key(session: Any, target_key: str) -> tuple[str | None, An
     return None, None
 
 
+def _patch_is_authenticated_method(cls: type, method_name: str, class_name: str) -> bool:
+    """Patch an is_authenticated method on a class to return True as fallback.
+
+    Args:
+        cls: The class containing the method
+        method_name: Name of the method to patch
+        class_name: Display name for logging
+
+    Returns:
+        True if patching succeeded, False otherwise.
+    """
+    original = getattr(cls, method_name)
+
+    def patched(*args: Any, **kwargs: Any) -> bool:
+        result = original(*args, **kwargs)
+        if result:
+            logger.debug(f"[KindeInstrumentation] {class_name}.{method_name}() returned True")
+            return True
+        logger.debug(
+            f"[KindeInstrumentation] {class_name}.{method_name}() returned False, "
+            "using REPLAY mode fallback (returning True)"
+        )
+        return True
+
+    setattr(cls, method_name, patched)
+    logger.debug(f"[KindeInstrumentation] Patched {class_name}.{method_name}()")
+    return True
+
+
+def _patch_is_authenticated_function(module: ModuleType, func_name: str, module_name: str) -> bool:
+    """Patch a standalone is_authenticated function to return True as fallback.
+
+    Args:
+        module: The module containing the function
+        func_name: Name of the function to patch
+        module_name: Display name for logging
+
+    Returns:
+        True if patching succeeded, False otherwise.
+    """
+    original = getattr(module, func_name)
+
+    def patched(*args: Any, **kwargs: Any) -> bool:
+        result = original(*args, **kwargs)
+        if result:
+            logger.debug(f"[KindeInstrumentation] {module_name}.{func_name}() returned True")
+            return True
+        logger.debug(
+            f"[KindeInstrumentation] {module_name}.{func_name}() returned False, "
+            "using REPLAY mode fallback (returning True)"
+        )
+        return True
+
+    setattr(module, func_name, patched)
+    logger.debug(f"[KindeInstrumentation] Patched {module_name}.{func_name}()")
+    return True
+
+
 class KindeInstrumentation(InstrumentationBase):
     """Instrumentation to patch Kinde SDK for REPLAY mode compatibility.
 
-    Patches StorageManager.get() to handle device ID mismatch by scanning
-    session keys and extracting the correct device ID from recorded data.
+    Uses a two-tier approach:
+    1. Patches StorageManager.get() to handle device ID mismatch by scanning
+       session keys and extracting the correct device ID from recorded data.
+    2. Patches all is_authenticated() methods/functions as a fallback to return
+       True if the StorageManager approach doesn't work:
+       - OAuth.is_authenticated()
+       - UserSession.is_authenticated()
+       - Tokens.is_authenticated()
+       - helpers.is_authenticated()
+
     Works with Flask, FastAPI, and other frameworks using FrameworkAwareStorage.
     """
 
@@ -124,7 +191,7 @@ class KindeInstrumentation(InstrumentationBase):
         super().__init__(
             name="KindeInstrumentation",
             module_name="kinde_sdk",
-            supported_versions="*",
+            supported_versions=">=2.0.1",
             enabled=should_enable,
         )
 
@@ -143,7 +210,11 @@ class KindeInstrumentation(InstrumentationBase):
             logger.debug("[KindeInstrumentation] Not in REPLAY mode, skipping patch")
             return
 
+        # Primary patch: handle device ID mismatch in StorageManager
         self._patch_storage_manager_get()
+
+        # Fallback patches: if StorageManager patch doesn't help, force is_authenticated to return True
+        self._patch_all_is_authenticated_methods()
 
     def _patch_storage_manager_get(self) -> None:
         """Patch StorageManager.get() to handle device ID mismatch during replay."""
@@ -208,3 +279,47 @@ class KindeInstrumentation(InstrumentationBase):
 
         StorageManager.get = patched_get
         logger.debug("[KindeInstrumentation] Patched StorageManager.get()")
+
+    def _patch_all_is_authenticated_methods(self) -> None:
+        """Patch all is_authenticated methods/functions in Kinde SDK.
+
+        This patches:
+        - OAuth.is_authenticated()
+        - UserSession.is_authenticated()
+        - Tokens.is_authenticated()
+        - helpers.is_authenticated()
+
+        Each patch wraps the original to return True as a fallback when the
+        original returns False, since we're replaying known-good authenticated requests.
+        """
+        # Patch OAuth.is_authenticated
+        try:
+            from kinde_sdk.auth.oauth import OAuth
+
+            _patch_is_authenticated_method(OAuth, "is_authenticated", "OAuth")
+        except ImportError:
+            logger.debug("[KindeInstrumentation] Could not import OAuth, skipping patch")
+
+        # Patch UserSession.is_authenticated
+        try:
+            from kinde_sdk.auth.user_session import UserSession
+
+            _patch_is_authenticated_method(UserSession, "is_authenticated", "UserSession")
+        except ImportError:
+            logger.debug("[KindeInstrumentation] Could not import UserSession, skipping patch")
+
+        # Patch Tokens.is_authenticated
+        try:
+            from kinde_sdk.auth.tokens import Tokens
+
+            _patch_is_authenticated_method(Tokens, "is_authenticated", "Tokens")
+        except ImportError:
+            logger.debug("[KindeInstrumentation] Could not import Tokens, skipping patch")
+
+        # Patch helpers.is_authenticated (standalone function)
+        try:
+            from kinde_sdk.core import helpers
+
+            _patch_is_authenticated_function(helpers, "is_authenticated", "helpers")
+        except ImportError:
+            logger.debug("[KindeInstrumentation] Could not import helpers, skipping patch")
