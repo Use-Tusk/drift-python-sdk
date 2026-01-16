@@ -2,27 +2,77 @@
 
 from __future__ import annotations
 
+import base64
 import datetime as dt
+import uuid
+from decimal import Decimal
 from typing import Any
+
+# Try to import psycopg Range type for deserialization support
+try:
+    from psycopg.types.range import Range as PsycopgRange  # type: ignore[import-untyped]
+
+    HAS_PSYCOPG_RANGE = True
+except ImportError:
+    HAS_PSYCOPG_RANGE = False
+    PsycopgRange = None  # type: ignore[misc, assignment]
 
 
 def deserialize_db_value(val: Any) -> Any:
-    """Convert ISO datetime strings back to datetime objects for consistent serialization.
+    """Convert serialized values back to their original Python types.
 
-    During recording, datetime objects from the database are serialized to ISO format strings.
-    During replay, we need to convert them back to datetime objects so that Flask/Django
-    serializes them the same way (e.g., RFC 2822 vs ISO 8601 format).
+    During recording, database values are serialized for JSON storage:
+    - datetime objects -> ISO format strings
+    - bytes/memoryview -> {"__bytes__": "<base64_encoded_data>"}
+    - uuid.UUID -> {"__uuid__": "<uuid_string>"}
 
-    Only parses strings that contain a time component (T or space separator with :) to avoid
-    incorrectly converting date-only strings or text that happens to look like dates.
+    During replay, we need to convert them back to their original types so that
+    application code (Flask/Django) handles them the same way.
 
     Args:
         val: A value from the mocked database rows. Can be a string, list, dict, or any other type.
 
     Returns:
-        The value with ISO datetime strings converted back to datetime objects.
+        The value with serialized types converted back to their original Python types.
     """
-    if isinstance(val, str):
+    if isinstance(val, dict):
+        # Check for bytes tagged structure
+        if "__bytes__" in val and len(val) == 1:
+            # Decode base64 back to bytes
+            return base64.b64decode(val["__bytes__"])
+        # Check for UUID tagged structure
+        if "__uuid__" in val and len(val) == 1:
+            return uuid.UUID(val["__uuid__"])
+        # Check for Decimal tagged structure
+        if "__decimal__" in val and len(val) == 1:
+            return Decimal(val["__decimal__"])
+        # Check for timedelta tagged structure
+        if "__timedelta__" in val and len(val) == 1:
+            return dt.timedelta(seconds=val["__timedelta__"])
+        # Check for Range tagged structure (psycopg Range types)
+        if "__range__" in val and len(val) == 1:
+            range_data = val["__range__"]
+            if HAS_PSYCOPG_RANGE and PsycopgRange is not None:
+                if range_data.get("empty"):
+                    return PsycopgRange(empty=True)
+                # Recursively deserialize the lower and upper bounds
+                # (they may contain datetime or other serialized types)
+                lower = deserialize_db_value(range_data.get("lower"))
+                upper = deserialize_db_value(range_data.get("upper"))
+                bounds = range_data.get("bounds", "[)")
+                # Convert floats back to ints if they represent whole numbers
+                # This is needed because JSON doesn't distinguish int/float
+                if isinstance(lower, float) and lower.is_integer():
+                    lower = int(lower)
+                if isinstance(upper, float) and upper.is_integer():
+                    upper = int(upper)
+                return PsycopgRange(lower, upper, bounds)
+            else:
+                # If psycopg is not available, return the dict as-is
+                return range_data
+        # Recursively deserialize dict values
+        return {k: deserialize_db_value(v) for k, v in val.items()}
+    elif isinstance(val, str):
         # Only parse strings that look like full datetime (must have time component)
         # This avoids converting date-only strings like "2024-01-15" or text columns
         # that happen to match date patterns
@@ -35,6 +85,4 @@ def deserialize_db_value(val: Any) -> Any:
                 pass
     elif isinstance(val, list):
         return [deserialize_db_value(v) for v in val]
-    elif isinstance(val, dict):
-        return {k: deserialize_db_value(v) for k, v in val.items()}
     return val

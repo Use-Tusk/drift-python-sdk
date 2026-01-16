@@ -1,24 +1,6 @@
 """Execute test requests against the Flask app."""
 
-import time
-
-import requests
-
-BASE_URL = "http://localhost:8000"
-
-
-def make_request(method, endpoint, **kwargs):
-    """Make HTTP request and log result."""
-    url = f"{BASE_URL}{endpoint}"
-    print(f"→ {method} {endpoint}")
-
-    # Set default timeout if not provided
-    kwargs.setdefault("timeout", 30)
-    response = requests.request(method, url, **kwargs)
-    print(f"  Status: {response.status_code}")
-    time.sleep(0.5)  # Small delay between requests
-    return response
-
+from drift.instrumentation.e2e_common.test_utils import make_request, print_request_summary
 
 if __name__ == "__main__":
     print("Starting test request sequence...\n")
@@ -32,4 +14,4 @@ if __name__ == "__main__":
     make_request("POST", "/api/post", json={"title": "Test Post", "body": "This is a test post", "userId": 1})
     make_request("DELETE", "/api/post/1")
 
-    print("\nAll requests completed successfully")
+    print_request_summary()

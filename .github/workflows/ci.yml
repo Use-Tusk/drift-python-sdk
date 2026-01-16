@@ -102,4 +102,3 @@ jobs:
           uv venv /tmp/test-install
           uv pip install dist/*.whl --python /tmp/test-install/bin/python
           /tmp/test-install/bin/python -c "import drift; print('Package imported successfully')"
-

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Union
 
@@ -19,25 +18,19 @@ from opentelemetry.trace import SpanKind as OTelSpanKind
 from opentelemetry.trace import Status
 from opentelemetry.trace import StatusCode as OTelStatusCode
 
-from ...core.communication.types import MockRequestInput
 from ...core.drift_sdk import TuskDrift
 from ...core.json_schema_helper import JsonSchemaHelper
 from ...core.mode_utils import handle_record_mode, handle_replay_mode
 from ...core.tracing import TdSpanAttributes
 from ...core.tracing.span_utils import CreateSpanOptions, SpanUtils
 from ...core.types import (
-    CleanSpanData,
-    Duration,
     PackageType,
     SpanKind,
-    SpanStatus,
-    StatusCode,
-    Timestamp,
     TuskDriftMode,
-    replay_trace_id_context,
 )
 from ..base import InstrumentationBase
 from ..utils.psycopg_utils import deserialize_db_value
+from ..utils.serialization import serialize_value
 
 logger = logging.getLogger(__name__)
 
@@ -454,9 +447,7 @@ class Psycopg2Instrumentation(InstrumentationBase):
             raise RuntimeError("Error creating span in replay mode")
 
         with SpanUtils.with_span(span_info):
-            mock_result = self._try_get_mock(
-                sdk, query_str, params, span_info.trace_id, span_info.span_id, span_info.parent_span_id
-            )
+            mock_result = self._try_get_mock(sdk, query_str, params, span_info.trace_id, span_info.span_id)
 
             if mock_result is None:
                 is_pre_app_start = not sdk.app_ready
@@ -581,7 +572,7 @@ class Psycopg2Instrumentation(InstrumentationBase):
 
         with SpanUtils.with_span(span_info):
             mock_result = self._try_get_mock(
-                sdk, query_str, {"_batch": params_list}, span_info.trace_id, span_info.span_id, span_info.parent_span_id
+                sdk, query_str, {"_batch": params_list}, span_info.trace_id, span_info.span_id
             )
 
             if mock_result is None:
@@ -661,7 +652,6 @@ class Psycopg2Instrumentation(InstrumentationBase):
         params: Any,
         trace_id: str,
         span_id: str,
-        parent_span_id: str | None,
     ) -> dict[str, Any] | None:
         """Try to get a mocked response from CLI.
 
@@ -677,108 +667,27 @@ class Psycopg2Instrumentation(InstrumentationBase):
             if params is not None:
                 input_value["parameters"] = params
 
-            # Generate schema and hashes for CLI matching
-            input_result = JsonSchemaHelper.generate_schema_and_hash(input_value, {})
+            # Use centralized mock finding utility
+            from ...core.mock_utils import find_mock_response_sync
 
-            # Create mock span for matching
-            timestamp_ms = time.time() * 1000
-            timestamp_seconds = int(timestamp_ms // 1000)
-            timestamp_nanos = int((timestamp_ms % 1000) * 1_000_000)
-
-            # Create mock span for matching
-            # NOTE: Schemas must be None to avoid betterproto map serialization issues
-            # The CLI only needs the hashes for matching anyway, not the full schemas
-            mock_span = CleanSpanData(
+            mock_response_output = find_mock_response_sync(
+                sdk=sdk,
                 trace_id=trace_id,
                 span_id=span_id,
-                parent_span_id=parent_span_id or "",
                 name="psycopg2.query",
                 package_name="psycopg2",
                 package_type=PackageType.PG,
                 instrumentation_name="Psycopg2Instrumentation",
                 submodule_name="query",
                 input_value=input_value,
-                output_value=None,
-                input_schema=None,  # type: ignore[arg-type]
-                output_schema=None,  # type: ignore[arg-type]
-                input_schema_hash=input_result.decoded_schema_hash,
-                output_schema_hash="",
-                input_value_hash=input_result.decoded_value_hash,
-                output_value_hash="",
                 kind=SpanKind.CLIENT,
-                status=SpanStatus(code=StatusCode.OK, message=""),
-                timestamp=Timestamp(seconds=timestamp_seconds, nanos=timestamp_nanos),
-                duration=Duration(seconds=0, nanos=0),
-                is_root_span=False,
                 is_pre_app_start=not sdk.app_ready,
             )
 
-            # Request mock from CLI
-            replay_trace_id = replay_trace_id_context.get()
-
-            mock_request = MockRequestInput(
-                test_id=replay_trace_id or "",
-                outbound_span=mock_span,
-            )
-
-            logger.info("[MOCK_REQUEST] Requesting mock from CLI:")
-            logger.info(f"  replay_trace_id={replay_trace_id}")
-            logger.info(f"  trace_id={trace_id}")
-            logger.info(f"  span_id={span_id}")
-            logger.info(f"  parent_span_id={parent_span_id or 'None'}")
-            logger.info(f"  package_name={mock_span.package_name}")
-            logger.info(f"  package_type={mock_span.package_type}")
-            logger.info(f"  instrumentation_name={mock_span.instrumentation_name}")
-            logger.info(f"  input_value_hash={mock_span.input_value_hash}")
-            logger.info(f"  input_schema_hash={mock_span.input_schema_hash}")
-            logger.info(f"  is_pre_app_start={mock_span.is_pre_app_start}")
-            logger.info(f"  query={query_str[:100]}")
-
-            # Check if communicator is connected before requesting mock
-            if not sdk.communicator or not sdk.communicator.is_connected:
-                logger.warning("[MOCK_REQUEST] CLI communicator is not connected yet!")
-                logger.warning(f"[MOCK_REQUEST]   is_pre_app_start={mock_span.is_pre_app_start}")
-
-                if mock_span.is_pre_app_start:
-                    # For pre-app-start queries, return None (will trigger empty result fallback)
-                    logger.warning(
-                        "[MOCK_REQUEST] Pre-app-start query and CLI not ready - returning None to use empty result"
-                    )
-                    return None
-                else:
-                    # For in-request queries, this is an error but we'll return None to be safe
-                    logger.error("[MOCK_REQUEST] In-request query but CLI not connected - returning None")
-                    return None
-
-            logger.debug("[MOCK_REQUEST] Calling sdk.request_mock_sync()...")
-            mock_response_output = sdk.request_mock_sync(mock_request)
-            logger.info(
-                f"[MOCK_RESPONSE] CLI returned: found={mock_response_output.found}, response={mock_response_output.response is not None}"
-            )
-
-            if mock_response_output.response:
-                logger.debug(
-                    f"[MOCK_RESPONSE] Response keys: {mock_response_output.response.keys() if isinstance(mock_response_output.response, dict) else 'not a dict'}"
-                )
-
-            if not mock_response_output.found:
-                logger.error(
-                    f"No mock found for psycopg2 query:\n"
-                    f"  replay_trace_id={replay_trace_id}\n"
-                    f"  span_trace_id={trace_id}\n"
-                    f"  span_id={span_id}\n"
-                    f"  package_name={mock_span.package_name}\n"
-                    f"  package_type={mock_span.package_type}\n"
-                    f"  name={mock_span.name}\n"
-                    f"  input_value_hash={mock_span.input_value_hash}\n"
-                    f"  input_schema_hash={mock_span.input_schema_hash}\n"
-                    f"  query={query_str[:100]}"
-                )
+            if not mock_response_output or not mock_response_output.found:
+                logger.debug(f"No mock found for psycopg2 query: {query_str[:100]}")
                 return None
 
-            logger.info(f"[MOCK_FOUND] Found mock for psycopg2 query: {query_str[:100]}")
-            logger.info(f"[MOCK_FOUND] Mock response type: {type(mock_response_output.response)}")
-            logger.info(f"[MOCK_FOUND] Mock response: {mock_response_output.response}")
             return mock_response_output.response
 
         except Exception as e:
@@ -911,21 +820,6 @@ class Psycopg2Instrumentation(InstrumentationBase):
     ) -> None:
         """Finalize span with query data."""
         try:
-            # Helper function to serialize non-JSON types
-            import datetime
-
-            def serialize_value(val):
-                """Convert non-JSON-serializable values to JSON-compatible types."""
-                if isinstance(val, (datetime.datetime, datetime.date, datetime.time)):
-                    return val.isoformat()
-                elif isinstance(val, bytes):
-                    return val.decode("utf-8", errors="replace")
-                elif isinstance(val, (list, tuple)):
-                    return [serialize_value(v) for v in val]
-                elif isinstance(val, dict):
-                    return {k: serialize_value(v) for k, v in val.items()}
-                return val
-
             # Build input value
             query_str = _query_to_str(query)
             input_value = {

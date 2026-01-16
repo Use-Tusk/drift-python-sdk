@@ -1,24 +1,6 @@
 """Execute test requests against the Psycopg Flask app."""
 
-import time
-
-import requests
-
-BASE_URL = "http://localhost:8000"
-
-
-def make_request(method, endpoint, **kwargs):
-    """Make HTTP request and log result."""
-    url = f"{BASE_URL}{endpoint}"
-    print(f"→ {method} {endpoint}")
-
-    # Set default timeout if not provided
-    kwargs.setdefault("timeout", 30)
-    response = requests.request(method, url, **kwargs)
-    print(f"  Status: {response.status_code}")
-    time.sleep(0.5)  # Small delay between requests
-    return response
-
+from drift.instrumentation.e2e_common.test_utils import make_request, print_request_summary
 
 if __name__ == "__main__":
     print("Starting Psycopg test request sequence...\n")
@@ -64,4 +46,46 @@ if __name__ == "__main__":
         if user_id:
             make_request("DELETE", f"/db/delete/{user_id}")
 
-    print("\nAll requests completed successfully")
+    make_request("GET", "/test/cursor-stream")
+    make_request("GET", "/test/server-cursor")
+    make_request("GET", "/test/copy-to")
+    make_request("GET", "/test/multiple-queries")
+    make_request("GET", "/test/pipeline-mode")
+    make_request("GET", "/test/dict-row-factory")
+    make_request("GET", "/test/namedtuple-row-factory")
+    make_request("GET", "/test/cursor-iteration")
+    make_request("GET", "/test/executemany-returning")
+    make_request("GET", "/test/rownumber")
+    make_request("GET", "/test/statusmessage")
+    make_request("GET", "/test/nextset")
+    make_request("GET", "/test/server-cursor-scroll")
+    make_request("GET", "/test/cursor-scroll")
+    make_request("GET", "/test/cursor-reuse")
+    make_request("GET", "/test/sql-composed")
+    make_request("GET", "/test/binary-uuid")
+    make_request("GET", "/test/binary-bytea")
+    make_request("GET", "/test/class-row-factory")
+    make_request("GET", "/test/kwargs-row-factory")
+    make_request("GET", "/test/scalar-row-factory")
+    make_request("GET", "/test/binary-format")
+
+    # Test: NULL values handling (integrated into E2E suite)
+    make_request("GET", "/test/null-values")
+
+    # Test: Transaction context manager
+    make_request("GET", "/test/transaction-context")
+
+    # JSON/JSONB and array types tests
+    make_request("GET", "/test/json-jsonb")
+    make_request("GET", "/test/array-types")
+    make_request("GET", "/test/cursor-set-result")
+
+    # These tests expose hash mismatch bugs with Decimal and date/time types
+    make_request("GET", "/test/decimal-types")
+    make_request("GET", "/test/date-time-types")
+
+    # These tests expose serialization bugs with inet/cidr and range types
+    make_request("GET", "/test/inet-cidr-types")
+    make_request("GET", "/test/range-types")
+
+    print_request_summary()
