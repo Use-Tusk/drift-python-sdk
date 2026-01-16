@@ -173,11 +173,11 @@ class PsycopgInstrumentation(InstrumentationBase):
         except ImportError:
             logger.warning("[CURSOR_FACTORY] Could not import psycopg.Cursor")
             # Return a basic cursor class
-            BaseCursor = object  # type: ignore
+            BaseCursor = object
 
         base = base_factory or BaseCursor
 
-        class InstrumentedCursor(base):  # type: ignore
+        class InstrumentedCursor(base):
             """Instrumented cursor with tracing support."""
 
             _tusk_description = None  # Store mock description for replay mode
@@ -271,7 +271,7 @@ class PsycopgInstrumentation(InstrumentationBase):
 
         base = base_factory or BaseServerCursor
 
-        class InstrumentedServerCursor(base):  # type: ignore
+        class InstrumentedServerCursor(base):
             """Instrumented server cursor with tracing support.
 
             Note: ServerCursor doesn't support executemany().

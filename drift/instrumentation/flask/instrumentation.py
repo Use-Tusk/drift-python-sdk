@@ -71,5 +71,5 @@ class FlaskInstrumentation(InstrumentationBase):
                 transform_engine=transform_engine,
             )
 
-        flask_class.wsgi_app = instrumented_wsgi_app  # type: ignore
+        flask_class.wsgi_app = instrumented_wsgi_app
         print("Flask instrumentation applied")

@@ -1,7 +1,6 @@
 """Flask app with Psycopg (v3) operations for e2e testing."""
 
 import os
-from datetime import UTC
 
 import psycopg
 from flask import Flask, jsonify, request

@@ -93,7 +93,7 @@ class HttpTransformEngineTests(unittest.TestCase):
             def __init__(self, expression: str) -> None:
                 self.expression = expression
 
-            def find(self, data: Any) -> list[dict[str, Any]]:  # type: ignore[override]
+            def find(self, data: Any) -> list[dict[str, Any]]:
                 return [
                     {
                         "path": "$.password",
@@ -102,7 +102,7 @@ class HttpTransformEngineTests(unittest.TestCase):
                 ]
 
         original_jsonpath = te.JSONPath
-        te.JSONPath = FakeJSONPath  # type: ignore[assignment]
+        te.JSONPath = FakeJSONPath
         try:
             engine = HttpTransformEngine(
                 [
@@ -116,7 +116,7 @@ class HttpTransformEngineTests(unittest.TestCase):
                 ]
             )
         finally:
-            te.JSONPath = original_jsonpath  # type: ignore[assignment]
+            te.JSONPath = original_jsonpath
 
         body = json.dumps({"password": "secret", "username": "alice"}).encode("utf-8")
         span = HttpSpanData(

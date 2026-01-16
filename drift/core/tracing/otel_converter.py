@@ -46,7 +46,7 @@ def _dict_to_transform_metadata(data: dict | None) -> TransformMetadata | None:
             if isinstance(action_dict, dict):
                 actions.append(
                     TransformAction(
-                        type=action_dict.get("type", "redact"),  # type: ignore[arg-type]
+                        type=action_dict.get("type", "redact"),
                         field=action_dict.get("field", ""),
                         reason=action_dict.get("reason", ""),
                         description=action_dict.get("description"),
