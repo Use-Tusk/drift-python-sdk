@@ -461,8 +461,18 @@ class TuskDrift:
         except ImportError:
             pass
 
-        # Socket instrumentation for detecting unpatched dependencies (REPLAY mode only)
+        # REPLAY mode only instrumentations
         if self.mode == TuskDriftMode.REPLAY:
+            # Kinde instrumentation for auth replay - registers hook for when kinde_sdk is imported
+            try:
+                from ..instrumentation.kinde import KindeInstrumentation
+
+                _ = KindeInstrumentation(mode=self.mode)
+                logger.debug("Kinde instrumentation registered (REPLAY mode)")
+            except Exception as e:
+                logger.debug(f"Kinde instrumentation registration failed: {e}")
+
+            # Socket instrumentation for detecting unpatched dependencies
             try:
                 from ..instrumentation.socket import SocketInstrumentation
 

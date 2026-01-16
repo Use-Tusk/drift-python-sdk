@@ -55,6 +55,7 @@ Tusk Drift currently supports the following packages and versions:
 | psycopg | `>=3.1.12` |
 | psycopg2 | all versions |
 | Redis | `>=4.0.0` |
+| Kinde | `>=2.0.1` |
 
 If you're using packages or versions not listed above, please create an issue with the package + version you'd like an instrumentation for.
 
