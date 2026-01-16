@@ -441,28 +441,36 @@ class PsycopgInstrumentation(InstrumentationBase):
                 error = e
                 raise
             finally:
-                if error is not None:
-                    # Always finalize immediately on error
-                    self._finalize_query_span(span_info.span, cursor, query_str, params, error)
-                    span_info.span.end()
-                elif in_pipeline_mode:
-                    # Defer finalization until pipeline.sync()
-                    connection = self._get_connection_from_cursor(cursor)
-                    if connection:
-                        self._add_pending_pipeline_span(connection, span_info, cursor, query_str, params)
-                        # DON'T end span here - will be ended in _finalize_pending_pipeline_spans
+                try:
+                    if error is not None:
+                        # Always finalize immediately on error
+                        self._finalize_query_span(span_info.span, cursor, query_str, params, error)
+                        span_info.span.end()
+                    elif in_pipeline_mode:
+                        # Defer finalization until pipeline.sync()
+                        connection = self._get_connection_from_cursor(cursor)
+                        if connection:
+                            self._add_pending_pipeline_span(connection, span_info, cursor, query_str, params)
+                            # DON'T end span here - will be ended in _finalize_pending_pipeline_spans
+                        else:
+                            # Fallback: finalize immediately if we can't get connection
+                            self._finalize_query_span(span_info.span, cursor, query_str, params, None)
+                            span_info.span.end()
                     else:
-                        # Fallback: finalize immediately if we can't get connection
-                        self._finalize_query_span(span_info.span, cursor, query_str, params, None)
+                        # Normal mode: finalize immediately (unless lazy capture was set up)
+                        span_finalized = self._finalize_query_span(span_info.span, cursor, query_str, params, None)
+                        if span_finalized:
+                            # Span was fully finalized, end it now
+                            span_info.span.end()
+                        # If span_finalized is False, lazy capture was set up and span will be
+                        # ended when user code calls a fetch method
+                except Exception as e:
+                    logger.error(f"Error in span finalization: {e}")
+                    # Ensure span is ended even if finalization fails
+                    try:
                         span_info.span.end()
-                else:
-                    # Normal mode: finalize immediately (unless lazy capture was set up)
-                    span_finalized = self._finalize_query_span(span_info.span, cursor, query_str, params, None)
-                    if span_finalized:
-                        # Span was fully finalized, end it now
-                        span_info.span.end()
-                    # If span_finalized is False, lazy capture was set up and span will be
-                    # ended when user code calls a fetch method
+                    except Exception:
+                        pass
 
     def _traced_executemany(
         self, cursor: Any, original_executemany: Any, sdk: TuskDrift, query: str, params_seq, **kwargs
@@ -561,29 +569,37 @@ class PsycopgInstrumentation(InstrumentationBase):
                 error = e
                 raise
             finally:
-                if returning and error is None:
-                    # Use specialized method for executemany with returning=True
-                    self._finalize_executemany_returning_span(
-                        span_info.span,
-                        cursor,
-                        query_str,
-                        {"_batch": params_list, "_returning": True},
-                        error,
-                    )
-                    span_info.span.end()
-                else:
-                    # Existing behavior for executemany without returning
-                    span_finalized = self._finalize_query_span(
-                        span_info.span,
-                        cursor,
-                        query_str,
-                        {"_batch": params_list},
-                        error,
-                    )
-                    if span_finalized:
+                try:
+                    if returning and error is None:
+                        # Use specialized method for executemany with returning=True
+                        self._finalize_executemany_returning_span(
+                            span_info.span,
+                            cursor,
+                            query_str,
+                            {"_batch": params_list, "_returning": True},
+                            error,
+                        )
                         span_info.span.end()
-                    # Note: executemany without returning typically has no results,
-                    # so lazy capture is unlikely but we handle it for safety
+                    else:
+                        # Existing behavior for executemany without returning
+                        span_finalized = self._finalize_query_span(
+                            span_info.span,
+                            cursor,
+                            query_str,
+                            {"_batch": params_list},
+                            error,
+                        )
+                        if span_finalized:
+                            span_info.span.end()
+                        # Note: executemany without returning typically has no results,
+                        # so lazy capture is unlikely but we handle it for safety
+                except Exception as e:
+                    logger.error(f"Error in span finalization: {e}")
+                    # Ensure span is ended even if finalization fails
+                    try:
+                        span_info.span.end()
+                    except Exception:
+                        pass
 
     def _traced_stream(
         self, cursor: Any, original_stream: Any, sdk: TuskDrift, query: str, params=None, **kwargs
@@ -640,7 +656,14 @@ class PsycopgInstrumentation(InstrumentationBase):
             error = e
             raise
         finally:
-            self._finalize_stream_span(span_info.span, cursor, query_str, params, rows_collected, error)
+            try:
+                self._finalize_stream_span(span_info.span, cursor, query_str, params, rows_collected, error)
+            except Exception as e:
+                logger.error(f"Error in stream span finalization: {e}")
+                try:
+                    span_info.span.end()
+                except Exception:
+                    pass
             span_info.span.end()
 
     def _replay_stream(self, cursor: Any, sdk: TuskDrift, query_str: str, params: Any):
@@ -772,13 +795,20 @@ class PsycopgInstrumentation(InstrumentationBase):
             error = e
             raise
         finally:
-            self._finalize_copy_span(
-                span_info.span,
-                query_str,
-                data_collected,
-                error,
-            )
-            span_info.span.end()
+            try:
+                self._finalize_copy_span(
+                    span_info.span,
+                    query_str,
+                    data_collected,
+                    error,
+                )
+                span_info.span.end()
+            except Exception as e:
+                logger.error(f"Error in copy span finalization: {e}")
+                try:
+                    span_info.span.end()
+                except Exception:
+                    pass
 
     @contextmanager
     def _replay_copy(self, cursor: Any, sdk: TuskDrift, query_str: str) -> Iterator[MockCopy]:
