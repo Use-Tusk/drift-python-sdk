@@ -1896,7 +1896,9 @@ class PsycopgInstrumentation(InstrumentationBase):
                                 )
                             elif hasattr(row, "_fields"):
                                 rows.append(
-                                    [getattr(row, str(col), None) for col in column_names] if column_names else list(row)
+                                    [getattr(row, str(col), None) for col in column_names]
+                                    if column_names
+                                    else list(row)
                                 )
                             else:
                                 rows.append(list(row))
