@@ -1110,7 +1110,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                 return row[0] if isinstance(row, list) and len(row) > 0 else row
             values = tuple(row) if isinstance(row, list) else row
             if row_factory_type == "dict" and column_names:
-                return dict(zip(column_names, values, strict=False))
+                return dict(zip(column_names, values))
             elif row_factory_type in ("namedtuple", "class") and RowClass is not None:
                 return RowClass(*values)
             return values
@@ -1396,7 +1396,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                 return row
             values = tuple(row) if isinstance(row, list) else row
             if row_factory_type == "dict" and col_names:
-                return dict(zip(col_names, values, strict=False))
+                return dict(zip(col_names, values))
             elif row_factory_type == "namedtuple" and RowClass is not None:
                 return RowClass(*values)
             return values
