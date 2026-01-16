@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from betterproto.lib.google.protobuf import Struct as ProtoStruct
@@ -114,7 +114,7 @@ def clean_span_to_proto(span: CleanSpanData) -> ProtoSpan:
         is_root_span=span.is_root_span,
         timestamp=datetime.fromtimestamp(
             span.timestamp.seconds + span.timestamp.nanos / 1_000_000_000,
-            tz=UTC,
+            tz=timezone.utc,
         ),
         duration=timedelta(
             seconds=span.duration.seconds,

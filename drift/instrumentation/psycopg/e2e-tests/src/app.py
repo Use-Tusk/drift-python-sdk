@@ -1,7 +1,6 @@
 """Flask app with Psycopg (v3) operations for e2e testing."""
 
 import os
-from datetime import UTC
 
 import psycopg
 from flask import Flask, jsonify, request
@@ -42,7 +41,7 @@ def db_query():
             cur.execute("SELECT * FROM users ORDER BY id LIMIT 10")
             rows = cur.fetchall()
             columns = [desc[0] for desc in cur.description]
-            results = [dict(zip(columns, row, strict=False)) for row in rows]
+            results = [dict(zip(columns, row)) for row in rows]
 
         return jsonify({"count": len(results), "data": results})
     except Exception as e:
@@ -63,7 +62,7 @@ def db_insert():
             )
             row = cur.fetchone()
             columns = [desc[0] for desc in cur.description]
-            user = dict(zip(columns, row, strict=False))
+            user = dict(zip(columns, row))
             conn.commit()
 
         return jsonify(user), 201
@@ -83,7 +82,7 @@ def db_update(user_id):
             row = cur.fetchone()
             if row:
                 columns = [desc[0] for desc in cur.description]
-                user = dict(zip(columns, row, strict=False))
+                user = dict(zip(columns, row))
                 conn.commit()
                 return jsonify(user)
             else:
@@ -177,7 +176,7 @@ def test_server_cursor():
                 cur.execute("SELECT id, name, email FROM users ORDER BY id LIMIT 5")
                 rows = cur.fetchall()
                 columns = [desc[0] for desc in cur.description] if cur.description else ["id", "name", "email"]
-                results = [dict(zip(columns, row, strict=False)) for row in rows]
+                results = [dict(zip(columns, row)) for row in rows]
         return jsonify({"count": len(results), "data": results})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
