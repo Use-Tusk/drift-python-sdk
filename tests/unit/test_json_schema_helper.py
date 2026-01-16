@@ -6,7 +6,6 @@ Ported from src/core/tracing/JsonSchemaHelper.test.ts
 import base64
 import json
 import sys
-import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -21,89 +20,97 @@ from drift.core.json_schema_helper import (
 )
 
 
-class TestGetDetailedType(unittest.TestCase):
+class TestGetDetailedType:
     """Tests for JsonSchemaHelper._determine_type (getDetailedType equivalent)."""
 
     def test_should_correctly_identify_primitive_types(self):
-        self.assertEqual(JsonSchemaHelper._determine_type(None), JsonSchemaType.NULL)
-        self.assertEqual(JsonSchemaHelper._determine_type("hello"), JsonSchemaType.STRING)
-        self.assertEqual(JsonSchemaHelper._determine_type(42), JsonSchemaType.NUMBER)
-        self.assertEqual(JsonSchemaHelper._determine_type(3.14), JsonSchemaType.NUMBER)
-        self.assertEqual(JsonSchemaHelper._determine_type(True), JsonSchemaType.BOOLEAN)
-        self.assertEqual(JsonSchemaHelper._determine_type(False), JsonSchemaType.BOOLEAN)
+        """Test correct identification of primitive types."""
+        assert JsonSchemaHelper._determine_type(None) == JsonSchemaType.NULL
+        assert JsonSchemaHelper._determine_type("hello") == JsonSchemaType.STRING
+        assert JsonSchemaHelper._determine_type(42) == JsonSchemaType.NUMBER
+        assert JsonSchemaHelper._determine_type(3.14) == JsonSchemaType.NUMBER
+        assert JsonSchemaHelper._determine_type(True) == JsonSchemaType.BOOLEAN
+        assert JsonSchemaHelper._determine_type(False) == JsonSchemaType.BOOLEAN
 
     def test_should_correctly_identify_object_types(self):
-        self.assertEqual(JsonSchemaHelper._determine_type({}), JsonSchemaType.OBJECT)
-        self.assertEqual(JsonSchemaHelper._determine_type([]), JsonSchemaType.ORDERED_LIST)
-        self.assertEqual(JsonSchemaHelper._determine_type(set()), JsonSchemaType.UNORDERED_LIST)
+        """Test correct identification of object types."""
+        assert JsonSchemaHelper._determine_type({}) == JsonSchemaType.OBJECT
+        assert JsonSchemaHelper._determine_type([]) == JsonSchemaType.ORDERED_LIST
+        assert JsonSchemaHelper._determine_type(set()) == JsonSchemaType.UNORDERED_LIST
 
     def test_should_identify_callable_as_function(self):
-        self.assertEqual(JsonSchemaHelper._determine_type(lambda: None), JsonSchemaType.FUNCTION)
+        """Test identification of callable as function."""
+        assert JsonSchemaHelper._determine_type(lambda: None) == JsonSchemaType.FUNCTION
 
     def test_should_handle_tuples_as_ordered_lists(self):
-        self.assertEqual(JsonSchemaHelper._determine_type((1, 2, 3)), JsonSchemaType.ORDERED_LIST)
+        """Test handling of tuples as ordered lists."""
+        assert JsonSchemaHelper._determine_type((1, 2, 3)) == JsonSchemaType.ORDERED_LIST
 
 
-class TestGenerateSchema(unittest.TestCase):
+class TestGenerateSchema:
     """Tests for JsonSchemaHelper.generate_schema."""
 
     def test_should_generate_schema_for_primitive_types(self):
+        """Test schema generation for primitive types."""
         null_schema = JsonSchemaHelper.generate_schema(None)
-        self.assertEqual(null_schema.type, JsonSchemaType.NULL)
-        self.assertEqual(null_schema.properties, {})
+        assert null_schema.type == JsonSchemaType.NULL
+        assert null_schema.properties == {}
 
         string_schema = JsonSchemaHelper.generate_schema("test")
-        self.assertEqual(string_schema.type, JsonSchemaType.STRING)
-        self.assertEqual(string_schema.properties, {})
+        assert string_schema.type == JsonSchemaType.STRING
+        assert string_schema.properties == {}
 
         number_schema = JsonSchemaHelper.generate_schema(42)
-        self.assertEqual(number_schema.type, JsonSchemaType.NUMBER)
-        self.assertEqual(number_schema.properties, {})
+        assert number_schema.type == JsonSchemaType.NUMBER
+        assert number_schema.properties == {}
 
         bool_schema = JsonSchemaHelper.generate_schema(True)
-        self.assertEqual(bool_schema.type, JsonSchemaType.BOOLEAN)
-        self.assertEqual(bool_schema.properties, {})
+        assert bool_schema.type == JsonSchemaType.BOOLEAN
+        assert bool_schema.properties == {}
 
     def test_should_generate_schema_for_empty_arrays(self):
+        """Test schema generation for empty arrays."""
         schema = JsonSchemaHelper.generate_schema([])
-        self.assertEqual(schema.type, JsonSchemaType.ORDERED_LIST)
-        self.assertEqual(schema.properties, {})
-        self.assertIsNone(schema.items)
+        assert schema.type == JsonSchemaType.ORDERED_LIST
+        assert schema.properties == {}
+        assert schema.items is None
 
     def test_should_generate_schema_for_number_arrays(self):
+        """Test schema generation for number arrays."""
         schema = JsonSchemaHelper.generate_schema([1, 2, 3])
-        self.assertEqual(schema.type, JsonSchemaType.ORDERED_LIST)
-        self.assertIsNotNone(schema.items)
+        assert schema.type == JsonSchemaType.ORDERED_LIST
         assert schema.items is not None
-        self.assertEqual(schema.items.type, JsonSchemaType.NUMBER)
+        assert schema.items.type == JsonSchemaType.NUMBER
 
     def test_should_generate_schema_for_string_arrays(self):
+        """Test schema generation for string arrays."""
         schema = JsonSchemaHelper.generate_schema(["a", "b"])
-        self.assertEqual(schema.type, JsonSchemaType.ORDERED_LIST)
-        self.assertIsNotNone(schema.items)
+        assert schema.type == JsonSchemaType.ORDERED_LIST
         assert schema.items is not None
-        self.assertEqual(schema.items.type, JsonSchemaType.STRING)
+        assert schema.items.type == JsonSchemaType.STRING
 
     def test_should_generate_schema_for_object_arrays(self):
+        """Test schema generation for object arrays."""
         schema = JsonSchemaHelper.generate_schema([{"id": 1}])
-        self.assertEqual(schema.type, JsonSchemaType.ORDERED_LIST)
-        self.assertIsNotNone(schema.items)
+        assert schema.type == JsonSchemaType.ORDERED_LIST
         assert schema.items is not None
-        self.assertEqual(schema.items.type, JsonSchemaType.OBJECT)
-        self.assertIn("id", schema.items.properties)
-        self.assertEqual(schema.items.properties["id"].type, JsonSchemaType.NUMBER)
+        assert schema.items.type == JsonSchemaType.OBJECT
+        assert "id" in schema.items.properties
+        assert schema.items.properties["id"].type == JsonSchemaType.NUMBER
 
     def test_should_generate_schema_for_simple_objects(self):
+        """Test schema generation for simple objects."""
         simple_obj = {"name": "John", "age": 30}
         schema = JsonSchemaHelper.generate_schema(simple_obj)
 
-        self.assertEqual(schema.type, JsonSchemaType.OBJECT)
-        self.assertIn("name", schema.properties)
-        self.assertIn("age", schema.properties)
-        self.assertEqual(schema.properties["name"].type, JsonSchemaType.STRING)
-        self.assertEqual(schema.properties["age"].type, JsonSchemaType.NUMBER)
+        assert schema.type == JsonSchemaType.OBJECT
+        assert "name" in schema.properties
+        assert "age" in schema.properties
+        assert schema.properties["name"].type == JsonSchemaType.STRING
+        assert schema.properties["age"].type == JsonSchemaType.NUMBER
 
     def test_should_generate_schema_for_nested_objects(self):
+        """Test schema generation for nested objects."""
         nested_obj = {
             "user": {
                 "profile": {
@@ -113,38 +120,40 @@ class TestGenerateSchema(unittest.TestCase):
         }
         schema = JsonSchemaHelper.generate_schema(nested_obj)
 
-        self.assertEqual(schema.type, JsonSchemaType.OBJECT)
-        self.assertIn("user", schema.properties)
+        assert schema.type == JsonSchemaType.OBJECT
+        assert "user" in schema.properties
 
         user_schema = schema.properties["user"]
-        self.assertEqual(user_schema.type, JsonSchemaType.OBJECT)
-        self.assertIn("profile", user_schema.properties)
+        assert user_schema.type == JsonSchemaType.OBJECT
+        assert "profile" in user_schema.properties
 
         profile_schema = user_schema.properties["profile"]
-        self.assertEqual(profile_schema.type, JsonSchemaType.OBJECT)
-        self.assertIn("name", profile_schema.properties)
-        self.assertEqual(profile_schema.properties["name"].type, JsonSchemaType.STRING)
+        assert profile_schema.type == JsonSchemaType.OBJECT
+        assert "name" in profile_schema.properties
+        assert profile_schema.properties["name"].type == JsonSchemaType.STRING
 
     def test_should_generate_schema_for_empty_set(self):
+        """Test schema generation for empty set."""
         schema = JsonSchemaHelper.generate_schema(set())
-        self.assertEqual(schema.type, JsonSchemaType.UNORDERED_LIST)
-        self.assertEqual(schema.properties, {})
+        assert schema.type == JsonSchemaType.UNORDERED_LIST
+        assert schema.properties == {}
 
     def test_should_generate_schema_for_number_set(self):
+        """Test schema generation for number set."""
         schema = JsonSchemaHelper.generate_schema({1, 2, 3})
-        self.assertEqual(schema.type, JsonSchemaType.UNORDERED_LIST)
-        self.assertIsNotNone(schema.items)
+        assert schema.type == JsonSchemaType.UNORDERED_LIST
         assert schema.items is not None
-        self.assertEqual(schema.items.type, JsonSchemaType.NUMBER)
+        assert schema.items.type == JsonSchemaType.NUMBER
 
     def test_should_generate_schema_for_string_set(self):
+        """Test schema generation for string set."""
         schema = JsonSchemaHelper.generate_schema({"a", "b"})
-        self.assertEqual(schema.type, JsonSchemaType.UNORDERED_LIST)
-        self.assertIsNotNone(schema.items)
+        assert schema.type == JsonSchemaType.UNORDERED_LIST
         assert schema.items is not None
-        self.assertEqual(schema.items.type, JsonSchemaType.STRING)
+        assert schema.items.type == JsonSchemaType.STRING
 
     def test_should_apply_schema_merges(self):
+        """Test applying schema merges."""
         data = {
             "body": "eyJuYW1lIjoiSm9obiJ9",  # base64 encoded JSON
             "header": "regular string",
@@ -158,21 +167,22 @@ class TestGenerateSchema(unittest.TestCase):
 
         schema = JsonSchemaHelper.generate_schema(data, merges)
 
-        self.assertEqual(schema.type, JsonSchemaType.OBJECT)
-        self.assertIn("body", schema.properties)
-        self.assertIn("header", schema.properties)
+        assert schema.type == JsonSchemaType.OBJECT
+        assert "body" in schema.properties
+        assert "header" in schema.properties
 
         body_schema = schema.properties["body"]
-        self.assertEqual(body_schema.type, JsonSchemaType.STRING)
-        self.assertEqual(body_schema.encoding, EncodingType.BASE64)
-        self.assertEqual(body_schema.decoded_type, DecodedType.JSON)
+        assert body_schema.type == JsonSchemaType.STRING
+        assert body_schema.encoding == EncodingType.BASE64
+        assert body_schema.decoded_type == DecodedType.JSON
 
         header_schema = schema.properties["header"]
-        self.assertEqual(header_schema.type, JsonSchemaType.STRING)
-        self.assertIsNone(header_schema.encoding)
-        self.assertIsNone(header_schema.decoded_type)
+        assert header_schema.type == JsonSchemaType.STRING
+        assert header_schema.encoding is None
+        assert header_schema.decoded_type is None
 
     def test_should_not_apply_schema_merges_to_nested_properties_with_same_name(self):
+        """Test that schema merges don't apply to nested properties with same name."""
         data = {
             "body": {
                 "title": "Example Post",
@@ -188,23 +198,22 @@ class TestGenerateSchema(unittest.TestCase):
 
         schema = JsonSchemaHelper.generate_schema(data, merges)
 
-        # Top-level body should have the merge applied
         body_schema = schema.properties["body"]
-        self.assertEqual(body_schema.type, JsonSchemaType.OBJECT)
-        self.assertEqual(body_schema.encoding, EncodingType.BASE64)
-        self.assertEqual(body_schema.decoded_type, DecodedType.JSON)
+        assert body_schema.type == JsonSchemaType.OBJECT
+        assert body_schema.encoding == EncodingType.BASE64
+        assert body_schema.decoded_type == DecodedType.JSON
 
-        # Nested body should NOT have merge applied
         nested_body_schema = body_schema.properties["body"]
-        self.assertEqual(nested_body_schema.type, JsonSchemaType.STRING)
-        self.assertIsNone(nested_body_schema.encoding)
-        self.assertIsNone(nested_body_schema.decoded_type)
+        assert nested_body_schema.type == JsonSchemaType.STRING
+        assert nested_body_schema.encoding is None
+        assert nested_body_schema.decoded_type is None
 
 
-class TestSortObjectKeysRecursively(unittest.TestCase):
+class TestSortObjectKeysRecursively:
     """Tests for JsonSchemaHelper._sort_object_keys."""
 
     def test_should_sort_object_keys_recursively(self):
+        """Test recursive sorting of object keys."""
         input_data = {
             "z": 1,
             "a": {
@@ -224,15 +233,17 @@ class TestSortObjectKeysRecursively(unittest.TestCase):
         }
 
         result = JsonSchemaHelper._sort_object_keys(input_data)
-        self.assertEqual(result, expected)
+        assert result == expected
 
     def test_should_handle_primitive_values(self):
-        self.assertIsNone(JsonSchemaHelper._sort_object_keys(None))
-        self.assertEqual(JsonSchemaHelper._sort_object_keys("string"), "string")
-        self.assertEqual(JsonSchemaHelper._sort_object_keys(42), 42)
-        self.assertEqual(JsonSchemaHelper._sort_object_keys(True), True)
+        """Test handling of primitive values."""
+        assert JsonSchemaHelper._sort_object_keys(None) is None
+        assert JsonSchemaHelper._sort_object_keys("string") == "string"
+        assert JsonSchemaHelper._sort_object_keys(42) == 42
+        assert JsonSchemaHelper._sort_object_keys(True) is True
 
     def test_should_handle_arrays_with_objects(self):
+        """Test handling of arrays with objects."""
         input_data = [
             {"c": 1, "a": 2},
             {"z": 3, "b": 4},
@@ -244,33 +255,36 @@ class TestSortObjectKeysRecursively(unittest.TestCase):
         ]
 
         result = JsonSchemaHelper._sort_object_keys(input_data)
-        self.assertEqual(result, expected)
+        assert result == expected
 
 
-class TestGenerateDeterministicHash(unittest.TestCase):
+class TestGenerateDeterministicHash:
     """Tests for JsonSchemaHelper.generate_deterministic_hash."""
 
     def test_should_generate_consistent_hashes_for_same_data(self):
+        """Test consistent hash generation for same data."""
         data1 = {"b": 2, "a": 1}
         data2 = {"a": 1, "b": 2}
 
         hash1 = JsonSchemaHelper.generate_deterministic_hash(data1)
         hash2 = JsonSchemaHelper.generate_deterministic_hash(data2)
 
-        self.assertEqual(hash1, hash2)
-        self.assertIsInstance(hash1, str)
-        self.assertEqual(len(hash1), 64)  # SHA256 hex length
+        assert hash1 == hash2
+        assert isinstance(hash1, str)
+        assert len(hash1) == 64  # SHA256 hex length
 
     def test_should_generate_different_hashes_for_different_data(self):
+        """Test different hash generation for different data."""
         data1 = {"a": 1, "b": 2}
         data2 = {"a": 1, "b": 3}
 
         hash1 = JsonSchemaHelper.generate_deterministic_hash(data1)
         hash2 = JsonSchemaHelper.generate_deterministic_hash(data2)
 
-        self.assertNotEqual(hash1, hash2)
+        assert hash1 != hash2
 
     def test_should_handle_complex_nested_structures(self):
+        """Test handling of complex nested structures."""
         data = {
             "users": [
                 {"name": "John", "age": 30},
@@ -283,33 +297,34 @@ class TestGenerateDeterministicHash(unittest.TestCase):
         }
 
         hash_result = JsonSchemaHelper.generate_deterministic_hash(data)
-        self.assertIsInstance(hash_result, str)
-        self.assertEqual(len(hash_result), 64)
+        assert isinstance(hash_result, str)
+        assert len(hash_result) == 64
 
-        # Same data should produce same hash
         hash2 = JsonSchemaHelper.generate_deterministic_hash(data)
-        self.assertEqual(hash_result, hash2)
+        assert hash_result == hash2
 
 
-class TestGenerateSchemaAndHash(unittest.TestCase):
+class TestGenerateSchemaAndHash:
     """Tests for JsonSchemaHelper.generate_schema_and_hash."""
 
     def test_should_generate_schema_and_hashes_for_simple_data(self):
+        """Test schema and hash generation for simple data."""
         data = {"name": "John", "age": 30}
         result = JsonSchemaHelper.generate_schema_and_hash(data)
 
-        self.assertEqual(result.schema.type, JsonSchemaType.OBJECT)
-        self.assertIn("name", result.schema.properties)
-        self.assertIn("age", result.schema.properties)
-        self.assertEqual(result.schema.properties["name"].type, JsonSchemaType.STRING)
-        self.assertEqual(result.schema.properties["age"].type, JsonSchemaType.NUMBER)
+        assert result.schema.type == JsonSchemaType.OBJECT
+        assert "name" in result.schema.properties
+        assert "age" in result.schema.properties
+        assert result.schema.properties["name"].type == JsonSchemaType.STRING
+        assert result.schema.properties["age"].type == JsonSchemaType.NUMBER
 
-        self.assertIsInstance(result.decoded_value_hash, str)
-        self.assertIsInstance(result.decoded_schema_hash, str)
-        self.assertEqual(len(result.decoded_value_hash), 64)
-        self.assertEqual(len(result.decoded_schema_hash), 64)
+        assert isinstance(result.decoded_value_hash, str)
+        assert isinstance(result.decoded_schema_hash, str)
+        assert len(result.decoded_value_hash) == 64
+        assert len(result.decoded_schema_hash) == 64
 
     def test_should_handle_schema_merges_with_base64_encoding(self):
+        """Test schema merges with base64 encoding."""
         json_data = {"message": "Hello World"}
         base64_data = base64.b64encode(json.dumps(json_data).encode()).decode()
 
@@ -327,18 +342,18 @@ class TestGenerateSchemaAndHash(unittest.TestCase):
 
         result = JsonSchemaHelper.generate_schema_and_hash(data, schema_merges)
 
-        # The decoded body should now be an object schema
         body_schema = result.schema.properties["body"]
-        self.assertEqual(body_schema.type, JsonSchemaType.OBJECT)
-        self.assertIn("message", body_schema.properties)
-        self.assertEqual(body_schema.properties["message"].type, JsonSchemaType.STRING)
-        self.assertEqual(body_schema.encoding, EncodingType.BASE64)
-        self.assertEqual(body_schema.decoded_type, DecodedType.JSON)
+        assert body_schema.type == JsonSchemaType.OBJECT
+        assert "message" in body_schema.properties
+        assert body_schema.properties["message"].type == JsonSchemaType.STRING
+        assert body_schema.encoding == EncodingType.BASE64
+        assert body_schema.decoded_type == DecodedType.JSON
 
-        self.assertIsInstance(result.decoded_value_hash, str)
-        self.assertIsInstance(result.decoded_schema_hash, str)
+        assert isinstance(result.decoded_value_hash, str)
+        assert isinstance(result.decoded_schema_hash, str)
 
     def test_should_handle_empty_objects_and_arrays(self):
+        """Test handling of empty objects and arrays."""
         data = {
             "emptyObj": {},
             "emptyArr": [],
@@ -347,22 +362,22 @@ class TestGenerateSchemaAndHash(unittest.TestCase):
 
         result = JsonSchemaHelper.generate_schema_and_hash(data)
 
-        self.assertEqual(result.schema.type, JsonSchemaType.OBJECT)
+        assert result.schema.type == JsonSchemaType.OBJECT
 
         empty_obj_schema = result.schema.properties["emptyObj"]
-        self.assertEqual(empty_obj_schema.type, JsonSchemaType.OBJECT)
-        self.assertEqual(empty_obj_schema.properties, {})
+        assert empty_obj_schema.type == JsonSchemaType.OBJECT
+        assert empty_obj_schema.properties == {}
 
         empty_arr_schema = result.schema.properties["emptyArr"]
-        self.assertEqual(empty_arr_schema.type, JsonSchemaType.ORDERED_LIST)
+        assert empty_arr_schema.type == JsonSchemaType.ORDERED_LIST
 
         items_schema = result.schema.properties["items"]
-        self.assertEqual(items_schema.type, JsonSchemaType.ORDERED_LIST)
-        self.assertIsNotNone(items_schema.items)
+        assert items_schema.type == JsonSchemaType.ORDERED_LIST
         assert items_schema.items is not None
-        self.assertEqual(items_schema.items.type, JsonSchemaType.NUMBER)
+        assert items_schema.items.type == JsonSchemaType.NUMBER
 
     def test_should_handle_decoding_errors_gracefully(self):
+        """Test graceful handling of decoding errors."""
         data = {
             "body": "invalid-base64!!!",
             "other": "valid",
@@ -375,65 +390,67 @@ class TestGenerateSchemaAndHash(unittest.TestCase):
             ),
         }
 
-        # Should not raise, should handle gracefully
         result = JsonSchemaHelper.generate_schema_and_hash(data, schema_merges)
 
-        # Body should remain a string since decode failed
         body_schema = result.schema.properties["body"]
-        self.assertEqual(body_schema.type, JsonSchemaType.STRING)
-        self.assertEqual(body_schema.encoding, EncodingType.BASE64)
-        self.assertEqual(body_schema.decoded_type, DecodedType.JSON)
+        assert body_schema.type == JsonSchemaType.STRING
+        assert body_schema.encoding == EncodingType.BASE64
+        assert body_schema.decoded_type == DecodedType.JSON
 
 
-class TestEncodingAndDecodedTypeEnums(unittest.TestCase):
+class TestEncodingAndDecodedTypeEnums:
     """Tests for EncodingType and DecodedType enums."""
 
     def test_should_have_correct_encoding_type_values(self):
-        self.assertEqual(EncodingType.UNSPECIFIED.value, 0)
-        self.assertEqual(EncodingType.BASE64.value, 1)
+        """Test correct EncodingType values."""
+        assert EncodingType.UNSPECIFIED.value == 0
+        assert EncodingType.BASE64.value == 1
 
     def test_should_have_correct_decoded_type_values(self):
-        self.assertEqual(DecodedType.UNSPECIFIED.value, 0)
-        self.assertEqual(DecodedType.JSON.value, 1)
-        self.assertEqual(DecodedType.HTML.value, 2)
-        self.assertEqual(DecodedType.CSS.value, 3)
-        self.assertEqual(DecodedType.JAVASCRIPT.value, 4)
-        self.assertEqual(DecodedType.XML.value, 5)
-        self.assertEqual(DecodedType.YAML.value, 6)
-        self.assertEqual(DecodedType.MARKDOWN.value, 7)
-        self.assertEqual(DecodedType.CSV.value, 8)
-        self.assertEqual(DecodedType.SQL.value, 9)
-        self.assertEqual(DecodedType.GRAPHQL.value, 10)
-        self.assertEqual(DecodedType.PLAIN_TEXT.value, 11)
-        self.assertEqual(DecodedType.FORM_DATA.value, 12)
-        self.assertEqual(DecodedType.MULTIPART_FORM.value, 13)
-        self.assertEqual(DecodedType.PDF.value, 14)
-        self.assertEqual(DecodedType.AUDIO.value, 15)
-        self.assertEqual(DecodedType.VIDEO.value, 16)
-        self.assertEqual(DecodedType.GZIP.value, 17)
-        self.assertEqual(DecodedType.BINARY.value, 18)
-        self.assertEqual(DecodedType.JPEG.value, 19)
-        self.assertEqual(DecodedType.PNG.value, 20)
-        self.assertEqual(DecodedType.GIF.value, 21)
-        self.assertEqual(DecodedType.WEBP.value, 22)
-        self.assertEqual(DecodedType.SVG.value, 23)
-        self.assertEqual(DecodedType.ZIP.value, 24)
+        """Test correct DecodedType values."""
+        assert DecodedType.UNSPECIFIED.value == 0
+        assert DecodedType.JSON.value == 1
+        assert DecodedType.HTML.value == 2
+        assert DecodedType.CSS.value == 3
+        assert DecodedType.JAVASCRIPT.value == 4
+        assert DecodedType.XML.value == 5
+        assert DecodedType.YAML.value == 6
+        assert DecodedType.MARKDOWN.value == 7
+        assert DecodedType.CSV.value == 8
+        assert DecodedType.SQL.value == 9
+        assert DecodedType.GRAPHQL.value == 10
+        assert DecodedType.PLAIN_TEXT.value == 11
+        assert DecodedType.FORM_DATA.value == 12
+        assert DecodedType.MULTIPART_FORM.value == 13
+        assert DecodedType.PDF.value == 14
+        assert DecodedType.AUDIO.value == 15
+        assert DecodedType.VIDEO.value == 16
+        assert DecodedType.GZIP.value == 17
+        assert DecodedType.BINARY.value == 18
+        assert DecodedType.JPEG.value == 19
+        assert DecodedType.PNG.value == 20
+        assert DecodedType.GIF.value == 21
+        assert DecodedType.WEBP.value == 22
+        assert DecodedType.SVG.value == 23
+        assert DecodedType.ZIP.value == 24
 
 
-class TestJsonSchemaToPrimitive(unittest.TestCase):
+class TestJsonSchemaToPrimitive:
     """Tests for JsonSchema.to_primitive conversion."""
 
     def test_should_convert_simple_schema_to_primitive(self):
+        """Test simple schema conversion to primitive."""
         schema = JsonSchema(type=JsonSchemaType.STRING)
         primitive = schema.to_primitive()
 
-        self.assertEqual(primitive["type"], JsonSchemaType.STRING.value)
-        self.assertEqual(primitive["properties"], {})
-        self.assertNotIn("items", primitive)
-        self.assertNotIn("encoding", primitive)
-        self.assertNotIn("decoded_type", primitive)
+        assert primitive["type"] == JsonSchemaType.STRING.value
+        assert primitive["properties"] == {}
+        assert "items" not in primitive
+        assert "encoding" not in primitive
+        assert "decoded_type" not in primitive
 
     def test_should_convert_complex_schema_to_primitive(self):
+        """Test complex schema conversion to primitive."""
         schema = JsonSchema(
             type=JsonSchemaType.OBJECT,
             properties={
@@ -443,13 +460,14 @@ class TestJsonSchemaToPrimitive(unittest.TestCase):
         )
         primitive = schema.to_primitive()
 
-        self.assertEqual(primitive["type"], JsonSchemaType.OBJECT.value)
-        self.assertIn("name", primitive["properties"])
-        self.assertIn("age", primitive["properties"])
-        self.assertEqual(primitive["properties"]["name"]["type"], JsonSchemaType.STRING.value)
-        self.assertEqual(primitive["properties"]["age"]["type"], JsonSchemaType.NUMBER.value)
+        assert primitive["type"] == JsonSchemaType.OBJECT.value
+        assert "name" in primitive["properties"]
+        assert "age" in primitive["properties"]
+        assert primitive["properties"]["name"]["type"] == JsonSchemaType.STRING.value
+        assert primitive["properties"]["age"]["type"] == JsonSchemaType.NUMBER.value
 
     def test_should_include_encoding_and_decoded_type_when_set(self):
+        """Test inclusion of encoding and decoded_type when set."""
         schema = JsonSchema(
             type=JsonSchemaType.STRING,
             encoding=EncodingType.BASE64,
@@ -457,20 +475,17 @@ class TestJsonSchemaToPrimitive(unittest.TestCase):
         )
         primitive = schema.to_primitive()
 
-        self.assertEqual(primitive["encoding"], EncodingType.BASE64.value)
-        self.assertEqual(primitive["decoded_type"], DecodedType.JSON.value)
+        assert primitive["encoding"] == EncodingType.BASE64.value
+        assert primitive["decoded_type"] == DecodedType.JSON.value
 
     def test_should_include_items_for_arrays(self):
+        """Test inclusion of items for arrays."""
         schema = JsonSchema(
             type=JsonSchemaType.ORDERED_LIST,
             items=JsonSchema(type=JsonSchemaType.NUMBER),
         )
         primitive = schema.to_primitive()
 
-        self.assertEqual(primitive["type"], JsonSchemaType.ORDERED_LIST.value)
-        self.assertIn("items", primitive)
-        self.assertEqual(primitive["items"]["type"], JsonSchemaType.NUMBER.value)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert primitive["type"] == JsonSchemaType.ORDERED_LIST.value
+        assert "items" in primitive
+        assert primitive["items"]["type"] == JsonSchemaType.NUMBER.value

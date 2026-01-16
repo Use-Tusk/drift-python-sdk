@@ -7,317 +7,315 @@ HTTP request/response data as spans.
 import os
 import sys
 import time
-import unittest
 from pathlib import Path
+
+import pytest
+import requests
 
 # Set up environment before importing drift
 os.environ["TUSK_DRIFT_MODE"] = "RECORD"
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-import requests
-
 from drift import TuskDrift
 from drift.core.types import SpanKind, StatusCode
 
 
-class TestFlaskBasicSpanCapture(unittest.TestCase):
+@pytest.fixture(scope="module")
+def flask_app_and_adapter():
+    """Set up the SDK, Flask app, and adapter once for all tests in module."""
+    from drift.core.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
+
+    sdk = TuskDrift.initialize()
+    adapter = InMemorySpanAdapter()
+    register_in_memory_adapter(adapter)
+
+    # Flask is auto-instrumented by SDK initialization
+    from flask import Flask, jsonify, request
+
+    app = Flask(__name__)
+
+    @app.route("/health")
+    def health():
+        return jsonify({"status": "healthy", "timestamp": time.time()})
+
+    @app.route("/greet/<name>")
+    def greet(name: str):
+        greeting = request.args.get("greeting", "Hello")
+        return jsonify({"message": f"{greeting}, {name}!", "name": name})
+
+    @app.route("/echo", methods=["POST"])
+    def echo():
+        data = request.get_json()
+        return jsonify({"echoed": data, "received_at": time.time()})
+
+    @app.route("/error")
+    def error():
+        return jsonify({"error": "Something went wrong"}), 500
+
+    @app.route("/headers")
+    def headers():
+        return jsonify(
+            {
+                "user_agent": request.headers.get("User-Agent"),
+                "custom_header": request.headers.get("X-Custom-Header"),
+            }
+        )
+
+    sdk.mark_app_as_ready()
+
+    # Start Flask server in background
+    from tests.utils.flask_test_server import FlaskTestServer
+
+    server = FlaskTestServer(app=app)
+    server.start()
+
+    yield {"sdk": sdk, "adapter": adapter, "app": app, "server": server, "base_url": server.base_url}
+
+    server.stop()
+
+
+@pytest.fixture
+def adapter(flask_app_and_adapter):
+    """Get adapter and clear it before each test."""
+    adapter = flask_app_and_adapter["adapter"]
+    adapter.clear()
+    return adapter
+
+
+@pytest.fixture
+def base_url(flask_app_and_adapter):
+    """Get base URL for requests."""
+    return flask_app_and_adapter["base_url"]
+
+
+def wait_for_spans(timeout: float = 0.5):
+    """Wait for spans to be processed."""
+    time.sleep(timeout)
+
+
+class TestFlaskBasicSpanCapture:
     """Test basic Flask request/response span capture."""
 
-    @classmethod
-    def setUpClass(cls):
-        """Set up the SDK and Flask app once for all tests."""
-        from drift.core.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
-
-        cls.sdk = TuskDrift.initialize()
-        cls.adapter = InMemorySpanAdapter()
-        register_in_memory_adapter(cls.adapter)
-
-        # Flask is auto-instrumented by SDK initialization
-        # Import Flask after SDK is set up
-        from flask import Flask, jsonify, request
-
-        cls.app = Flask(__name__)
-
-        @cls.app.route("/health")
-        def health():
-            return jsonify({"status": "healthy", "timestamp": time.time()})
-
-        @cls.app.route("/greet/<name>")
-        def greet(name: str):
-            greeting = request.args.get("greeting", "Hello")
-            return jsonify({"message": f"{greeting}, {name}!", "name": name})
-
-        @cls.app.route("/echo", methods=["POST"])
-        def echo():
-            data = request.get_json()
-            return jsonify({"echoed": data, "received_at": time.time()})
-
-        @cls.app.route("/error")
-        def error():
-            return jsonify({"error": "Something went wrong"}), 500
-
-        @cls.app.route("/headers")
-        def headers():
-            # Echo back some headers for testing
-            return jsonify(
-                {
-                    "user_agent": request.headers.get("User-Agent"),
-                    "custom_header": request.headers.get("X-Custom-Header"),
-                }
-            )
-
-        cls.sdk.mark_app_as_ready()
-
-        # Start Flask server in background
-        from tests.utils.flask_test_server import FlaskTestServer
-
-        cls.server = FlaskTestServer(app=cls.app)
-        cls.server.start()
-        cls.base_url = cls.server.base_url
-
-    @classmethod
-    def tearDownClass(cls):
-        """Clean up after all tests."""
-        cls.server.stop()
-
-    def setUp(self):
-        """Clear spans before each test."""
-        self.adapter.clear()
-
-    def wait_for_spans(self, timeout: float = 0.5):
-        """Wait for spans to be processed."""
-        time.sleep(timeout)
-
-    def test_captures_get_request_span(self):
+    def test_captures_get_request_span(self, adapter, base_url):
         """Test that GET requests create spans."""
-        response = requests.get(f"{self.base_url}/health")
+        response = requests.get(f"{base_url}/health")
 
-        self.assertEqual(response.status_code, 200)
-        self.wait_for_spans()
+        assert response.status_code == 200
+        wait_for_spans()
 
-        spans = self.adapter.get_all_spans()
-        self.assertGreaterEqual(len(spans), 1)
+        spans = adapter.get_all_spans()
+        assert len(spans) >= 1
 
-        # Find the server span (inbound request)
         server_spans = [s for s in spans if s.kind == SpanKind.SERVER]
-        self.assertGreaterEqual(len(server_spans), 1)
+        assert len(server_spans) >= 1
 
         span = server_spans[0]
-        self.assertIn("/health", span.name)
-        self.assertEqual(span.status.code, StatusCode.OK)
+        assert "/health" in span.name
+        assert span.status.code == StatusCode.OK
 
-    def test_captures_get_with_path_params(self):
+    def test_captures_get_with_path_params(self, adapter, base_url):
         """Test that path parameters are captured."""
-        response = requests.get(f"{self.base_url}/greet/World")
+        response = requests.get(f"{base_url}/greet/World")
 
-        self.assertEqual(response.status_code, 200)
-        self.wait_for_spans()
+        assert response.status_code == 200
+        wait_for_spans()
 
-        spans = self.adapter.get_all_spans()
+        spans = adapter.get_all_spans()
         server_spans = [s for s in spans if s.kind == SpanKind.SERVER]
-        self.assertGreaterEqual(len(server_spans), 1)
+        assert len(server_spans) >= 1
 
         span = server_spans[0]
-        # Check input value contains the path
         input_val = span.input_value
-        self.assertIsInstance(input_val, dict)
-        # Path should contain the actual value
+        assert isinstance(input_val, dict)
         target = input_val.get("target") or input_val.get("path") or input_val.get("url")
-        self.assertIn("World", str(target))
+        assert "World" in str(target)
 
-    def test_captures_get_with_query_params(self):
+    def test_captures_get_with_query_params(self, adapter, base_url):
         """Test that query parameters are captured."""
-        response = requests.get(f"{self.base_url}/greet/World?greeting=Hi")
+        response = requests.get(f"{base_url}/greet/World?greeting=Hi")
 
-        self.assertEqual(response.status_code, 200)
-        self.wait_for_spans()
+        assert response.status_code == 200
+        wait_for_spans()
 
-        spans = self.adapter.get_all_spans()
+        spans = adapter.get_all_spans()
         server_spans = [s for s in spans if s.kind == SpanKind.SERVER]
-        self.assertGreaterEqual(len(server_spans), 1)
+        assert len(server_spans) >= 1
 
-    def test_captures_post_request_span(self):
+    def test_captures_post_request_span(self, adapter, base_url):
         """Test that POST requests create spans."""
         payload = {"message": "Hello", "count": 42}
-        response = requests.post(f"{self.base_url}/echo", json=payload)
+        response = requests.post(f"{base_url}/echo", json=payload)
 
-        self.assertEqual(response.status_code, 200)
-        self.wait_for_spans()
+        assert response.status_code == 200
+        wait_for_spans()
 
-        spans = self.adapter.get_all_spans()
+        spans = adapter.get_all_spans()
         server_spans = [s for s in spans if s.kind == SpanKind.SERVER]
-        self.assertGreaterEqual(len(server_spans), 1)
+        assert len(server_spans) >= 1
 
         span = server_spans[0]
         input_val = span.input_value
-        self.assertIsInstance(input_val, dict)
-        self.assertEqual(input_val.get("method"), "POST")
+        assert isinstance(input_val, dict)
+        assert input_val.get("method") == "POST"
 
-    def test_captures_error_response(self):
+    def test_captures_error_response(self, adapter, base_url):
         """Test that error responses are captured correctly."""
-        response = requests.get(f"{self.base_url}/error")
+        response = requests.get(f"{base_url}/error")
 
-        self.assertEqual(response.status_code, 500)
-        self.wait_for_spans()
+        assert response.status_code == 500
+        wait_for_spans()
 
-        spans = self.adapter.get_all_spans()
+        spans = adapter.get_all_spans()
         server_spans = [s for s in spans if s.kind == SpanKind.SERVER]
-        self.assertGreaterEqual(len(server_spans), 1)
+        assert len(server_spans) >= 1
 
         span = server_spans[0]
         output_val = span.output_value
-        self.assertIsInstance(output_val, dict)
-        # Status code should be 500
+        assert isinstance(output_val, dict)
         status_code = output_val.get("statusCode") or output_val.get("status_code")
-        self.assertEqual(status_code, 500)
+        assert status_code == 500
 
-    def test_captures_request_headers(self):
+    def test_captures_request_headers(self, adapter, base_url):
         """Test that request headers are captured."""
         headers = {"X-Custom-Header": "custom-value"}
-        response = requests.get(f"{self.base_url}/headers", headers=headers)
+        response = requests.get(f"{base_url}/headers", headers=headers)
 
-        self.assertEqual(response.status_code, 200)
-        self.wait_for_spans()
+        assert response.status_code == 200
+        wait_for_spans()
 
-        spans = self.adapter.get_all_spans()
+        spans = adapter.get_all_spans()
         server_spans = [s for s in spans if s.kind == SpanKind.SERVER]
-        self.assertGreaterEqual(len(server_spans), 1)
+        assert len(server_spans) >= 1
 
         span = server_spans[0]
         input_val = span.input_value
-        self.assertIsInstance(input_val, dict)
-        # Headers should be captured
-        self.assertIn("headers", input_val)
+        assert isinstance(input_val, dict)
+        assert "headers" in input_val
 
-    def test_span_has_trace_id(self):
+    def test_span_has_trace_id(self, adapter, base_url):
         """Test that spans have valid trace IDs."""
-        response = requests.get(f"{self.base_url}/health")
+        response = requests.get(f"{base_url}/health")
 
-        self.assertEqual(response.status_code, 200)
-        self.wait_for_spans()
+        assert response.status_code == 200
+        wait_for_spans()
 
-        spans = self.adapter.get_all_spans()
-        self.assertGreaterEqual(len(spans), 1)
+        spans = adapter.get_all_spans()
+        assert len(spans) >= 1
 
         span = spans[0]
-        self.assertIsNotNone(span.trace_id)
-        self.assertEqual(len(span.trace_id), 32)  # 32 hex chars
+        assert span.trace_id is not None
+        assert len(span.trace_id) == 32
 
-    def test_span_has_span_id(self):
+    def test_span_has_span_id(self, adapter, base_url):
         """Test that spans have valid span IDs."""
-        response = requests.get(f"{self.base_url}/health")
+        response = requests.get(f"{base_url}/health")
 
-        self.assertEqual(response.status_code, 200)
-        self.wait_for_spans()
+        assert response.status_code == 200
+        wait_for_spans()
 
-        spans = self.adapter.get_all_spans()
-        self.assertGreaterEqual(len(spans), 1)
+        spans = adapter.get_all_spans()
+        assert len(spans) >= 1
 
         span = spans[0]
-        self.assertIsNotNone(span.span_id)
-        self.assertEqual(len(span.span_id), 16)  # 16 hex chars
+        assert span.span_id is not None
+        assert len(span.span_id) == 16
 
-    def test_span_has_timing_info(self):
+    def test_span_has_timing_info(self, adapter, base_url):
         """Test that spans have timing information."""
-        response = requests.get(f"{self.base_url}/health")
+        response = requests.get(f"{base_url}/health")
 
-        self.assertEqual(response.status_code, 200)
-        self.wait_for_spans()
+        assert response.status_code == 200
+        wait_for_spans()
 
-        spans = self.adapter.get_all_spans()
-        self.assertGreaterEqual(len(spans), 1)
+        spans = adapter.get_all_spans()
+        assert len(spans) >= 1
 
         span = spans[0]
-        self.assertIsNotNone(span.timestamp)
-        self.assertIsNotNone(span.duration)
-        # Duration should be positive
+        assert span.timestamp is not None
+        assert span.duration is not None
         total_nanos = span.duration.seconds * 1_000_000_000 + span.duration.nanos
-        self.assertGreater(total_nanos, 0)
+        assert total_nanos > 0
 
 
-class TestFlaskMultipleRequests(unittest.TestCase):
+@pytest.fixture(scope="module")
+def flask_multi_app_and_adapter():
+    """Set up Flask app for multiple request tests."""
+    from drift.core.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
+
+    sdk = TuskDrift.get_instance()
+    adapter = InMemorySpanAdapter()
+    register_in_memory_adapter(adapter)
+
+    from flask import Flask, jsonify
+
+    app = Flask(__name__)
+
+    @app.route("/endpoint1")
+    def endpoint1():
+        return jsonify({"endpoint": 1})
+
+    @app.route("/endpoint2")
+    def endpoint2():
+        return jsonify({"endpoint": 2})
+
+    from tests.utils.flask_test_server import FlaskTestServer
+
+    server = FlaskTestServer(app=app)
+    server.start()
+
+    yield {"sdk": sdk, "adapter": adapter, "app": app, "server": server, "base_url": server.base_url}
+
+    server.stop()
+
+
+@pytest.fixture
+def multi_adapter(flask_multi_app_and_adapter):
+    """Get adapter and clear it before each test."""
+    adapter = flask_multi_app_and_adapter["adapter"]
+    adapter.clear()
+    return adapter
+
+
+@pytest.fixture
+def multi_base_url(flask_multi_app_and_adapter):
+    """Get base URL for requests."""
+    return flask_multi_app_and_adapter["base_url"]
+
+
+class TestFlaskMultipleRequests:
     """Test multiple Flask requests create separate spans."""
 
-    @classmethod
-    def setUpClass(cls):
-        """Set up the SDK and Flask app once for all tests."""
-        from drift.core.tracing.adapters import InMemorySpanAdapter, register_in_memory_adapter
-
-        cls.sdk = TuskDrift.get_instance()
-        cls.adapter = InMemorySpanAdapter()
-        register_in_memory_adapter(cls.adapter)
-
-        # Import Flask after instrumentation is set up
-        from flask import Flask, jsonify
-
-        cls.app = Flask(__name__)
-
-        @cls.app.route("/endpoint1")
-        def endpoint1():
-            return jsonify({"endpoint": 1})
-
-        @cls.app.route("/endpoint2")
-        def endpoint2():
-            return jsonify({"endpoint": 2})
-
-        # Start Flask server in background
-        from tests.utils.flask_test_server import FlaskTestServer
-
-        cls.server = FlaskTestServer(app=cls.app)
-        cls.server.start()
-        cls.base_url = cls.server.base_url
-
-    @classmethod
-    def tearDownClass(cls):
-        """Clean up after all tests."""
-        cls.server.stop()
-
-    def setUp(self):
-        """Clear spans before each test."""
-        self.adapter.clear()
-
-    def wait_for_spans(self, timeout: float = 0.5):
-        """Wait for spans to be processed."""
-        time.sleep(timeout)
-
-    def test_multiple_requests_create_separate_spans(self):
+    def test_multiple_requests_create_separate_spans(self, multi_adapter, multi_base_url):
         """Test that multiple requests create separate spans."""
-        response1 = requests.get(f"{self.base_url}/endpoint1")
-        response2 = requests.get(f"{self.base_url}/endpoint2")
+        response1 = requests.get(f"{multi_base_url}/endpoint1")
+        response2 = requests.get(f"{multi_base_url}/endpoint2")
 
-        self.assertEqual(response1.status_code, 200)
-        self.assertEqual(response2.status_code, 200)
-        self.wait_for_spans()
+        assert response1.status_code == 200
+        assert response2.status_code == 200
+        wait_for_spans()
 
-        spans = self.adapter.get_all_spans()
+        spans = multi_adapter.get_all_spans()
         server_spans = [s for s in spans if s.kind == SpanKind.SERVER]
 
-        # Should have at least 2 server spans
-        self.assertGreaterEqual(len(server_spans), 2)
+        assert len(server_spans) >= 2
 
-        # Spans should have different span IDs
         span_ids = [s.span_id for s in server_spans]
-        self.assertEqual(len(span_ids), len(set(span_ids)))
+        assert len(span_ids) == len(set(span_ids))
 
-    def test_multiple_requests_have_different_trace_ids(self):
+    def test_multiple_requests_have_different_trace_ids(self, multi_adapter, multi_base_url):
         """Test that independent requests have different trace IDs."""
-        response1 = requests.get(f"{self.base_url}/endpoint1")
-        response2 = requests.get(f"{self.base_url}/endpoint2")
+        response1 = requests.get(f"{multi_base_url}/endpoint1")
+        response2 = requests.get(f"{multi_base_url}/endpoint2")
 
-        self.assertEqual(response1.status_code, 200)
-        self.assertEqual(response2.status_code, 200)
-        self.wait_for_spans()
+        assert response1.status_code == 200
+        assert response2.status_code == 200
+        wait_for_spans()
 
-        spans = self.adapter.get_all_spans()
+        spans = multi_adapter.get_all_spans()
         server_spans = [s for s in spans if s.kind == SpanKind.SERVER]
 
-        self.assertGreaterEqual(len(server_spans), 2)
+        assert len(server_spans) >= 2
 
-        # Separate requests should have different trace IDs
         trace_ids = [s.trace_id for s in server_spans]
-        self.assertEqual(len(trace_ids), len(set(trace_ids)))
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert len(trace_ids) == len(set(trace_ids))

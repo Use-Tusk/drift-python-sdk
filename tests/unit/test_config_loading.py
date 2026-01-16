@@ -2,7 +2,6 @@
 
 import os
 import tempfile
-import unittest
 from pathlib import Path
 
 from drift.core.config import (
@@ -12,17 +11,15 @@ from drift.core.config import (
 )
 
 
-class TestFindProjectRoot(unittest.TestCase):
+class TestFindProjectRoot:
     """Test the find_project_root function."""
 
     def test_finds_project_root_with_pyproject_toml(self):
         """Should find project root when pyproject.toml exists."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a pyproject.toml file
             project_root = Path(tmpdir).resolve()
             (project_root / "pyproject.toml").touch()
 
-            # Change to a subdirectory
             subdir = project_root / "src" / "myapp"
             subdir.mkdir(parents=True)
 
@@ -31,18 +28,16 @@ class TestFindProjectRoot(unittest.TestCase):
                 os.chdir(subdir)
                 found_root = find_project_root()
                 assert found_root is not None
-                self.assertEqual(found_root.resolve(), project_root.resolve())
+                assert found_root.resolve() == project_root.resolve()
             finally:
                 os.chdir(original_cwd)
 
     def test_finds_project_root_with_setup_py(self):
         """Should find project root when setup.py exists."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a setup.py file
             project_root = Path(tmpdir).resolve()
             (project_root / "setup.py").touch()
 
-            # Change to a subdirectory
             subdir = project_root / "src"
             subdir.mkdir(parents=True)
 
@@ -51,14 +46,13 @@ class TestFindProjectRoot(unittest.TestCase):
                 os.chdir(subdir)
                 found_root = find_project_root()
                 assert found_root is not None
-                self.assertEqual(found_root.resolve(), project_root.resolve())
+                assert found_root.resolve() == project_root.resolve()
             finally:
                 os.chdir(original_cwd)
 
     def test_returns_none_when_no_markers_found(self):
         """Should return None when no project markers are found."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a directory with no project markers
             subdir = Path(tmpdir) / "some" / "deep" / "path"
             subdir.mkdir(parents=True)
 
@@ -66,14 +60,12 @@ class TestFindProjectRoot(unittest.TestCase):
             try:
                 os.chdir(subdir)
                 found_root = find_project_root()
-                # This might return None or find a marker higher up the tree
-                # depending on the actual directory structure
-                self.assertIsInstance(found_root, (Path, type(None)))
+                assert isinstance(found_root, (Path, type(None)))
             finally:
                 os.chdir(original_cwd)
 
 
-class TestLoadTuskConfig(unittest.TestCase):
+class TestLoadTuskConfig:
     """Test the load_tusk_config function."""
 
     def test_loads_valid_config_file(self):
@@ -82,7 +74,6 @@ class TestLoadTuskConfig(unittest.TestCase):
             project_root = Path(tmpdir)
             (project_root / "pyproject.toml").touch()
 
-            # Create .tusk directory and config file
             tusk_dir = project_root / ".tusk"
             tusk_dir.mkdir()
 
@@ -115,38 +106,32 @@ transforms:
                 os.chdir(project_root)
                 config = load_tusk_config()
 
-                self.assertIsNotNone(config)
                 assert config is not None
-                self.assertIsInstance(config, TuskFileConfig)
+                assert isinstance(config, TuskFileConfig)
 
                 # Check service config
-                self.assertIsNotNone(config.service)
                 assert config.service is not None
-                self.assertEqual(config.service.id, "test-service-123")
-                self.assertEqual(config.service.name, "test-service")
-                self.assertEqual(config.service.port, 3000)
+                assert config.service.id == "test-service-123"
+                assert config.service.name == "test-service"
+                assert config.service.port == 3000
 
                 # Check traces config
-                self.assertIsNotNone(config.traces)
                 assert config.traces is not None
-                self.assertEqual(config.traces.dir, ".tusk/traces")
+                assert config.traces.dir == ".tusk/traces"
 
                 # Check recording config
-                self.assertIsNotNone(config.recording)
                 assert config.recording is not None
-                self.assertEqual(config.recording.sampling_rate, 0.5)
-                self.assertEqual(config.recording.export_spans, False)
-                self.assertEqual(config.recording.enable_env_var_recording, True)
+                assert config.recording.sampling_rate == 0.5
+                assert config.recording.export_spans is False
+                assert config.recording.enable_env_var_recording is True
 
                 # Check tusk_api config
-                self.assertIsNotNone(config.tusk_api)
                 assert config.tusk_api is not None
-                self.assertEqual(config.tusk_api.url, "https://api.example.com")
+                assert config.tusk_api.url == "https://api.example.com"
 
                 # Check transforms
-                self.assertIsNotNone(config.transforms)
                 assert config.transforms is not None
-                self.assertIn("http", config.transforms)
+                assert "http" in config.transforms
 
             finally:
                 os.chdir(original_cwd)
@@ -161,7 +146,7 @@ transforms:
             try:
                 os.chdir(project_root)
                 config = load_tusk_config()
-                self.assertIsNone(config)
+                assert config is None
             finally:
                 os.chdir(original_cwd)
 
@@ -171,7 +156,6 @@ transforms:
             project_root = Path(tmpdir)
             (project_root / "pyproject.toml").touch()
 
-            # Create .tusk directory and empty config file
             tusk_dir = project_root / ".tusk"
             tusk_dir.mkdir()
             (tusk_dir / "config.yaml").write_text("")
@@ -181,16 +165,15 @@ transforms:
                 os.chdir(project_root)
                 config = load_tusk_config()
 
-                self.assertIsNotNone(config)
                 assert config is not None
-                self.assertIsInstance(config, TuskFileConfig)
+                assert isinstance(config, TuskFileConfig)
 
                 # All fields should be None
-                self.assertIsNone(config.service)
-                self.assertIsNone(config.traces)
-                self.assertIsNone(config.recording)
-                self.assertIsNone(config.tusk_api)
-                self.assertIsNone(config.transforms)
+                assert config.service is None
+                assert config.traces is None
+                assert config.recording is None
+                assert config.tusk_api is None
+                assert config.transforms is None
 
             finally:
                 os.chdir(original_cwd)
@@ -201,7 +184,6 @@ transforms:
             project_root = Path(tmpdir)
             (project_root / "pyproject.toml").touch()
 
-            # Create .tusk directory and partial config file
             tusk_dir = project_root / ".tusk"
             tusk_dir.mkdir()
 
@@ -219,18 +201,15 @@ traces:
                 os.chdir(project_root)
                 config = load_tusk_config()
 
-                self.assertIsNotNone(config)
                 assert config is not None
 
                 # Only specified sections should be present
-                self.assertIsNone(config.service)
-                self.assertIsNotNone(config.traces)
+                assert config.service is None
                 assert config.traces is not None
-                self.assertEqual(config.traces.dir, "./my-traces")
-                self.assertIsNotNone(config.recording)
+                assert config.traces.dir == "./my-traces"
                 assert config.recording is not None
-                self.assertEqual(config.recording.sampling_rate, 0.8)
-                self.assertIsNone(config.tusk_api)
+                assert config.recording.sampling_rate == 0.8
+                assert config.tusk_api is None
 
             finally:
                 os.chdir(original_cwd)
@@ -241,7 +220,6 @@ traces:
             project_root = Path(tmpdir)
             (project_root / "pyproject.toml").touch()
 
-            # Create .tusk directory and invalid YAML file
             tusk_dir = project_root / ".tusk"
             tusk_dir.mkdir()
             (tusk_dir / "config.yaml").write_text("invalid: yaml: content: [")
@@ -250,10 +228,6 @@ traces:
             try:
                 os.chdir(project_root)
                 config = load_tusk_config()
-                self.assertIsNone(config)
+                assert config is None
             finally:
                 os.chdir(original_cwd)
-
-
-if __name__ == "__main__":
-    unittest.main()

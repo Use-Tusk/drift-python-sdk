@@ -1,7 +1,8 @@
+"""Tests for HTTP transform engine."""
+
 import base64
 import json
 import sys
-import unittest
 from pathlib import Path
 from typing import Any
 
@@ -12,8 +13,11 @@ from drift.instrumentation.http import HttpSpanData, HttpTransformEngine
 from drift.instrumentation.http import transform_engine as te
 
 
-class HttpTransformEngineTests(unittest.TestCase):
+class TestHttpTransformEngine:
+    """Tests for HttpTransformEngine."""
+
     def test_should_drop_inbound_request_and_sanitize_span(self) -> None:
+        """Test dropping inbound requests and sanitizing the span."""
         engine = HttpTransformEngine(
             [
                 {
@@ -27,7 +31,7 @@ class HttpTransformEngineTests(unittest.TestCase):
             ]
         )
 
-        self.assertTrue(engine.should_drop_inbound_request("GET", "/private/123", {"Host": "example.com"}))
+        assert engine.should_drop_inbound_request("GET", "/private/123", {"Host": "example.com"})
 
         span = HttpSpanData(
             kind=SpanKind.SERVER,
@@ -42,15 +46,15 @@ class HttpTransformEngineTests(unittest.TestCase):
         )
 
         metadata = engine.apply_transforms(span)
-        self.assertIsNotNone(metadata)
         assert metadata is not None
         assert span.input_value is not None
         assert span.output_value is not None
-        self.assertEqual(metadata.actions[0].type, "drop")
-        self.assertEqual(span.input_value["bodySize"], 0)
-        self.assertEqual(span.output_value["bodySize"], 0)
+        assert metadata.actions[0].type == "drop"
+        assert span.input_value["bodySize"] == 0
+        assert span.output_value["bodySize"] == 0
 
     def test_jsonpath_mask_transform_updates_body_and_metadata(self) -> None:
+        """Test JSONPath mask transform updates body and metadata."""
         engine = HttpTransformEngine(
             [
                 {
@@ -77,18 +81,19 @@ class HttpTransformEngineTests(unittest.TestCase):
         )
 
         metadata = engine.apply_transforms(span)
-        self.assertIsNotNone(metadata)
         assert metadata is not None
         assert span.input_value is not None
-        self.assertTrue(metadata.transformed)
-        self.assertTrue(metadata.actions[0].field.startswith("jsonPath"))
+        assert metadata.transformed
+        assert metadata.actions[0].field.startswith("jsonPath")
 
         masked_body = json.loads(base64.b64decode(span.input_value["body"].encode("ascii")))
-        self.assertEqual(masked_body["password"], "#" * len("hunter2"))
+        assert masked_body["password"] == "#" * len("hunter2")
         expected_size = len(json.dumps(masked_body, separators=(",", ":")).encode("utf-8"))
-        self.assertEqual(span.input_value["bodySize"], expected_size)
+        assert span.input_value["bodySize"] == expected_size
 
     def test_python_jsonpath_stub_is_used_when_available(self) -> None:
+        """Test that Python JSONPath stub is used when available."""
+
         class FakeJSONPath:
             def __init__(self, expression: str) -> None:
                 self.expression = expression
@@ -132,11 +137,7 @@ class HttpTransformEngineTests(unittest.TestCase):
         )
 
         metadata = engine.apply_transforms(span)
-        self.assertIsNotNone(metadata)
+        assert metadata is not None
         assert span.input_value is not None
         masked_body = json.loads(base64.b64decode(span.input_value["body"].encode("ascii")))
-        self.assertEqual(masked_body["password"], "redacted")
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert masked_body["password"] == "redacted"
