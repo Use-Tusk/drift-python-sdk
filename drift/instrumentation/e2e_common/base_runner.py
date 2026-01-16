@@ -14,6 +14,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -46,6 +47,7 @@ class E2ETestRunnerBase:
     def __init__(self, app_port: int = 8000):
         self.app_port = app_port
         self.app_process: subprocess.Popen | None = None
+        self.app_log_file: tempfile._TemporaryFileWrapper | None = None
         self.exit_code = 0
         self.expected_request_count: int | None = None
 
@@ -149,11 +151,17 @@ class E2ETestRunnerBase:
         self.log("Starting application in RECORD mode...", Colors.GREEN)
         env = {"TUSK_DRIFT_MODE": "RECORD", "PYTHONUNBUFFERED": "1"}
 
+        # Use a temporary file to capture app output for debugging.
+        # This avoids pipe buffer issues while still allowing diagnostics.
+        # Note: Can't use context manager here - file must stay open for subprocess
+        # and be cleaned up later in cleanup(). Using delete=False + manual unlink.
+        self.app_log_file = tempfile.NamedTemporaryFile(mode="w+", suffix=".log", delete=False)  # noqa: SIM115
+
         self.app_process = subprocess.Popen(
             ["python", "src/app.py"],
             env={**os.environ, **env},
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=self.app_log_file,
+            stderr=subprocess.STDOUT,
             text=True,
         )
 
@@ -168,10 +176,18 @@ class E2ETestRunnerBase:
         except TimeoutError:
             self.log("Application failed to become ready", Colors.RED)
             if self.app_process:
-                # Print app output for debugging
                 self.app_process.terminate()
-                stdout, _ = self.app_process.communicate(timeout=5)
-                self.log(f"App output: {stdout}", Colors.YELLOW)
+                try:
+                    self.app_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.app_process.kill()
+                    self.app_process.wait()
+            # Read and display app output for debugging
+            if self.app_log_file:
+                self.app_log_file.flush()
+                self.app_log_file.seek(0)
+                app_output = self.app_log_file.read()
+                self.log(f"App output:\n{app_output}", Colors.YELLOW)
             self.exit_code = 1
             return False
 
@@ -386,6 +402,15 @@ class E2ETestRunnerBase:
             except subprocess.TimeoutExpired:
                 self.app_process.kill()
                 self.app_process.wait()
+
+        # Clean up app log file
+        if self.app_log_file:
+            try:
+                self.app_log_file.close()
+                os.unlink(self.app_log_file.name)
+            except OSError:
+                pass
+            self.app_log_file = None
 
         # Traces are kept in container for inspection
         self.log("Cleanup complete", Colors.GREEN)
