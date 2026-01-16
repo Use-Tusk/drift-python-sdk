@@ -1,24 +1,6 @@
 """Execute test requests against the Flask app to exercise the HTTPX instrumentation."""
 
-import time
-
-import requests
-
-BASE_URL = "http://localhost:8000"
-
-
-def make_request(method, endpoint, **kwargs):
-    """Make HTTP request and log result."""
-    url = f"{BASE_URL}{endpoint}"
-    print(f"-> {method} {endpoint}")
-
-    # Set default timeout if not provided
-    kwargs.setdefault("timeout", 30)
-    response = requests.request(method, url, **kwargs)
-    print(f"   Status: {response.status_code}")
-    time.sleep(0.5)  # Small delay between requests
-    return response
-
+from drift.instrumentation.e2e_common.test_utils import make_request, print_request_summary
 
 if __name__ == "__main__":
     print("Starting test request sequence for HTTPX instrumentation...\n")
@@ -124,4 +106,4 @@ if __name__ == "__main__":
 
     make_request("POST", "/test/file-like-body")
 
-    print("\nAll requests completed successfully")
+    print_request_summary()
