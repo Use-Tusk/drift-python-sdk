@@ -198,9 +198,14 @@ class BatchSpanProcessor:
             try:
                 # Handle async adapters
                 if asyncio.iscoroutinefunction(adapter.export_spans):
-                    # Use the thread's long-lived event loop if available,
-                    # otherwise create a temporary one (e.g., during force_flush after shutdown)
-                    if self._thread_loop is not None and not self._thread_loop.is_closed():
+                    # Only reuse the thread's event loop if we're on the export thread.
+                    # Using it from another thread (e.g., force_flush after join timeout)
+                    # would cause RuntimeError since event loops are not thread-safe.
+                    is_export_thread = threading.current_thread() is self._export_thread
+                    can_reuse_loop = (
+                        is_export_thread and self._thread_loop is not None and not self._thread_loop.is_closed()
+                    )
+                    if can_reuse_loop and self._thread_loop is not None:
                         self._thread_loop.run_until_complete(adapter.export_spans(batch))
                     else:
                         loop = asyncio.new_event_loop()
