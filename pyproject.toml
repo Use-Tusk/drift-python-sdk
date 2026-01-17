@@ -128,6 +128,7 @@ include = [
     "drift/instrumentation/django/**",
     "drift/instrumentation/psycopg/**",
     "drift/instrumentation/psycopg2/**",
+    "drift/instrumentation/pyjwt/**",
     "drift/instrumentation/redis/**",
     "drift/instrumentation/kinde/**",
     "drift/instrumentation/http/transform_engine.py",

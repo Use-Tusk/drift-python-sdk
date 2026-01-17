@@ -22,9 +22,7 @@ logger = logging.getLogger(__name__)
 class PyJWTInstrumentation(InstrumentationBase):
     """Patches PyJWT to disable verification in REPLAY mode."""
 
-    def __init__(
-        self, mode: TuskDriftMode = TuskDriftMode.DISABLED, enabled: bool = True
-    ) -> None:
+    def __init__(self, mode: TuskDriftMode = TuskDriftMode.DISABLED, enabled: bool = True) -> None:
         self.mode = mode
         should_enable = enabled and mode == TuskDriftMode.REPLAY
 

@@ -530,8 +530,8 @@ def _finalize_span(
     TuskDrift.get_instance()
 
     status_code = response_data.get("status_code", 200)
-    # Match Node SDK: >= 300 is considered an error (redirects, client errors, server errors)
-    if status_code >= 300:
+    # Match Node SDK: >= 400 is considered an error
+    if status_code >= 400:
         span_info.span.set_status(Status(OTelStatusCode.ERROR, f"HTTP {status_code}"))
     else:
         span_info.span.set_status(Status(OTelStatusCode.OK))

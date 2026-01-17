@@ -390,8 +390,8 @@ class DriftMiddleware:
         duration_seconds = duration_ns // 1_000_000_000
         duration_nanos = duration_ns % 1_000_000_000
 
-        # Match Node SDK: >= 300 is considered an error (redirects, client errors, server errors)
-        if status_code >= 300:
+        # Match Node SDK: >= 400 is considered an error
+        if status_code >= 400:
             status = SpanStatus(code=StatusCode.ERROR, message=f"HTTP {status_code}")
         else:
             status = SpanStatus(code=StatusCode.OK, message="")
