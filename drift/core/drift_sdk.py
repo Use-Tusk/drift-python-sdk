@@ -481,6 +481,15 @@ class TuskDrift:
             except Exception as e:
                 logger.debug(f"Socket instrumentation initialization failed: {e}")
 
+            # PyJWT instrumentation for JWT verification bypass
+            try:
+                from ..instrumentation.pyjwt import PyJWTInstrumentation
+
+                _ = PyJWTInstrumentation(mode=self.mode)
+                logger.debug("PyJWT instrumentation registered (REPLAY mode)")
+            except Exception as e:
+                logger.debug(f"PyJWT instrumentation registration failed: {e}")
+
     def create_env_vars_snapshot(self) -> None:
         """Create a span capturing all environment variables.
 
