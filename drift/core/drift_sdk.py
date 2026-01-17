@@ -746,7 +746,7 @@ class TuskDrift:
 
         if self.communicator:
             try:
-                asyncio.run(self.communicator.disconnect())
+                self.communicator.disconnect()
             except Exception as e:
                 logger.error(f"Error disconnecting from CLI: {e}")
 
