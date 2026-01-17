@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, TypeVar
 from opentelemetry.trace import SpanKind as OTelSpanKind
 
 if TYPE_CHECKING:
-    pass
+    from ..instrumentation.http import HttpTransformEngine
 
 logger = logging.getLogger(__name__)
 
@@ -144,3 +144,52 @@ def is_background_request(is_server_request: bool = False) -> bool:
     current_span_info = SpanUtils.get_current_span_info()
 
     return is_app_ready and not current_span_info and not is_server_request
+
+
+def should_record_inbound_http_request(
+    method: str,
+    target: str,
+    headers: dict[str, str],
+    transform_engine: HttpTransformEngine | None,
+    is_pre_app_start: bool,
+) -> tuple[bool, str | None]:
+    """Check if an inbound HTTP request should be recorded.
+
+    This should be called BEFORE reading the request body to avoid
+    unnecessary I/O for requests that will be dropped or not sampled.
+
+    The check order is:
+    1. Drop transforms - check if request matches any drop rules
+    2. Sampling - check if request should be sampled (only when app is ready)
+
+    During pre-app-start phase, all requests are sampled to capture
+    initialization behavior.
+
+    Note: This is HTTP-specific. gRPC or other protocols would need a separate function
+    with different parameters.
+
+    Args:
+        method: HTTP method (GET, POST, etc.)
+        target: Request target (path + query string, e.g., "/api/users?page=1")
+        headers: Request headers dictionary
+        transform_engine: Optional HTTP transform engine for drop checks
+        is_pre_app_start: Whether app is in pre-start phase (always sample if True)
+
+    Returns:
+        Tuple of (should_record, skip_reason):
+        - should_record: True if request should be recorded
+        - skip_reason: If False, explains why ("dropped" or "not_sampled"), None otherwise
+    """
+    if transform_engine and transform_engine.should_drop_inbound_request(method, target, headers):
+        return False, "dropped"
+
+    if not is_pre_app_start:
+        from .drift_sdk import TuskDrift
+        from .sampling import should_sample
+
+        sdk = TuskDrift.get_instance()
+        sampling_rate = sdk.get_sampling_rate()
+        if not should_sample(sampling_rate, is_app_ready=True):
+            return False, "not_sampled"
+
+    return True, None
