@@ -54,4 +54,11 @@ if __name__ == "__main__":
     # urlopen with data parameter
     make_request("POST", "/api/urlopen-with-data")
 
+    # Bug-exposing tests (these tests expose bugs in the instrumentation)
+    # HTTP 404 error handling - tests HTTPError replay
+    make_request("GET", "/test/http-404-error")
+
+    # HTTP redirect handling - tests geturl() after redirects
+    make_request("GET", "/test/http-redirect")
+
     print_request_summary()

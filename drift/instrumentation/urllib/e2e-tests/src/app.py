@@ -328,6 +328,53 @@ def urlopen_with_data():
         return jsonify({"error": str(e)}), 500
 
 
+# Test: HTTP 404 error handling (BUG-EXPOSING TEST)
+@app.route("/test/http-404-error", methods=["GET"])
+def test_http_404_error():
+    """Test handling of HTTP 404 error responses.
+
+    When urlopen receives a 4xx/5xx response, it raises HTTPError which is
+    also a valid response object. This tests if the instrumentation correctly
+    handles this case.
+    """
+    from urllib.error import HTTPError as UrllibHTTPError
+    try:
+        with urlopen("https://httpbin.org/status/404", timeout=10) as response:
+            return jsonify({"status": response.status})
+    except UrllibHTTPError as e:
+        # HTTPError is also a response object - we can read its body
+        body = e.read().decode("utf-8") if e.fp else ""
+        return jsonify({
+            "error": True,
+            "code": e.code,
+            "reason": e.reason,
+            "body": body,
+        }), 200  # Return 200 since we handled the error
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# Test: HTTP redirect handling (BUG-EXPOSING TEST)
+@app.route("/test/http-redirect", methods=["GET"])
+def test_http_redirect():
+    """Test HTTP redirect handling (301, 302, etc.).
+
+    urllib follows redirects automatically. This tests if the instrumentation
+    correctly handles redirect scenarios.
+    """
+    try:
+        # httpbin.org/redirect/n redirects n times before returning 200
+        with urlopen("https://httpbin.org/redirect/2", timeout=10) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            return jsonify({
+                "final_url": response.geturl(),
+                "status": response.status,
+                "data": data,
+            })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     sdk.mark_app_as_ready()
     app.run(host="0.0.0.0", port=8000, debug=False)

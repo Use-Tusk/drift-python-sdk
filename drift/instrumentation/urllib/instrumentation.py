@@ -654,6 +654,9 @@ class UrllibInstrumentation(InstrumentationBase):
 
         Returns:
             Mocked response object if found, None otherwise
+
+        Raises:
+            urllib.error.HTTPError: If the recorded response was an HTTPError
         """
         try:
             parsed_url = urlparse(url)
@@ -729,9 +732,22 @@ class UrllibInstrumentation(InstrumentationBase):
             if mock_response_output.response is None:
                 logger.debug(f"Mock found but response data is None for {method} {url}")
                 return None
-            return self._create_mock_response(mock_response_output.response, url)
+
+            # Check if the recorded response was an error (HTTPError, URLError, etc.)
+            response_data = mock_response_output.response
+            error_name = response_data.get("errorName")
+
+            if error_name == "HTTPError":
+                # The original request raised HTTPError - we need to raise it too
+                self._raise_http_error_from_mock(response_data, url)
+
+            return self._create_mock_response(response_data, url)
 
         except Exception as e:
+            # Re-raise HTTPError (and other urllib errors) so they propagate correctly
+            from urllib.error import HTTPError, URLError
+            if isinstance(e, (HTTPError, URLError)):
+                raise
             logger.error(f"Error getting mock for {method} {url}: {e}")
             return None
 
@@ -784,6 +800,49 @@ class UrllibInstrumentation(InstrumentationBase):
             body=body_bytes,
             url=url,
         )
+
+    def _raise_http_error_from_mock(self, mock_data: dict[str, Any], url: str) -> None:
+        """Raise an HTTPError from mocked error response data.
+
+        When the original request resulted in an HTTPError (4xx/5xx status codes),
+        we need to raise the same error during replay so application code that
+        catches HTTPError behaves the same way.
+
+        Args:
+            mock_data: Mock response data containing errorName and errorMessage
+            url: Request URL
+
+        Raises:
+            urllib.error.HTTPError: Always raises this exception
+        """
+        from email.message import Message
+        from urllib.error import HTTPError
+
+        error_message = mock_data.get("errorMessage", "")
+
+        # Parse status code and reason from error message
+        # Format: "HTTP Error 404: NOT FOUND"
+        status_code = 500  # Default
+        reason = "Internal Server Error"
+
+        if error_message.startswith("HTTP Error "):
+            try:
+                # Extract "404: NOT FOUND" part
+                parts = error_message[len("HTTP Error "):].split(":", 1)
+                status_code = int(parts[0].strip())
+                if len(parts) > 1:
+                    reason = parts[1].strip()
+            except (ValueError, IndexError):
+                pass
+
+        # Create empty headers (HTTPError requires headers object)
+        headers = Message()
+
+        # Create empty body
+        body_fp = BytesIO(b"")
+
+        logger.debug(f"Raising HTTPError {status_code} for {url} (replayed from recording)")
+        raise HTTPError(url, status_code, reason, headers, body_fp)
 
     def _finalize_span(
         self,
