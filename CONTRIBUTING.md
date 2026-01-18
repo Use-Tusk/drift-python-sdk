@@ -33,6 +33,9 @@ uv run ty check drift/ tests/          # Type check
 ```bash
 uv run pytest tests/unit/ -v
 
+# Run with coverage
+uv run pytest tests/unit/ -v --cov=drift --cov-report=term-missing
+
 # Run a specific test file
 uv run pytest tests/unit/test_json_schema_helper.py -v
 uv run pytest tests/unit/test_adapters.py -v

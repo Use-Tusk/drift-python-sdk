@@ -225,3 +225,6 @@ __marimo__/
 
 # Bug tracking
 **/BUG_TRACKING.md
+
+# Coverage
+coverage.lcov
