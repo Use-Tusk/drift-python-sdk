@@ -228,3 +228,5 @@ __marimo__/
 
 # Coverage
 coverage.lcov
+coverage.xml
+.coverage
