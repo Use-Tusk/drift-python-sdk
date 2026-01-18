@@ -74,7 +74,12 @@ jobs:
         run: uv sync --all-extras
 
       - name: Run unit tests with coverage
-        run: uv run pytest tests/unit/ -v --cov=drift/core --cov-report=xml
+        run: |
+          if [ "${{ matrix.python-version }}" = "3.9" ]; then
+            uv run pytest tests/unit/ -v --cov=drift/core --cov-report=xml
+          else
+            uv run pytest tests/unit/ -v
+          fi
 
       - name: Upload coverage to Coveralls
         if: matrix.python-version == '3.9'
