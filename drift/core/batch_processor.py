@@ -63,6 +63,7 @@ class BatchSpanProcessor:
         self._condition = threading.Condition(self._lock)
         self._shutdown_event = threading.Event()
         self._export_thread: threading.Thread | None = None
+        self._thread_loop: asyncio.AbstractEventLoop | None = None
         self._started = False
         self._dropped_spans = 0
 
@@ -158,16 +159,23 @@ class BatchSpanProcessor:
 
     def _export_loop(self) -> None:
         """Background thread that periodically exports spans."""
-        while not self._shutdown_event.is_set():
-            # Wait for either: batch size reached, scheduled delay, or shutdown
-            with self._condition:
-                # Wait until batch is ready or timeout
-                self._condition.wait(timeout=self._config.scheduled_delay_seconds)
+        # Create a single long-lived event loop for this thread
+        self._thread_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._thread_loop)
 
-            if self._shutdown_event.is_set():
-                break
+        try:
+            while not self._shutdown_event.is_set():
+                # Wait for either: batch size reached, scheduled delay, or shutdown
+                with self._condition:
+                    self._condition.wait(timeout=self._config.scheduled_delay_seconds)
 
-            self._export_batch()
+                if self._shutdown_event.is_set():
+                    break
+
+                self._export_batch()
+        finally:
+            self._thread_loop.close()
+            self._thread_loop = None
 
     def _export_batch(self) -> None:
         """Export a batch of spans from the queue."""
@@ -188,14 +196,24 @@ class BatchSpanProcessor:
         for adapter in adapters:
             start_time = time.monotonic()
             try:
-                # Handle async adapters (create new event loop for this thread)
+                # Handle async adapters
                 if asyncio.iscoroutinefunction(adapter.export_spans):
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    try:
-                        loop.run_until_complete(adapter.export_spans(batch))
-                    finally:
-                        loop.close()
+                    # Only reuse the thread's event loop if we're on the export thread.
+                    # Using it from another thread (e.g., force_flush after join timeout)
+                    # would cause RuntimeError since event loops are not thread-safe.
+                    is_export_thread = threading.current_thread() is self._export_thread
+                    can_reuse_loop = (
+                        is_export_thread and self._thread_loop is not None and not self._thread_loop.is_closed()
+                    )
+                    if can_reuse_loop and self._thread_loop is not None:
+                        self._thread_loop.run_until_complete(adapter.export_spans(batch))
+                    else:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            loop.run_until_complete(adapter.export_spans(batch))
+                        finally:
+                            loop.close()
                 else:
                     adapter.export_spans(batch)
 
