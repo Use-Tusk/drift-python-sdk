@@ -253,6 +253,9 @@ class TestCircuitBreaker:
         time.sleep(0.02)
         assert cb.state == CircuitState.HALF_OPEN
 
+        # Use a longer timeout before recording failure so circuit stays OPEN
+        # long enough to assert (the short 10ms timeout causes race conditions)
+        cb._config = CircuitBreakerConfig(failure_threshold=1, timeout_seconds=10.0)
         cb.record_failure()
         assert cb.state == CircuitState.OPEN
 
