@@ -27,7 +27,7 @@ import argparse
 import ast
 import json
 import sys
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Script location
@@ -177,7 +177,7 @@ def main() -> int:
         "sdkVersion": sdk_version,
         "language": "python",
         "pythonVersion": ">=3.12",
-        "generatedAt": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "generatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "instrumentations": instrumentations,
     }
 

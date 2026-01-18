@@ -452,6 +452,16 @@ class TuskDrift:
             pass
 
         try:
+            import grpc  # type: ignore[unresolved-import]
+
+            from ..instrumentation.grpc import GrpcInstrumentation
+
+            _ = GrpcInstrumentation()
+            logger.debug("gRPC instrumentation initialized")
+        except ImportError:
+            pass
+
+        try:
             import django
 
             from ..instrumentation.django import DjangoInstrumentation

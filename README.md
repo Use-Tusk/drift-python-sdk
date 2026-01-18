@@ -52,6 +52,7 @@ Tusk Drift currently supports the following packages and versions:
 | HTTPX | all versions |
 | aiohttp | all versions |
 | urllib3 | all versions |
+| grpcio (client-side only) | all versions |
 | psycopg | `>=3.1.12` |
 | psycopg2 | all versions |
 | Redis | `>=4.0.0` |
