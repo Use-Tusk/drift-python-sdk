@@ -190,6 +190,18 @@ class TestProtobufCommunicatorGenerateRequestId:
 class TestProtobufCommunicatorConnectSync:
     """Tests for connect_sync method."""
 
+    @pytest.fixture(autouse=True)
+    def _disable_background_reader(self, mocker):
+        """
+        `connect_sync()` starts a background reader thread on successful handshake.
+
+        In unit tests we don't want real background threads running because they can:
+        - block forever on mocked sockets
+        - spin if mocks raise (e.g. StopIteration from side_effect exhaustion)
+        - slow down / flake CI
+        """
+        mocker.patch.object(ProtobufCommunicator, "_start_background_reader", autospec=True)
+
     def test_connects_via_unix_socket(self, mocker):
         """Should connect via Unix socket."""
         mock_socket_class = mocker.patch("socket.socket")
