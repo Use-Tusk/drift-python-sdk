@@ -85,11 +85,18 @@ jobs:
         run: uv sync --all-extras
 
       - name: Run unit tests with coverage
+        env:
+          PYTHONFAULTHANDLER: "1"
         run: |
           if [ "${{ matrix.python-version }}" = "3.9" ]; then
-            uv run pytest tests/unit/ -v --cov=drift/core --cov-report=xml
+            uv run python -X faulthandler -m pytest tests/unit/ \
+              --durations=25 \
+              -o faulthandler_timeout=120 \
+              --cov=drift/core --cov-report=xml
           else
-            uv run pytest tests/unit/ -v
+            uv run python -X faulthandler -m pytest tests/unit/ \
+              --durations=25 \
+              -o faulthandler_timeout=120
           fi
 
       - name: Upload coverage to Coveralls
