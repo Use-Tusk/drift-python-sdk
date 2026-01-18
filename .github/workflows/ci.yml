@@ -55,7 +55,9 @@ jobs:
   test:
     name: Unit Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.9", "3.14"]
     steps:
@@ -69,6 +71,15 @@ jobs:
 
       - name: Setup Python
         run: uv python install ${{ matrix.python-version }}
+
+      - name: Cache uv + Python installs + venv
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/uv
+            ~/.local/share/uv/python
+            .venv
+          key: ${{ runner.os }}-uv-${{ matrix.python-version }}-${{ hashFiles('uv.lock') }}
 
       - name: Install dependencies
         run: uv sync --all-extras
