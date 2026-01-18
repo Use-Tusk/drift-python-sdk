@@ -55,7 +55,9 @@ jobs:
   test:
     name: Unit Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.9", "3.14"]
     steps:
@@ -70,11 +72,31 @@ jobs:
       - name: Setup Python
         run: uv python install ${{ matrix.python-version }}
 
+      - name: Cache uv + Python installs + venv
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/uv
+            ~/.local/share/uv/python
+            .venv
+          key: ${{ runner.os }}-uv-${{ matrix.python-version }}-${{ hashFiles('uv.lock') }}
+
       - name: Install dependencies
         run: uv sync --all-extras
 
       - name: Run unit tests
-        run: uv run pytest tests/unit/ -v
+        if: matrix.python-version != '3.9'
+        run: uv run pytest tests/unit/ -q
+
+      - name: Run unit tests with coverage
+        if: matrix.python-version == '3.9'
+        run: uv run pytest tests/unit/ -q --cov=drift/core --cov-report=xml
+
+      - name: Upload coverage to Coveralls
+        if: matrix.python-version == '3.9' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: coverallsapp/github-action@v2
+        with:
+          file: coverage.xml
 
   build:
     name: Build Package
