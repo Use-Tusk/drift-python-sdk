@@ -84,6 +84,7 @@ jobs:
           DOCKER_DEFAULT_PLATFORM: linux/amd64
         run: |
           docker build \
+            --load \
             --build-arg TUSK_CLI_VERSION=${{ steps.tusk-version.outputs.version }} \
             -t python-e2e-base:latest \
             -f drift/instrumentation/e2e_common/Dockerfile.base \
