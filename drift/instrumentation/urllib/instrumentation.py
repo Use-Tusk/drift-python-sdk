@@ -756,7 +756,7 @@ class UrllibInstrumentation(InstrumentationBase):
 
         Args:
             mock_data: Mock response data from CLI
-            url: Request URL
+            url: Request URL (original request URL)
 
         Returns:
             MockHTTPResponse object
@@ -764,6 +764,10 @@ class UrllibInstrumentation(InstrumentationBase):
         status_code = mock_data.get("statusCode", 200)
         reason = mock_data.get("statusMessage", "OK")
         headers = dict(mock_data.get("headers", {}))
+
+        # Use finalUrl from recorded response if present (indicates redirect occurred)
+        # Otherwise fall back to the original request URL
+        response_url = mock_data.get("finalUrl", url)
 
         # Remove content-encoding and transfer-encoding headers since the body
         # was already decompressed when recorded
@@ -792,13 +796,13 @@ class UrllibInstrumentation(InstrumentationBase):
         else:
             body_bytes = json.dumps(body).encode("utf-8")
 
-        logger.debug(f"Created mock response: {status_code} for {url}")
+        logger.debug(f"Created mock response: {status_code} for {response_url}")
         return MockHTTPResponse(
             status_code=status_code,
             reason=reason,
             headers=headers,
             body=body_bytes,
-            url=url,
+            url=response_url,
         )
 
     def _raise_http_error_from_mock(self, mock_data: dict[str, Any], url: str) -> None:
@@ -943,11 +947,22 @@ class UrllibInstrumentation(InstrumentationBase):
                     response_body_base64 = None
                     response_body_size = 0
 
+                # Capture final URL (important for redirect scenarios)
+                # urllib sets response.url to the final URL after all redirects
+                final_url = getattr(response, "url", None)
+                if callable(final_url):
+                    # Some response objects have geturl() method
+                    final_url = final_url()
+
                 output_value = {
                     "statusCode": response_status,
                     "statusMessage": response_reason,
                     "headers": response_headers,
                 }
+
+                # Store final URL if different from request URL (indicates redirect)
+                if final_url and final_url != url:
+                    output_value["finalUrl"] = final_url
 
                 # Add body fields only if body exists
                 if response_body_base64 is not None:
