@@ -142,8 +142,8 @@ def greet_with_call():
         return jsonify(
             {
                 "message": response.message,
-                "has_initial_metadata": len(initial_metadata) >= 0,
-                "has_trailing_metadata": len(trailing_metadata) >= 0,
+                "has_initial_metadata": len(initial_metadata) > 0,
+                "has_trailing_metadata": len(trailing_metadata) > 0,
             }
         )
     except grpc.RpcError as e:
