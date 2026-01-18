@@ -84,19 +84,16 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras
 
+      - name: Run unit tests
+        if: matrix.python-version != '3.9'
+        run: uv run pytest tests/unit/ -q
+
       - name: Run unit tests with coverage
-        env:
-          PYTHONFAULTHANDLER: "1"
-        run: |
-          if [ "${{ matrix.python-version }}" = "3.9" ]; then
-            uv run python -X faulthandler -c "import faulthandler, sys, pytest; faulthandler.dump_traceback_later(60, repeat=True); sys.exit(pytest.main(['tests/unit/', '--durations=25', '--cov=drift/core', '--cov-report=xml']))"
-          else
-            uv run python -X faulthandler -c "import faulthandler, sys, pytest; faulthandler.dump_traceback_later(60, repeat=True); sys.exit(pytest.main(['tests/unit/', '--durations=25']))"
-          fi
+        if: matrix.python-version == '3.9'
+        run: uv run pytest tests/unit/ -q --cov=drift/core --cov-report=xml
 
       - name: Upload coverage to Coveralls
-        if: matrix.python-version == '3.9'
-        # if: matrix.python-version == '3.9' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: matrix.python-version == '3.9' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: coverallsapp/github-action@v2
         with:
           file: coverage.xml
