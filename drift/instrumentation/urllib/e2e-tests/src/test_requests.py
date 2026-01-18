@@ -61,4 +61,56 @@ if __name__ == "__main__":
     # HTTP redirect handling - tests geturl() after redirects
     make_request("GET", "/test/http-redirect")
 
+    # Additional edge case tests
+    # Partial read with read(amt)
+    make_request("GET", "/test/partial-read")
+
+    # Response iteration using for loop
+    make_request("GET", "/test/response-iteration")
+
+    # readline() method
+    make_request("GET", "/test/readline")
+
+    # readlines() method
+    make_request("GET", "/test/readlines")
+
+    # Multiple reads from same response
+    make_request("GET", "/test/multiple-reads")
+
+    # getheaders() method
+    make_request("GET", "/test/getheaders")
+
+    # getheader() method
+    make_request("GET", "/test/getheader")
+
+    # getcode() method
+    make_request("GET", "/test/getcode")
+
+    # urlretrieve function
+    make_request("GET", "/test/urlretrieve")
+
+    # Response without context manager
+    make_request("GET", "/test/no-context-manager")
+
+    # SSL context parameter
+    make_request("GET", "/test/ssl-context")
+
+    # Empty response body (204 No Content)
+    make_request("GET", "/test/empty-response")
+
+    # HEAD request
+    make_request("GET", "/test/head-request")
+
+    # OPTIONS request
+    make_request("GET", "/test/options-request")
+
+    # Binary request body
+    make_request("POST", "/test/binary-request-body")
+
+    # HTTP 500 error
+    make_request("GET", "/test/http-500-error")
+
+    # Large query string
+    make_request("GET", "/test/large-query-string")
+
     print_request_summary()

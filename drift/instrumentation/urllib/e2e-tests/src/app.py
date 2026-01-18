@@ -338,18 +338,21 @@ def test_http_404_error():
     handles this case.
     """
     from urllib.error import HTTPError as UrllibHTTPError
+
     try:
         with urlopen("https://httpbin.org/status/404", timeout=10) as response:
             return jsonify({"status": response.status})
     except UrllibHTTPError as e:
         # HTTPError is also a response object - we can read its body
         body = e.read().decode("utf-8") if e.fp else ""
-        return jsonify({
-            "error": True,
-            "code": e.code,
-            "reason": e.reason,
-            "body": body,
-        }), 200  # Return 200 since we handled the error
+        return jsonify(
+            {
+                "error": True,
+                "code": e.code,
+                "reason": e.reason,
+                "body": body,
+            }
+        ), 200  # Return 200 since we handled the error
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -366,11 +369,463 @@ def test_http_redirect():
         # httpbin.org/redirect/n redirects n times before returning 200
         with urlopen("https://httpbin.org/redirect/2", timeout=10) as response:
             data = json.loads(response.read().decode("utf-8"))
-            return jsonify({
-                "final_url": response.geturl(),
-                "status": response.status,
+            return jsonify(
+                {
+                    "final_url": response.geturl(),
+                    "status": response.status,
+                    "data": data,
+                }
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# Test: Partial read with read(amt) parameter
+@app.route("/test/partial-read", methods=["GET"])
+def test_partial_read():
+    """Test reading response body in chunks using read(amt).
+
+    Tests if the ResponseWrapper correctly handles partial reads and caches
+    the full body for instrumentation while still allowing incremental reading.
+    """
+    try:
+        with urlopen("https://jsonplaceholder.typicode.com/posts/1", timeout=10) as response:
+            # Read in small chunks
+            chunks = []
+            while True:
+                chunk = response.read(50)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            full_body = b"".join(chunks)
+            data = json.loads(full_body.decode("utf-8"))
+            return jsonify(
+                {
+                    "chunk_count": len(chunks),
+                    "total_bytes": len(full_body),
+                    "data": data,
+                }
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# Test: Response iteration using for loop
+@app.route("/test/response-iteration", methods=["GET"])
+def test_response_iteration():
+    """Test iterating over response lines using for loop.
+
+    Tests if the ResponseWrapper correctly implements __iter__ and __next__
+    for line-by-line iteration.
+    """
+    try:
+        with urlopen("https://httpbin.org/robots.txt", timeout=10) as response:
+            lines = []
+            for line in response:
+                lines.append(line.decode("utf-8").strip())
+            return jsonify(
+                {
+                    "line_count": len(lines),
+                    "lines": lines,
+                }
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# Test: readline() method
+@app.route("/test/readline", methods=["GET"])
+def test_readline():
+    """Test reading response line by line using readline().
+
+    Tests if the ResponseWrapper correctly implements readline().
+    """
+    try:
+        with urlopen("https://httpbin.org/robots.txt", timeout=10) as response:
+            lines = []
+            while True:
+                line = response.readline()
+                if not line:
+                    break
+                lines.append(line.decode("utf-8").strip())
+            return jsonify(
+                {
+                    "line_count": len(lines),
+                    "lines": lines,
+                }
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# Test: readlines() method
+@app.route("/test/readlines", methods=["GET"])
+def test_readlines():
+    """Test reading all response lines at once using readlines().
+
+    Tests if the ResponseWrapper correctly implements readlines().
+    """
+    try:
+        with urlopen("https://httpbin.org/robots.txt", timeout=10) as response:
+            lines = response.readlines()
+            decoded_lines = [line.decode("utf-8").strip() for line in lines]
+            return jsonify(
+                {
+                    "line_count": len(decoded_lines),
+                    "lines": decoded_lines,
+                }
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# Test: Multiple reads from the same response
+@app.route("/test/multiple-reads", methods=["GET"])
+def test_multiple_reads():
+    """Test reading from response multiple times.
+
+    The ResponseWrapper should cache the body and allow multiple reads.
+    This tests if the first read() returns data and subsequent reads work correctly.
+    """
+    try:
+        with urlopen("https://jsonplaceholder.typicode.com/posts/1", timeout=10) as response:
+            # First read - should get all data
+            first_read = response.read()
+            # Second read - should return empty (standard file-like behavior after EOF)
+            second_read = response.read()
+            data = json.loads(first_read.decode("utf-8"))
+            return jsonify(
+                {
+                    "first_read_bytes": len(first_read),
+                    "second_read_bytes": len(second_read),
+                    "data": data,
+                }
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# Test: getheaders() method
+@app.route("/test/getheaders", methods=["GET"])
+def test_getheaders():
+    """Test getting response headers using getheaders().
+
+    Tests if the ResponseWrapper correctly implements getheaders().
+    """
+    try:
+        with urlopen("https://jsonplaceholder.typicode.com/posts/1", timeout=10) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            headers = response.getheaders()
+            # Only check that we got headers and specific expected ones exist
+            # Don't include dynamic headers in the response
+            has_content_type = any(h[0].lower() == "content-type" for h in headers)
+            return jsonify(
+                {
+                    "data": data,
+                    "has_headers": len(headers) > 0,
+                    "has_content_type": has_content_type,
+                }
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# Test: getheader() method
+@app.route("/test/getheader", methods=["GET"])
+def test_getheader():
+    """Test getting specific header using getheader().
+
+    Tests if the ResponseWrapper correctly implements getheader().
+    """
+    try:
+        with urlopen("https://jsonplaceholder.typicode.com/posts/1", timeout=10) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            content_type = response.getheader("Content-Type")
+            missing_header = response.getheader("X-Missing-Header", "default-value")
+            return jsonify(
+                {
+                    "data": data,
+                    "content_type": content_type,
+                    "missing_header": missing_header,
+                }
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# Test: getcode() method
+@app.route("/test/getcode", methods=["GET"])
+def test_getcode():
+    """Test getting status code using getcode().
+
+    Tests if the ResponseWrapper correctly implements getcode().
+    """
+    try:
+        with urlopen("https://jsonplaceholder.typicode.com/posts/1", timeout=10) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            code = response.getcode()
+            status = response.status
+            return jsonify(
+                {
+                    "data": data,
+                    "getcode": code,
+                    "status": status,
+                }
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# Test: urlretrieve function
+@app.route("/test/urlretrieve", methods=["GET"])
+def test_urlretrieve():
+    """Test the urlretrieve function.
+
+    urlretrieve downloads a URL to a temporary file. Since it uses urlopen
+    internally, it should be instrumented. This tests if the trace is captured.
+    """
+    import os
+    import tempfile
+    from urllib.request import urlretrieve
+
+    try:
+        # Create a temp file
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            tmp_path = tmp.name
+
+        # Download to temp file
+        filepath, headers = urlretrieve(
+            "https://jsonplaceholder.typicode.com/posts/1",
+            tmp_path,
+        )
+
+        # Read and parse the downloaded content
+        with open(filepath) as f:
+            content = f.read()
+            data = json.loads(content)
+
+        # Cleanup
+        os.unlink(tmp_path)
+
+        # Don't include filepath in response since it's non-deterministic
+        return jsonify(
+            {
+                "downloaded": True,
                 "data": data,
-            })
+            }
+        )
+    except Exception as e:
+        # Cleanup on error
+        if "tmp_path" in locals() and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        return jsonify({"error": str(e)}), 500
+
+
+# Test: Response without context manager (direct assignment)
+@app.route("/test/no-context-manager", methods=["GET"])
+def test_no_context_manager():
+    """Test using urlopen without context manager.
+
+    Some code may not use the 'with' statement. Tests if the response
+    can be used directly without context manager issues.
+    """
+    response = None
+    try:
+        response = urlopen("https://jsonplaceholder.typicode.com/posts/1", timeout=10)
+        data = json.loads(response.read().decode("utf-8"))
+        response.close()
+        return jsonify(
+            {
+                "data": data,
+                "closed_manually": True,
+            }
+        )
+    except Exception as e:
+        if response:
+            response.close()
+        return jsonify({"error": str(e)}), 500
+
+
+# Test: SSL context parameter
+@app.route("/test/ssl-context", methods=["GET"])
+def test_ssl_context():
+    """Test urlopen with SSL context parameter.
+
+    Tests if the instrumentation correctly handles requests made with
+    explicit SSL context configuration.
+    """
+    import ssl
+
+    try:
+        context = ssl.create_default_context()
+        # Relax verification for testing purposes
+        context.check_hostname = True
+        context.verify_mode = ssl.CERT_REQUIRED
+
+        with urlopen("https://jsonplaceholder.typicode.com/posts/1", timeout=10, context=context) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            return jsonify(
+                {
+                    "data": data,
+                    "ssl_version": context.protocol,
+                }
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# Test: Empty response body (204 No Content)
+@app.route("/test/empty-response", methods=["GET"])
+def test_empty_response():
+    """Test handling of empty response bodies.
+
+    Tests if the instrumentation correctly handles 204 No Content
+    or other empty response scenarios.
+    """
+    try:
+        # httpbin.org/status/204 returns no content
+        with urlopen("https://httpbin.org/status/204", timeout=10) as response:
+            body = response.read()
+            return jsonify(
+                {
+                    "status": response.status,
+                    "body_length": len(body),
+                    "is_empty": len(body) == 0,
+                }
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# Test: HEAD request (no body in response)
+@app.route("/test/head-request", methods=["GET"])
+def test_head_request():
+    """Test HEAD request which returns no body.
+
+    HEAD requests should not have a response body but should have headers.
+    Tests if the instrumentation handles this correctly.
+    """
+    try:
+        req = Request(
+            "https://jsonplaceholder.typicode.com/posts/1",
+            method="HEAD",
+        )
+        with urlopen(req, timeout=10) as response:
+            body = response.read()
+            return jsonify(
+                {
+                    "status": response.status,
+                    "body_length": len(body),
+                    "has_content_type": response.getheader("Content-Type") is not None,
+                }
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# Test: OPTIONS request
+@app.route("/test/options-request", methods=["GET"])
+def test_options_request():
+    """Test OPTIONS request method.
+
+    OPTIONS requests are used for CORS preflight checks.
+    Tests if the instrumentation handles this HTTP method.
+    """
+    try:
+        req = Request(
+            "https://httpbin.org/get",
+            method="OPTIONS",
+        )
+        with urlopen(req, timeout=10) as response:
+            body = response.read()
+            allow_header = response.getheader("Allow")
+            return jsonify(
+                {
+                    "status": response.status,
+                    "body_length": len(body),
+                    "allow_header": allow_header,
+                }
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# Test: Binary request body (bytes)
+@app.route("/test/binary-request-body", methods=["POST"])
+def test_binary_request_body():
+    """Test POST request with binary (non-JSON) request body.
+
+    Tests if the instrumentation correctly captures and replays
+    binary request bodies.
+    """
+    try:
+        # Send raw bytes
+        binary_data = b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09"
+        req = Request(
+            "https://httpbin.org/post",
+            data=binary_data,
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        with urlopen(req, timeout=10) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            # httpbin returns the base64-encoded data
+            return jsonify(
+                {
+                    "status": response.status,
+                    "data_received": data.get("data", ""),
+                }
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# Test: HTTP 500 Internal Server Error
+@app.route("/test/http-500-error", methods=["GET"])
+def test_http_500_error():
+    """Test handling of HTTP 500 Internal Server Error.
+
+    Tests if the instrumentation correctly handles and replays
+    server error responses.
+    """
+    from urllib.error import HTTPError as UrllibHTTPError
+
+    try:
+        with urlopen("https://httpbin.org/status/500", timeout=10) as response:
+            return jsonify({"status": response.status})
+    except UrllibHTTPError as e:
+        body = e.read().decode("utf-8") if e.fp else ""
+        return jsonify(
+            {
+                "error": True,
+                "code": e.code,
+                "reason": e.reason,
+            }
+        ), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# Test: Large query string
+@app.route("/test/large-query-string", methods=["GET"])
+def test_large_query_string():
+    """Test request with a large query string.
+
+    Tests if the instrumentation correctly handles URLs with
+    many query parameters.
+    """
+    try:
+        # Build a URL with many query parameters
+        params = "&".join([f"param{i}=value{i}" for i in range(20)])
+        url = f"https://httpbin.org/get?{params}"
+
+        with urlopen(url, timeout=10) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            return jsonify(
+                {
+                    "status": response.status,
+                    "args_count": len(data.get("args", {})),
+                }
+            )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

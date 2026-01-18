@@ -789,6 +789,7 @@ class UrllibInstrumentation(InstrumentationBase):
         except Exception as e:
             # Re-raise HTTPError (and other urllib errors) so they propagate correctly
             from urllib.error import HTTPError, URLError
+
             if isinstance(e, (HTTPError, URLError)):
                 raise
             logger.error(f"Error getting mock for {method} {url}: {e}")
@@ -875,7 +876,7 @@ class UrllibInstrumentation(InstrumentationBase):
         if error_message.startswith("HTTP Error "):
             try:
                 # Extract "404: NOT FOUND" part
-                parts = error_message[len("HTTP Error "):].split(":", 1)
+                parts = error_message[len("HTTP Error ") :].split(":", 1)
                 status_code = int(parts[0].strip())
                 if len(parts) > 1:
                     reason = parts[1].strip()
