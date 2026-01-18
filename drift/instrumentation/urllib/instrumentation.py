@@ -641,6 +641,83 @@ class UrllibInstrumentation(InstrumentationBase):
                 return value
         return None
 
+    def _build_input_value(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        body: bytes | None,
+    ) -> tuple[dict[str, Any], str | None, int]:
+        """Build the input value dictionary for HTTP requests.
+
+        Args:
+            method: HTTP method (GET, POST, etc.)
+            url: Full request URL
+            headers: Request headers dictionary
+            body: Request body bytes (or None)
+
+        Returns:
+            Tuple of (input_value dict, body_base64 string or None, body_size int)
+        """
+        parsed_url = urlparse(url)
+
+        # Parse query params from URL
+        params = {}
+        if parsed_url.query:
+            params = {k: v[0] if len(v) == 1 else v for k, v in parse_qs(parsed_url.query).items()}
+
+        # Encode body to base64
+        body_base64 = None
+        body_size = 0
+
+        if body is not None:
+            body_base64, body_size = self._encode_body_to_base64(body)
+
+        input_value = {
+            "method": method.upper(),
+            "url": url,
+            "protocol": parsed_url.scheme,
+            "hostname": parsed_url.hostname,
+            "port": parsed_url.port,
+            "path": parsed_url.path or "/",
+            "headers": dict(headers),
+            "query": params,
+        }
+
+        # Add body fields only if body exists
+        if body_base64 is not None:
+            input_value["body"] = body_base64
+            input_value["bodySize"] = body_size
+
+        return input_value, body_base64, body_size
+
+    def _build_input_schema_merges(
+        self,
+        headers: dict[str, str],
+        body_base64: str | None,
+    ) -> dict[str, SchemaMerge]:
+        """Build schema merge hints for input value.
+
+        Args:
+            headers: Request headers dictionary
+            body_base64: Base64-encoded body string (or None if no body)
+
+        Returns:
+            Dictionary of schema merge hints
+        """
+        input_schema_merges: dict[str, SchemaMerge] = {
+            "headers": SchemaMerge(match_importance=0.0),
+        }
+
+        if body_base64 is not None:
+            request_content_type = self._get_content_type_header(headers)
+            input_schema_merges["body"] = SchemaMerge(
+                encoding=EncodingType.BASE64,
+                decoded_type=self._get_decoded_type_from_content_type(request_content_type),
+            )
+
+        return input_schema_merges
+
     def _try_get_mock(
         self,
         sdk: TuskDrift,
@@ -665,46 +742,12 @@ class UrllibInstrumentation(InstrumentationBase):
             headers = request_info.get("headers", {})
             body = request_info.get("body")
 
-            # Parse query params from URL
-            params = {}
-            if parsed_url.query:
-                params = {k: v[0] if len(v) == 1 else v for k, v in parse_qs(parsed_url.query).items()}
-
-            # Handle request body - encode to base64
-            body_base64 = None
-            body_size = 0
-
-            if body is not None:
-                body_base64, body_size = self._encode_body_to_base64(body)
-
-            raw_input_value = {
-                "method": method.upper(),
-                "url": url,
-                "protocol": parsed_url.scheme,
-                "hostname": parsed_url.hostname,
-                "port": parsed_url.port,
-                "path": parsed_url.path or "/",
-                "headers": dict(headers),
-                "query": params,
-            }
-
-            # Add body fields only if body exists
-            if body_base64 is not None:
-                raw_input_value["body"] = body_base64
-                raw_input_value["bodySize"] = body_size
-
+            # Build input value using shared helper
+            raw_input_value, body_base64, _ = self._build_input_value(method, url, headers, body)
             input_value = create_mock_input_value(raw_input_value)
 
-            # Create schema merge hints for input
-            input_schema_merges = {
-                "headers": SchemaMerge(match_importance=0.0),
-            }
-            if body_base64 is not None:
-                request_content_type = self._get_content_type_header(headers)
-                input_schema_merges["body"] = SchemaMerge(
-                    encoding=EncodingType.BASE64,
-                    decoded_type=self._get_decoded_type_from_content_type(request_content_type),
-                )
+            # Build schema merge hints using shared helper
+            input_schema_merges = self._build_input_schema_merges(headers, body_base64)
 
             # Use centralized mock finding utility
             from ...core.mock_utils import find_mock_response_sync
@@ -868,39 +911,12 @@ class UrllibInstrumentation(InstrumentationBase):
             request_info: Original request info dict
         """
         try:
-            parsed_url = urlparse(url)
-
             # ===== BUILD INPUT VALUE =====
             headers = request_info.get("headers", {})
             body = request_info.get("body")
 
-            # Parse query params from URL
-            params = {}
-            if parsed_url.query:
-                params = {k: v[0] if len(v) == 1 else v for k, v in parse_qs(parsed_url.query).items()}
-
-            # Get request body and encode to base64
-            body_base64 = None
-            body_size = 0
-
-            if body is not None:
-                body_base64, body_size = self._encode_body_to_base64(body)
-
-            input_value = {
-                "method": method.upper(),
-                "url": url,
-                "protocol": parsed_url.scheme,
-                "hostname": parsed_url.hostname,
-                "port": parsed_url.port,
-                "path": parsed_url.path or "/",
-                "headers": dict(headers),
-                "query": params,
-            }
-
-            # Add body fields only if body exists
-            if body_base64 is not None:
-                input_value["body"] = body_base64
-                input_value["bodySize"] = body_size
+            # Build input value using shared helper
+            input_value, body_base64, _ = self._build_input_value(method, url, headers, body)
 
             # ===== BUILD OUTPUT VALUE =====
             output_value = {}
@@ -1016,7 +1032,10 @@ class UrllibInstrumentation(InstrumentationBase):
                 transform_metadata = span_data.transform_metadata
 
             # ===== CREATE SCHEMA MERGE HINTS =====
-            request_content_type = self._get_content_type_header(headers)
+            # Build input schema merges using shared helper
+            input_schema_merges = self._build_input_schema_merges(headers, body_base64)
+
+            # Get response content type for output schema merges
             response_content_type = None
             if response:
                 try:
@@ -1026,18 +1045,8 @@ class UrllibInstrumentation(InstrumentationBase):
                 except Exception:
                     pass
 
-            # Create schema merge hints for input
-            input_schema_merges = {
-                "headers": SchemaMerge(match_importance=0.0),
-            }
-            if body_base64 is not None:
-                input_schema_merges["body"] = SchemaMerge(
-                    encoding=EncodingType.BASE64,
-                    decoded_type=self._get_decoded_type_from_content_type(request_content_type),
-                )
-
             # Create schema merge hints for output
-            output_schema_merges = {
+            output_schema_merges: dict[str, SchemaMerge] = {
                 "headers": SchemaMerge(match_importance=0.0),
             }
             if response_body_base64 is not None:
