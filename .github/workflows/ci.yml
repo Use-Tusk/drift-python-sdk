@@ -89,14 +89,9 @@ jobs:
           PYTHONFAULTHANDLER: "1"
         run: |
           if [ "${{ matrix.python-version }}" = "3.9" ]; then
-            uv run python -X faulthandler -m pytest tests/unit/ \
-              --durations=25 \
-              -o faulthandler_timeout=120 \
-              --cov=drift/core --cov-report=xml
+            uv run python -X faulthandler -c "import faulthandler, sys, pytest; faulthandler.dump_traceback_later(60, repeat=True); sys.exit(pytest.main(['tests/unit/', '--durations=25', '--cov=drift/core', '--cov-report=xml']))"
           else
-            uv run python -X faulthandler -m pytest tests/unit/ \
-              --durations=25 \
-              -o faulthandler_timeout=120
+            uv run python -X faulthandler -c "import faulthandler, sys, pytest; faulthandler.dump_traceback_later(60, repeat=True); sys.exit(pytest.main(['tests/unit/', '--durations=25']))"
           fi
 
       - name: Upload coverage to Coveralls
