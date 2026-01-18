@@ -204,7 +204,7 @@ def should_block_span(span: CleanSpanData) -> bool:
     """Check if a span should be blocked due to size or server error status.
 
     Blocks the trace if:
-    1. The span is a SERVER span with ERROR status (e.g., HTTP >= 300)
+    1. The span is a SERVER span with ERROR status (e.g., HTTP >= 400)
     2. The span exceeds the maximum size limit (1MB)
 
     This matches Node SDK behavior in TdSpanExporter.ts.
@@ -221,7 +221,7 @@ def should_block_span(span: CleanSpanData) -> bool:
     span_name = span.name
     blocking_manager = TraceBlockingManager.get_instance()
 
-    # Check 1: Block SERVER spans with ERROR status (e.g., HTTP >= 300)
+    # Check 1: Block SERVER spans with ERROR status (e.g., HTTP >= 400)
     if span.kind == SpanKind.SERVER and span.status.code == StatusCode.ERROR:
         logger.debug(f"Blocking trace {trace_id} - server span '{span_name}' has error status")
         blocking_manager.block_trace(trace_id, reason="server_error")

@@ -183,7 +183,9 @@ def find_mock_response_sync(
         mock_response = sdk.request_mock_sync(mock_request)
 
         if not mock_response or not mock_response.found:
-            logger.debug(f"No matching mock found for {trace_id} with input value: {input_value}")
+            logger.debug(
+                f"No matching mock found for {trace_id} with input value: {input_value}, input schema: {input_schema_merges}, input schema hash: {outbound_span.input_schema_hash}, input value hash: {outbound_span.input_value_hash}"
+            )
             return None
 
         logger.debug(f"Found mock response for {trace_id}")
