@@ -94,6 +94,7 @@ jobs:
         env:
           DOCKER_DEFAULT_PLATFORM: linux/amd64
           TUSK_CLI_VERSION: ${{ steps.tusk-version.outputs.version }}
+          BUILDX_BUILDER: default
         run: |
           chmod +x ./drift/instrumentation/${{ matrix.library }}/e2e-tests/run.sh
           cd ./drift/instrumentation/${{ matrix.library }}/e2e-tests && ./run.sh 8000
