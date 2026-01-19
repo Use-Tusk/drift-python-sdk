@@ -4,7 +4,7 @@ services:
       context: ../../../..
       dockerfile: drift/instrumentation/grpc/e2e-tests/Dockerfile
       args:
-        - TUSK_CLI_VERSION=${TUSK_CLI_VERSION:-latest}
+        - BASE_IMAGE=${BASE_IMAGE:-python-e2e-base:latest}
     environment:
       - PORT=8000
       - TUSK_ANALYTICS_DISABLED=1
