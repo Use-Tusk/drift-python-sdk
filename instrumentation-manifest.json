@@ -1,8 +1,8 @@
 {
-  "sdkVersion": "0.1.12",
+  "sdkVersion": "0.1.13",
   "language": "python",
   "pythonVersion": ">=3.12",
-  "generatedAt": "2026-01-19T07:27:00.814065Z",
+  "generatedAt": "2026-01-19T20:01:53.020592Z",
   "instrumentations": [
     {
       "packageName": "aiohttp",
@@ -41,6 +41,12 @@
       ]
     },
     {
+      "packageName": "jwt",
+      "supportedVersions": [
+        "*"
+      ]
+    },
+    {
       "packageName": "kinde_sdk",
       "supportedVersions": [
         ">=2.0.1"
@@ -66,6 +72,12 @@
     },
     {
       "packageName": "requests",
+      "supportedVersions": [
+        "*"
+      ]
+    },
+    {
+      "packageName": "urllib.request",
       "supportedVersions": [
         "*"
       ]
