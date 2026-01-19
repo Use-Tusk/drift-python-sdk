@@ -14,7 +14,7 @@ on:
   workflow_dispatch: {}
 
 env:
-  BASE_IMAGE: ghcr.io/${{ github.repository }}/python-e2e-base
+  BASE_IMAGE: ghcr.io/use-tusk/drift-python-sdk/python-e2e-base
 
 jobs:
   discover:
