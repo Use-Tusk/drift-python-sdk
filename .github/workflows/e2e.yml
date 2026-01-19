@@ -178,13 +178,13 @@ jobs:
 
       - name: Pull base image from GHCR
         if: needs.discover.outputs.is_fork != 'true'
-        run: docker pull ${{ env.BASE_IMAGE }}:latest
+        run: docker pull ${{ needs.build-base.outputs.image }}
 
       - name: Run E2E tests for ${{ matrix.library }}
         env:
           DOCKER_DEFAULT_PLATFORM: linux/amd64
-          # Use GHCR image for non-forks, local image for forks
-          BASE_IMAGE: ${{ needs.discover.outputs.is_fork == 'true' && 'python-e2e-base:latest' || format('{0}:latest', env.BASE_IMAGE) }}
+          # Use content-hashed GHCR image for non-forks, local image for forks
+          BASE_IMAGE: ${{ needs.discover.outputs.is_fork == 'true' && 'python-e2e-base:latest' || needs.build-base.outputs.image }}
         run: |
           chmod +x ./drift/instrumentation/${{ matrix.library }}/e2e-tests/run.sh
           cd ./drift/instrumentation/${{ matrix.library }}/e2e-tests && ./run.sh 8000
