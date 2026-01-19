@@ -1,8 +1,8 @@
 {
-  "sdkVersion": "0.1.11",
+  "sdkVersion": "0.1.12",
   "language": "python",
   "pythonVersion": ">=3.12",
-  "generatedAt": "2026-01-16T06:55:59.737369Z",
+  "generatedAt": "2026-01-19T07:27:00.814065Z",
   "instrumentations": [
     {
       "packageName": "aiohttp",
@@ -29,9 +29,21 @@
       ]
     },
     {
+      "packageName": "grpc",
+      "supportedVersions": [
+        "*"
+      ]
+    },
+    {
       "packageName": "httpx",
       "supportedVersions": [
         "*"
+      ]
+    },
+    {
+      "packageName": "kinde_sdk",
+      "supportedVersions": [
+        ">=2.0.1"
       ]
     },
     {
