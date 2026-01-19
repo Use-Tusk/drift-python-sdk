@@ -111,8 +111,6 @@ CONTENT_TYPE_MAPPING: dict[str, DecodedType] = {
     "application/binary": DecodedType.BINARY,
 }
 
-# Only JSON and plain text are acceptable (matches Node SDK)
-# All other content types will cause trace blocking
 ACCEPTABLE_DECODED_TYPES = {DecodedType.JSON, DecodedType.PLAIN_TEXT, DecodedType.HTML}
 
 
