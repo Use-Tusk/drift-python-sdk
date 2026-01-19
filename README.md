@@ -57,6 +57,8 @@ Tusk Drift currently supports the following packages and versions:
 | psycopg2 | all versions |
 | Redis | `>=4.0.0` |
 | Kinde | `>=2.0.1` |
+| PyJWT | all versions |
+| urllib.request | all versions |
 
 If you're using packages or versions not listed above, please create an issue with the package + version you'd like an instrumentation for.
 

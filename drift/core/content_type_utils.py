@@ -17,7 +17,7 @@ CONTENT_TYPE_MAPPING: dict[str, DecodedType] = {
     "application/vnd.api+json": DecodedType.JSON,
     # Plain Text (ALLOWED)
     "text/plain": DecodedType.PLAIN_TEXT,
-    # HTML (BLOCKED)
+    # HTML
     "text/html": DecodedType.HTML,
     "application/xhtml+xml": DecodedType.HTML,
     # CSS (BLOCKED)
@@ -111,9 +111,7 @@ CONTENT_TYPE_MAPPING: dict[str, DecodedType] = {
     "application/binary": DecodedType.BINARY,
 }
 
-# Only JSON and plain text are acceptable (matches Node SDK)
-# All other content types will cause trace blocking
-ACCEPTABLE_DECODED_TYPES = {DecodedType.JSON, DecodedType.PLAIN_TEXT}
+ACCEPTABLE_DECODED_TYPES = {DecodedType.JSON, DecodedType.PLAIN_TEXT, DecodedType.HTML}
 
 
 def get_decoded_type(content_type: str | None) -> DecodedType | None:
