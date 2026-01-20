@@ -9,6 +9,8 @@ This benchmark tests SDK overhead on realistic API workloads:
 These simulate production APIs that do actual work (I/O, validation, processing).
 """
 
+from __future__ import annotations
+
 import json
 import os
 import subprocess
