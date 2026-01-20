@@ -51,7 +51,7 @@ jobs:
       - name: Get system info
         id: sysinfo
         run: |
-          echo "python_version=$(python --version)" >> $GITHUB_OUTPUT
+          echo "python_version=$(uv run python --version)" >> $GITHUB_OUTPUT
           echo "os=$(uname -s)" >> $GITHUB_OUTPUT
           echo "arch=$(uname -m)" >> $GITHUB_OUTPUT
           echo "cpu_count=$(nproc)" >> $GITHUB_OUTPUT
@@ -159,9 +159,10 @@ jobs:
           jq -r '
             "| Endpoint | Baseline | SDK (100%) | Overhead | SDK (10%) | Overhead |",
             "|----------|----------|------------|----------|-----------|----------|",
-            (.comparison_100 | to_entries[] |
-              "| \(.key) | \(.value.baseline_mean_ms | . * 10 | round / 10)ms | \(.value.sdk_mean_ms | . * 10 | round / 10)ms | +\(.value.mean_overhead_ms | . * 10 | round / 10)ms (\(.value.mean_overhead_pct | round)%) | - | - |"
-            )
+            (.comparison_100 | keys[]) as $key |
+            (.comparison_100[$key]) as $c100 |
+            (.comparison_10[$key] // null) as $c10 |
+            "| \($key) | \($c100.baseline_mean_ms * 10 | round / 10)ms | \($c100.sdk_mean_ms * 10 | round / 10)ms | +\($c100.mean_overhead_ms * 10 | round / 10)ms (\($c100.mean_overhead_pct | round)%) | \(if $c10 then "\($c10.sdk_mean_ms * 10 | round / 10)ms" else "-" end) | \(if $c10 then "+\($c10.mean_overhead_ms * 10 | round / 10)ms (\($c10.mean_overhead_pct | round)%)" else "-" end) |"
           ' benchmarks/results/realistic-workload.json >> "$SUMMARY_FILE"
 
           cat >> "$SUMMARY_FILE" << 'EOF'
@@ -175,11 +176,15 @@ jobs:
           jq -r '
             "| QPS | Baseline | SDK (100%) | Overhead | SDK (10%) | Overhead |",
             "|-----|----------|------------|----------|-----------|----------|",
-            (.baseline | to_entries[] |
-              . as $b |
-              ($b.key | tostring) as $qps |
-              "| \($qps) | \($b.value.mean_ms | . * 10 | round / 10)ms | - | - | - | - |"
-            )
+            (.baseline | keys[] | tonumber) as $qps |
+            (.baseline["\($qps)"].mean_ms) as $base |
+            (.sdk_100["\($qps)"].mean_ms // null) as $sdk100 |
+            (.sdk_10["\($qps)"].mean_ms // null) as $sdk10 |
+            (if $sdk100 then (($sdk100 - $base) * 10 | round / 10) else null end) as $overhead100 |
+            (if $sdk10 then (($sdk10 - $base) * 10 | round / 10) else null end) as $overhead10 |
+            (if $sdk100 then ((($sdk100 - $base) / $base * 100) | round) else null end) as $pct100 |
+            (if $sdk10 then ((($sdk10 - $base) / $base * 100) | round) else null end) as $pct10 |
+            "| \($qps) | \($base * 10 | round / 10)ms | \(if $sdk100 then "\($sdk100 * 10 | round / 10)ms" else "-" end) | \(if $overhead100 then "+\($overhead100)ms (\($pct100)%)" else "-" end) | \(if $sdk10 then "\($sdk10 * 10 | round / 10)ms" else "-" end) | \(if $overhead10 then "+\($overhead10)ms (\($pct10)%)" else "-" end) |"
           ' benchmarks/results/fixed-qps-latency.json >> "$SUMMARY_FILE"
 
           cat >> "$SUMMARY_FILE" << 'EOF'
