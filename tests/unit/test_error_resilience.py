@@ -7,81 +7,73 @@ the application it's instrumenting.
 
 import asyncio
 import os
-import unittest
 
 os.environ["TUSK_DRIFT_MODE"] = "RECORD"
+
 
 from drift.core.tracing.adapters import ExportResult, ExportResultCode, InMemorySpanAdapter
 from drift.core.types import CleanSpanData, Duration, PackageType, SpanKind, SpanStatus, StatusCode, Timestamp
 from tests.utils import create_test_span
 
 
-class TestAdapterErrorResilience(unittest.TestCase):
+class TestAdapterErrorResilience:
     """Test that adapters handle errors gracefully."""
 
     def test_in_memory_adapter_continues_after_invalid_data(self):
         """InMemorySpanAdapter should continue working after receiving invalid data."""
         adapter = InMemorySpanAdapter()
 
-        # Collect a valid span first
         span1 = create_test_span(name="valid-1")
         adapter.collect_span(span1)
 
-        # Adapter should be functional
         spans = adapter.get_all_spans()
-        self.assertEqual(len(spans), 1)
-        self.assertEqual(spans[0].name, "valid-1")
+        assert len(spans) == 1
+        assert spans[0].name == "valid-1"
 
     def test_adapter_recovers_after_error(self):
         """Adapter should continue working after an error."""
         adapter = InMemorySpanAdapter()
 
-        # Collect valid span
         span1 = create_test_span(name="span1")
         adapter.collect_span(span1)
 
-        # Try to collect invalid data
         try:
             adapter.collect_span("not a span")  # type: ignore
         except (TypeError, AttributeError):
             pass
 
-        # Collect another valid span
         span2 = create_test_span(name="span2")
         adapter.collect_span(span2)
 
-        # Both valid spans should be present
         spans = adapter.get_all_spans()
         valid_spans = [s for s in spans if isinstance(s, CleanSpanData)]
-        self.assertGreaterEqual(len(valid_spans), 2)
+        assert len(valid_spans) >= 2
 
     def test_export_result_captures_errors(self):
         """ExportResult should properly capture error information."""
         error = ValueError("Test error")
         result = ExportResult.failed(error)
 
-        self.assertEqual(result.code, ExportResultCode.FAILED)
-        self.assertEqual(result.error, error)
+        assert result.code == ExportResultCode.FAILED
+        assert result.error == error
 
     def test_export_result_from_string_error(self):
         """ExportResult should handle string error messages."""
         result = ExportResult.failed("Something went wrong")
 
-        self.assertEqual(result.code, ExportResultCode.FAILED)
-        self.assertIsInstance(result.error, Exception)
-        self.assertIn("Something went wrong", str(result.error))
+        assert result.code == ExportResultCode.FAILED
+        assert isinstance(result.error, Exception)
+        assert "Something went wrong" in str(result.error)
 
 
-class TestSpanCreationErrorResilience(unittest.TestCase):
+class TestSpanCreationErrorResilience:
     """Test that span creation handles errors gracefully."""
 
     def test_span_with_invalid_input_value(self):
         """Creating a span with invalid input should be handled."""
-        # Circular reference in input value
         circular_dict: dict = {}
         circular_dict["self"] = circular_dict
 
-        # This should either handle the circular reference or raise a clear error
         try:
             _span = CleanSpanData(
                 trace_id="a" * 32,
@@ -99,15 +91,13 @@ class TestSpanCreationErrorResilience(unittest.TestCase):
                 timestamp=Timestamp(seconds=1700000000, nanos=0),
                 duration=Duration(seconds=0, nanos=1000000),
             )
-            # If span creation succeeds, serialization might fail
-            # which is also acceptable
-            del _span  # Silence unused variable warning
+            del _span
         except (ValueError, RecursionError):
-            pass  # Expected - might reject circular references
+            pass
 
     def test_span_with_very_large_input(self):
         """Creating a span with very large input should be handled."""
-        large_input = {"data": "x" * 1_000_000}  # 1MB of data
+        large_input = {"data": "x" * 1_000_000}
 
         span = CleanSpanData(
             trace_id="a" * 32,
@@ -126,18 +116,17 @@ class TestSpanCreationErrorResilience(unittest.TestCase):
             duration=Duration(seconds=0, nanos=1000000),
         )
 
-        # Span should be created (truncation might happen during export)
-        self.assertIsNotNone(span)
+        assert span is not None
 
 
-class TestAsyncErrorResilience(unittest.TestCase):
+class TestAsyncErrorResilience:
     """Test error resilience in async operations."""
 
     def test_async_export_handles_timeout(self):
         """Async export should handle timeouts gracefully."""
 
         async def slow_export(spans):
-            await asyncio.sleep(10)  # Very slow
+            await asyncio.sleep(10)
             return ExportResult.success()
 
         adapter = InMemorySpanAdapter()
@@ -145,7 +134,7 @@ class TestAsyncErrorResilience(unittest.TestCase):
         async def timeout_export(spans):
             try:
                 return await asyncio.wait_for(slow_export(spans), timeout=0.1)
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 return ExportResult.failed("Export timed out")
 
         adapter.export_spans = timeout_export  # type: ignore[method-assign]
@@ -153,9 +142,8 @@ class TestAsyncErrorResilience(unittest.TestCase):
         span = create_test_span()
         result = asyncio.run(adapter.export_spans([span]))
 
-        # Should have failed with timeout
-        self.assertEqual(result.code, ExportResultCode.FAILED)
-        self.assertIn("timed out", str(result.error))
+        assert result.code == ExportResultCode.FAILED
+        assert "timed out" in str(result.error)
 
     def test_async_export_handles_cancellation(self):
         """Async export should handle cancellation gracefully."""
@@ -170,27 +158,10 @@ class TestAsyncErrorResilience(unittest.TestCase):
             try:
                 await task
             except asyncio.CancelledError:
-                pass  # Expected
+                pass
 
-            # Adapter should still be functional after cancellation
             result = await adapter.export_spans([create_test_span()])
             return result
 
         result = asyncio.run(run_test())
-        self.assertEqual(result.code, ExportResultCode.SUCCESS)
-
-
-# NOTE: The following test categories were removed because they tested
-# internal APIs that have significantly changed:
-#
-# - TestBatchProcessorErrorResilience: BatchSpanProcessor now requires
-#   a TdSpanExporter with complex configuration. The internal API changed
-#   significantly. Batch processing behavior is tested via E2E tests.
-#
-# - TestSDKErrorResilience: The SDK initialization and span collection
-#   flow has changed. Error resilience at the SDK level is better tested
-#   via integration/E2E tests that exercise the full SDK lifecycle.
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert result.code == ExportResultCode.SUCCESS

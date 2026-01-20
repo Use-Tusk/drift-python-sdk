@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package greeter;
+
+// The greeting service definition.
+service Greeter {
+  // Sends a greeting (unary-unary)
+  rpc SayHello (HelloRequest) returns (HelloReply) {}
+  
+  // Sends a greeting with additional info (unary-unary)
+  rpc SayHelloWithInfo (HelloRequestWithInfo) returns (HelloReplyWithInfo) {}
+  
+  // Server streaming - sends multiple greetings (unary-stream)
+  rpc SayHelloStream (HelloRequest) returns (stream HelloReply) {}
+  
+  // Client streaming - receives multiple names (stream-unary)
+  // BUG #3: Channel.stream_unary is NOT patched
+  rpc SayHelloToMany (stream HelloRequest) returns (HelloReply) {}
+  
+  // Bidirectional streaming (stream-stream)
+  // BUG #4: Channel.stream_stream is NOT patched
+  rpc Chat (stream HelloRequest) returns (stream HelloReply) {}
+}
+
+// The request message containing the user's name.
+message HelloRequest {
+  string name = 1;
+}
+
+// The request message with additional info
+message HelloRequestWithInfo {
+  string name = 1;
+  int32 age = 2;
+  string city = 3;
+}
+
+// The response message containing the greeting
+message HelloReply {
+  string message = 1;
+}
+
+// The response message with additional info
+message HelloReplyWithInfo {
+  string message = 1;
+  string greeting_id = 2;
+  int64 timestamp = 3;
+}

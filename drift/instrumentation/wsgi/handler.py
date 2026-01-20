@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     WsgiAppMethod = Callable[[WSGIApplication, WSGIEnvironment, StartResponse], "Iterable[bytes]"]
 
 
-from ...core.mode_utils import handle_record_mode
+from ...core.mode_utils import handle_record_mode, should_record_inbound_http_request
 from ...core.tracing import TdSpanAttributes
 from ...core.tracing.span_utils import CreateSpanOptions, SpanUtils
 from ...core.types import (
@@ -208,33 +208,25 @@ def _create_and_handle_request(
     We manually manage context because the span needs to stay open
     across the WSGI response iterator.
     """
-    # Extract request info for span name and drop check
+    # Pre-flight check: drop transforms and sampling
+    # NOTE: This is done before body capture to avoid unnecessary I/O
     method = environ.get("REQUEST_METHOD", "GET")
     path = environ.get("PATH_INFO", "")
     query_string = environ.get("QUERY_STRING", "")
     target = f"{path}?{query_string}" if query_string else path
+    request_headers = extract_headers(environ)
+
+    if replay_token is None:
+        should_record, skip_reason = should_record_inbound_http_request(
+            method, target, request_headers, transform_engine, is_pre_app_start
+        )
+        if not should_record:
+            logger.debug(f"[WSGI] Skipping request ({skip_reason}), path={path}")
+            return original_wsgi_app(app, environ, start_response)
 
     # Capture request body
     request_body = capture_request_body(environ)
     environ["_drift_request_body"] = request_body
-
-    # Check if request should be dropped
-    request_headers = extract_headers(environ)
-    if transform_engine and transform_engine.should_drop_inbound_request(method, target, request_headers):
-        if replay_token:
-            replay_trace_id_context.reset(replay_token)
-        return original_wsgi_app(app, environ, start_response)
-
-    # Inbound request sampling (only RECORD mode + app ready)
-    # - replay_token is None means RECORD mode (REPLAY mode sets replay_token)
-    # - not is_pre_app_start means app is ready (always sample during startup)
-    if replay_token is None and not is_pre_app_start:
-        from ...core.sampling import should_sample
-
-        sampling_rate = sdk.get_sampling_rate()
-        if not should_sample(sampling_rate, is_app_ready=True):
-            logger.debug(f"[WSGI] Request not sampled (rate={sampling_rate}), path={path}")
-            return original_wsgi_app(app, environ, start_response)
 
     span_name = f"{method} {path}"
 
@@ -413,8 +405,7 @@ def finalize_wsgi_span(
             span.set_attribute(TdSpanAttributes.TRANSFORM_METADATA, json.dumps(transform_metadata))
 
         # Set status based on HTTP status code
-        # Match Node SDK: >= 300 is considered an error (redirects, client errors, server errors)
-        if status_code >= 300:
+        if status_code >= 400:
             span.set_status(Status(OTelStatusCode.ERROR, f"HTTP {status_code}"))
         else:
             span.set_status(Status(OTelStatusCode.OK))

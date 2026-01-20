@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import logging
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, override
+from typing import TYPE_CHECKING, Any
+
+from typing_extensions import override
 
 if TYPE_CHECKING:
     from _typeshed.wsgi import WSGIApplication
@@ -129,7 +131,7 @@ class WsgiInstrumentation(InstrumentationBase):
         # Create a wrapper that matches the WsgiAppMethod signature (app, environ, start_response)
         # This allows handle_wsgi_request to work with both Flask-like unbound methods
         # and plain WSGI apps
-        def wsgi_app_method(app, environ, start_response):  # type: ignore[no-untyped-def]
+        def wsgi_app_method(app, environ, start_response):
             # Ignore the app parameter and call the original WSGI app directly
             return wsgi_app(environ, start_response)
 

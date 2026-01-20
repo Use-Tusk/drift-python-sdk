@@ -13,6 +13,9 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import Enum
+from typing import TypeVar
+
+T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +54,7 @@ def calculate_backoff_delay(
     return delay
 
 
-async def retry_async[T](
+async def retry_async(
     operation: Callable[[], Awaitable[T]],
     config: RetryConfig | None = None,
     retryable_exceptions: tuple[type[Exception], ...] = (Exception,),

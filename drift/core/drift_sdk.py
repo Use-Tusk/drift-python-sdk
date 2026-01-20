@@ -397,12 +397,22 @@ class TuskDrift:
             pass
 
         try:
-            import urllib3  # type: ignore[unresolved-import]
+            import urllib3
 
             from ..instrumentation.urllib3 import Urllib3Instrumentation
 
             _ = Urllib3Instrumentation()
             logger.debug("urllib3 instrumentation initialized")
+        except ImportError:
+            pass
+
+        try:
+            import urllib.request
+
+            from ..instrumentation.urllib import UrllibInstrumentation
+
+            _ = UrllibInstrumentation()
+            logger.debug("urllib instrumentation initialized")
         except ImportError:
             pass
 
@@ -452,7 +462,17 @@ class TuskDrift:
             pass
 
         try:
-            import django  # type: ignore[unresolved-import]
+            import grpc  # type: ignore[unresolved-import]
+
+            from ..instrumentation.grpc import GrpcInstrumentation
+
+            _ = GrpcInstrumentation()
+            logger.debug("gRPC instrumentation initialized")
+        except ImportError:
+            pass
+
+        try:
+            import django
 
             from ..instrumentation.django import DjangoInstrumentation
 
@@ -461,8 +481,18 @@ class TuskDrift:
         except ImportError:
             pass
 
-        # Socket instrumentation for detecting unpatched dependencies (REPLAY mode only)
+        # REPLAY mode only instrumentations
         if self.mode == TuskDriftMode.REPLAY:
+            # Kinde instrumentation for auth replay - registers hook for when kinde_sdk is imported
+            try:
+                from ..instrumentation.kinde import KindeInstrumentation
+
+                _ = KindeInstrumentation(mode=self.mode)
+                logger.debug("Kinde instrumentation registered (REPLAY mode)")
+            except Exception as e:
+                logger.debug(f"Kinde instrumentation registration failed: {e}")
+
+            # Socket instrumentation for detecting unpatched dependencies
             try:
                 from ..instrumentation.socket import SocketInstrumentation
 
@@ -470,6 +500,15 @@ class TuskDrift:
                 logger.debug("Socket instrumentation initialized (REPLAY mode - unpatched dependency detection)")
             except Exception as e:
                 logger.debug(f"Socket instrumentation initialization failed: {e}")
+
+            # PyJWT instrumentation for JWT verification bypass
+            try:
+                from ..instrumentation.pyjwt import PyJWTInstrumentation
+
+                _ = PyJWTInstrumentation(mode=self.mode)
+                logger.debug("PyJWT instrumentation registered (REPLAY mode)")
+            except Exception as e:
+                logger.debug(f"PyJWT instrumentation registration failed: {e}")
 
     def create_env_vars_snapshot(self) -> None:
         """Create a span capturing all environment variables.
@@ -736,7 +775,7 @@ class TuskDrift:
 
         if self.communicator:
             try:
-                asyncio.run(self.communicator.disconnect())
+                self.communicator.disconnect()
             except Exception as e:
                 logger.error(f"Error disconnecting from CLI: {e}")
 

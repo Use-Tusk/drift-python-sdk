@@ -823,6 +823,7 @@ class HttpxInstrumentation(InstrumentationBase):
                 input_value=input_value,
                 kind=SpanKind.CLIENT,
                 input_schema_merges=input_schema_merges,
+                is_pre_app_start=not sdk.app_ready,
             )
 
             if not mock_response_output or not mock_response_output.found:

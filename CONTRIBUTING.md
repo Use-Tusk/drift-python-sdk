@@ -31,18 +31,25 @@ uv run ty check drift/ tests/          # Type check
 ### Unit Tests
 
 ```bash
-uv run python -m unittest discover -s tests/unit -v
+uv run pytest tests/unit/ -v
+
+# Run with coverage
+uv run pytest tests/unit/ -v --cov=drift --cov-report=term-missing
 
 # Run a specific test file
-uv run python -m unittest tests.unit.test_json_schema_helper -v
-uv run python -m unittest tests.unit.test_adapters -v
+uv run pytest tests/unit/test_json_schema_helper.py -v
+uv run pytest tests/unit/test_adapters.py -v
+
+# Run a specific test class or function
+uv run pytest tests/unit/test_metrics.py::TestMetricsCollector -v
+uv run pytest tests/unit/test_metrics.py::TestMetricsCollector::test_record_spans_exported -v
 ```
 
 ### Integration Tests
 
 ```bash
 # Flask/FastAPI integration tests
-timeout 30 uv run python -m unittest discover -s tests/integration -v
+timeout 30 uv run pytest tests/integration/ -v
 ```
 
 ### E2E Tests

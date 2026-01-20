@@ -813,11 +813,14 @@ class Urllib3Instrumentation(InstrumentationBase):
         else:
             content = json.dumps(body).encode("utf-8")
 
+        final_url = mock_data.get("finalUrl") or url
+
         response = urllib3_module.HTTPResponse(
             body=BytesIO(content),
             headers=headers,
             status=status_code,
             preload_content=True,
+            request_url=final_url,
         )
 
         # Read the content to make it available via response.data
@@ -923,6 +926,7 @@ class Urllib3Instrumentation(InstrumentationBase):
                     "statusCode": status_code,
                     "statusMessage": response.reason if hasattr(response, "reason") else "",
                     "headers": response_headers,
+                    "finalUrl": response.geturl() if hasattr(response, "geturl") else None,
                 }
 
                 # Add body fields only if body exists

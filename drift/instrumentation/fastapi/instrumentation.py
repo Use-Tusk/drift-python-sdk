@@ -7,7 +7,9 @@ import time
 from collections.abc import Callable
 from functools import wraps
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, override
+from typing import TYPE_CHECKING, Any
+
+from typing_extensions import override
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +26,7 @@ from opentelemetry.trace import StatusCode as OTelStatusCode
 
 from ...core.drift_sdk import TuskDrift
 from ...core.json_schema_helper import JsonSchemaHelper, SchemaMerge
-from ...core.mode_utils import handle_record_mode
+from ...core.mode_utils import handle_record_mode, should_record_inbound_http_request
 from ...core.tracing import TdSpanAttributes
 from ...core.tracing.span_utils import CreateSpanOptions, SpanInfo, SpanUtils
 from ...core.types import (
@@ -104,7 +106,7 @@ async def _handle_replay_request(
     transform_engine: HttpTransformEngine | None,
     method: str,
     raw_path: str,
-    target: str,
+    headers: dict[str, str],
 ) -> None:
     """Handle FastAPI request in REPLAY mode.
 
@@ -117,7 +119,7 @@ async def _handle_replay_request(
     from ...core.types import replay_trace_id_context
 
     # Extract trace ID from headers (case-insensitive lookup)
-    request_headers = _extract_headers(scope)
+    request_headers = headers
     # Convert headers to lowercase for case-insensitive lookup
     headers_lower = {k.lower(): v for k, v in request_headers.items()}
     replay_trace_id = headers_lower.get("x-td-trace-id")
@@ -239,6 +241,8 @@ async def _record_request(
     transform_engine: HttpTransformEngine | None,
     method: str,
     raw_path: str,
+    target: str,
+    headers: dict[str, str],
     is_pre_app_start: bool,
 ) -> None:
     """Handle request in RECORD mode with span creation using SpanUtils.
@@ -252,18 +256,17 @@ async def _record_request(
         transform_engine: HTTP transform engine for request/response transforms
         method: HTTP method (GET, POST, etc.)
         raw_path: Request path
+        target: Request target (path + query string)
+        headers: Request headers dictionary
         is_pre_app_start: Whether this request occurred before app was marked ready
     """
-    # Inbound request sampling (only when app is ready)
-    # Always sample during startup to capture initialization behavior
-    if not is_pre_app_start:
-        from ...core.sampling import should_sample
-
-        sdk = TuskDrift.get_instance()
-        sampling_rate = sdk.get_sampling_rate()
-        if not should_sample(sampling_rate, is_app_ready=True):
-            logger.debug(f"[FastAPI] Request not sampled (rate={sampling_rate}), path={raw_path}")
-            return await original_call(app, scope, receive, send)
+    # Pre-flight check: drop transforms and sampling before body capture
+    should_record, skip_reason = should_record_inbound_http_request(
+        method, target, headers, transform_engine, is_pre_app_start
+    )
+    if not should_record:
+        logger.debug(f"[FastAPI] Skipping request ({skip_reason}), path={raw_path}")
+        return await original_call(app, scope, receive, send)
 
     start_time_ns = time.time_ns()
 
@@ -387,16 +390,8 @@ async def _handle_request(
         query_string = query_bytes.decode("utf-8", errors="replace")
     else:
         query_string = str(query_bytes)
-    target_for_drop = f"{raw_path}?{query_string}" if query_string else raw_path
-    headers_for_drop = _extract_headers(scope)
-
-    # Check if request should be dropped by transform engine
-    if transform_engine and transform_engine.should_drop_inbound_request(
-        method,
-        target_for_drop,
-        headers_for_drop,
-    ):
-        return await original_call(app, scope, receive, send)
+    target = f"{raw_path}?{query_string}" if query_string else raw_path
+    headers = _extract_headers(scope)
 
     # DISABLED mode - just pass through
     if sdk.mode == TuskDriftMode.DISABLED:
@@ -405,14 +400,26 @@ async def _handle_request(
     # REPLAY mode - handle trace ID extraction and context setup
     if sdk.mode == TuskDriftMode.REPLAY:
         return await _handle_replay_request(
-            app, scope, receive, send, original_call, transform_engine, method, raw_path, target_for_drop
+            app, scope, receive, send, original_call, transform_engine, method, raw_path, headers
         )
 
     # RECORD mode - use handle_record_mode for consistent is_pre_app_start logic
+    # NOTE: Pre-flight check (drop + sample) is done inside _record_request
+    # to access is_pre_app_start from handle_record_mode
     result = handle_record_mode(
         original_function_call=lambda: original_call(app, scope, receive, send),
         record_mode_handler=lambda is_pre_app_start: _record_request(
-            app, scope, receive, send, original_call, transform_engine, method, raw_path, is_pre_app_start
+            app,
+            scope,
+            receive,
+            send,
+            original_call,
+            transform_engine,
+            method,
+            raw_path,
+            target,
+            headers,
+            is_pre_app_start,
         ),
         span_kind=OTelSpanKind.SERVER,
     )
@@ -528,8 +535,8 @@ def _finalize_span(
     TuskDrift.get_instance()
 
     status_code = response_data.get("status_code", 200)
-    # Match Node SDK: >= 300 is considered an error (redirects, client errors, server errors)
-    if status_code >= 300:
+    # Match Node SDK: >= 400 is considered an error
+    if status_code >= 400:
         span_info.span.set_status(Status(OTelStatusCode.ERROR, f"HTTP {status_code}"))
     else:
         span_info.span.set_status(Status(OTelStatusCode.OK))

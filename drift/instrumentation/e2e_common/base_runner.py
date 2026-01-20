@@ -7,11 +7,14 @@ Each instrumentation's entrypoint.py can inherit from this class and
 customize only the setup phase.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -44,7 +47,9 @@ class E2ETestRunnerBase:
     def __init__(self, app_port: int = 8000):
         self.app_port = app_port
         self.app_process: subprocess.Popen | None = None
+        self.app_log_file: tempfile._TemporaryFileWrapper | None = None
         self.exit_code = 0
+        self.expected_request_count: int | None = None
 
         # Register signal handlers for cleanup
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -75,6 +80,17 @@ class E2ETestRunnerBase:
             raise subprocess.CalledProcessError(result.returncode, cmd)
 
         return result
+
+    def _parse_request_count(self, output: str):
+        """Parse the request count from test_requests.py output."""
+        for line in output.split("\n"):
+            if line.startswith("TOTAL_REQUESTS_SENT:"):
+                try:
+                    count = int(line.split(":")[1])
+                    self.expected_request_count = count
+                    self.log(f"Captured request count: {count}", Colors.GREEN)
+                except (ValueError, IndexError):
+                    self.log(f"Failed to parse request count from: {line}", Colors.YELLOW)
 
     def wait_for_service(self, check_cmd: list[str], timeout: int = 30, interval: int = 1) -> bool:
         """Wait for a service to become ready."""
@@ -135,10 +151,16 @@ class E2ETestRunnerBase:
         self.log("Starting application in RECORD mode...", Colors.GREEN)
         env = {"TUSK_DRIFT_MODE": "RECORD", "PYTHONUNBUFFERED": "1"}
 
+        # Use a temporary file to capture app output for debugging.
+        # This avoids pipe buffer issues while still allowing diagnostics.
+        # Note: Can't use context manager here - file must stay open for subprocess
+        # and be cleaned up later in cleanup(). Using delete=False + manual unlink.
+        self.app_log_file = tempfile.NamedTemporaryFile(mode="w+", suffix=".log", delete=False)  # noqa: SIM115
+
         self.app_process = subprocess.Popen(
             ["python", "src/app.py"],
             env={**os.environ, **env},
-            stdout=subprocess.PIPE,
+            stdout=self.app_log_file,
             stderr=subprocess.STDOUT,
             text=True,
         )
@@ -154,17 +176,31 @@ class E2ETestRunnerBase:
         except TimeoutError:
             self.log("Application failed to become ready", Colors.RED)
             if self.app_process:
-                # Print app output for debugging
                 self.app_process.terminate()
-                stdout, _ = self.app_process.communicate(timeout=5)
-                self.log(f"App output: {stdout}", Colors.YELLOW)
+                try:
+                    self.app_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.app_process.kill()
+                    self.app_process.wait()
+            # Read and display app output for debugging
+            if self.app_log_file:
+                self.app_log_file.flush()
+                self.app_log_file.seek(0)
+                app_output = self.app_log_file.read()
+                self.log(f"App output:\n{app_output}", Colors.YELLOW)
             self.exit_code = 1
             return False
 
         # Execute test requests
         self.log("Executing test requests...", Colors.GREEN)
         try:
-            self.run_command(["python", "src/test_requests.py"])
+            # Pass PYTHONPATH so test_requests.py can import from e2e_common
+            result = self.run_command(
+                ["python", "src/test_requests.py"],
+                env={"PYTHONPATH": "/sdk"},
+            )
+            # Parse request count from output
+            self._parse_request_count(result.stdout)
         except subprocess.CalledProcessError:
             self.log("Test requests failed", Colors.RED)
             self.exit_code = 1
@@ -257,6 +293,7 @@ class E2ETestRunnerBase:
                     idx += 1
 
             all_passed = True
+            passed_count = 0
             for result in results:
                 test_id = result.get("test_id", "unknown")
                 passed = result.get("passed", False)
@@ -264,6 +301,7 @@ class E2ETestRunnerBase:
 
                 if passed:
                     self.log(f"✓ Test ID: {test_id} (Duration: {duration}ms)", Colors.GREEN)
+                    passed_count += 1
                 else:
                     self.log(f"✗ Test ID: {test_id} (Duration: {duration}ms)", Colors.RED)
                     all_passed = False
@@ -275,6 +313,20 @@ class E2ETestRunnerBase:
             else:
                 self.log("Some tests failed!", Colors.RED)
                 self.exit_code = 1
+
+            # Validate request count matches passed tests
+            if self.expected_request_count is not None:
+                if passed_count < self.expected_request_count:
+                    self.log(
+                        f"✗ Request count mismatch: {passed_count} passed tests != {self.expected_request_count} requests sent",
+                        Colors.RED,
+                    )
+                    self.exit_code = 1
+                else:
+                    self.log(
+                        f"✓ Request count validation: {passed_count} passed tests >= {self.expected_request_count} requests sent",
+                        Colors.GREEN,
+                    )
 
         except Exception as e:
             self.log(f"Failed to parse test results: {e}", Colors.RED)
@@ -350,6 +402,15 @@ class E2ETestRunnerBase:
             except subprocess.TimeoutExpired:
                 self.app_process.kill()
                 self.app_process.wait()
+
+        # Clean up app log file
+        if self.app_log_file:
+            try:
+                self.app_log_file.close()
+                os.unlink(self.app_log_file.name)
+            except OSError:
+                pass
+            self.app_log_file = None
 
         # Traces are kept in container for inspection
         self.log("Cleanup complete", Colors.GREEN)

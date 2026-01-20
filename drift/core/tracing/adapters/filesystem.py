@@ -6,9 +6,11 @@ import json
 import logging
 from collections import OrderedDict
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, override
+from typing import TYPE_CHECKING, Any
+
+from typing_extensions import override
 
 from .base import ExportResult, SpanExportAdapter
 
@@ -63,7 +65,7 @@ class FilesystemSpanAdapter(SpanExportAdapter):
             return self._trace_file_map[trace_id]
 
         # Create new file with timestamp prefix
-        iso_timestamp = datetime.now(UTC).isoformat().replace(":", "-").replace(".", "-")
+        iso_timestamp = datetime.now(timezone.utc).isoformat().replace(":", "-").replace(".", "-")
         file_path = self._base_directory / f"{iso_timestamp}_trace_{trace_id}.jsonl"
         self._trace_file_map[trace_id] = file_path
 

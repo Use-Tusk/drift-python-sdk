@@ -1,4 +1,4 @@
-import unittest
+"""Tests for span serialization to protobuf."""
 
 from tusk.drift.core.v1 import JsonSchemaType as ProtoJsonSchemaType
 
@@ -14,8 +14,11 @@ from drift.core.types import (
 )
 
 
-class SpanSerializationTests(unittest.TestCase):
+class TestSpanSerialization:
+    """Tests for span serialization to protobuf."""
+
     def test_basic_span_serializes_to_proto(self):
+        """Test that a basic span serializes to protobuf correctly."""
         input_schema_info = JsonSchemaHelper.generate_schema_and_hash({"method": "GET", "path": "/health"})
         output_schema_info = JsonSchemaHelper.generate_schema_and_hash({"status_code": 200})
 
@@ -45,19 +48,18 @@ class SpanSerializationTests(unittest.TestCase):
 
         proto = span.to_proto()
 
-        self.assertEqual(proto.trace_id, span.trace_id)
-        # proto.package_type and proto.kind are ints in protobuf
+        assert proto.trace_id == span.trace_id
         assert span.package_type is not None
-        self.assertEqual(proto.package_type, span.package_type.value)
-        self.assertEqual(proto.kind, span.kind.value)
-        self.assertEqual(proto.status.code, StatusCode.OK.value)
-        # input_value and output_value are protobuf Struct objects
-        self.assertEqual(proto.input_value.fields["method"].string_value, "GET")
-        self.assertEqual(proto.output_value.fields["status_code"].number_value, 200)
-        self.assertEqual(proto.timestamp.year, 2023)
-        self.assertEqual(proto.duration.total_seconds(), 0.000001)
+        assert proto.package_type == span.package_type.value
+        assert proto.kind == span.kind.value
+        assert proto.status.code == StatusCode.OK.value
+        assert proto.input_value.fields["method"].string_value == "GET"
+        assert proto.output_value.fields["status_code"].number_value == 200
+        assert proto.timestamp.year == 2023
+        assert proto.duration.total_seconds() == 0.000001
 
     def test_schema_serialization_matches_proto_enums(self):
+        """Test that schema serialization matches protobuf enums."""
         schema = JsonSchema(
             type=JsonSchemaType.OBJECT,
             properties={
@@ -90,10 +92,6 @@ class SpanSerializationTests(unittest.TestCase):
 
         proto = span.to_proto()
 
-        self.assertEqual(proto.input_schema.type, ProtoJsonSchemaType.OBJECT)
-        self.assertEqual(proto.input_schema.properties["name"].type, ProtoJsonSchemaType.STRING)
-        self.assertEqual(proto.input_schema.properties["count"].type, ProtoJsonSchemaType.NUMBER)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert proto.input_schema.type == ProtoJsonSchemaType.OBJECT
+        assert proto.input_schema.properties["name"].type == ProtoJsonSchemaType.STRING
+        assert proto.input_schema.properties["count"].type == ProtoJsonSchemaType.NUMBER

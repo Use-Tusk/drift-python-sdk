@@ -12,8 +12,8 @@ from opentelemetry.trace import SpanKind as OTelSpanKind
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from django.http import HttpRequest, HttpResponse  # type: ignore[import-not-found]
-from ...core.mode_utils import handle_record_mode
+    from django.http import HttpRequest, HttpResponse
+from ...core.mode_utils import handle_record_mode, should_record_inbound_http_request
 from ...core.tracing import TdSpanAttributes
 from ...core.tracing.span_utils import CreateSpanOptions, SpanInfo, SpanUtils
 from ...core.types import (
@@ -167,20 +167,25 @@ class DriftMiddleware:
         Returns:
             Django HttpResponse object
         """
-        # Inbound request sampling (only when app is ready)
-        # Always sample during startup to capture initialization behavior
-        if not is_pre_app_start:
-            from ...core.sampling import should_sample
-
-            sampling_rate = sdk.get_sampling_rate()
-            if not should_sample(sampling_rate, is_app_ready=True):
-                logger.debug(f"[Django] Request not sampled (rate={sampling_rate}), path={request.path}")
-                return self.get_response(request)
-
-        start_time_ns = time.time_ns()
-
+        # Pre-flight check: drop transforms and sampling
+        # NOTE: This is done before body capture to avoid unnecessary I/O
         method = request.method or ""
         path = request.path
+        query_string = request.META.get("QUERY_STRING", "")
+        target = f"{path}?{query_string}" if query_string else path
+
+        from ..wsgi import extract_headers
+
+        request_headers = extract_headers(request.META)
+
+        should_record, skip_reason = should_record_inbound_http_request(
+            method, target, request_headers, self.transform_engine, is_pre_app_start
+        )
+        if not should_record:
+            logger.debug(f"[Django] Skipping request ({skip_reason}), path={path}")
+            return self.get_response(request)
+
+        start_time_ns = time.time_ns()
         span_name = f"{method} {path}"
 
         # Create span using SpanUtils
@@ -215,20 +220,6 @@ class DriftMiddleware:
                 request_body = request.body
             except Exception:
                 pass
-
-        # Check if request should be dropped
-        query_string = request.META.get("QUERY_STRING", "")
-        target = f"{path}?{query_string}" if query_string else path
-
-        from ..wsgi import extract_headers
-
-        request_headers = extract_headers(request.META)
-
-        if self.transform_engine and self.transform_engine.should_drop_inbound_request(method, target, request_headers):
-            # Reset context before early return
-            span_kind_context.reset(span_kind_token)
-            span_info.span.end()
-            return self.get_response(request)
 
         # Store metadata on request for later use
         request._drift_start_time_ns = start_time_ns  # type: ignore
@@ -390,8 +381,8 @@ class DriftMiddleware:
         duration_seconds = duration_ns // 1_000_000_000
         duration_nanos = duration_ns % 1_000_000_000
 
-        # Match Node SDK: >= 300 is considered an error (redirects, client errors, server errors)
-        if status_code >= 300:
+        # Match Node SDK: >= 400 is considered an error
+        if status_code >= 400:
             status = SpanStatus(code=StatusCode.ERROR, message=f"HTTP {status_code}")
         else:
             status = SpanStatus(code=StatusCode.OK, message="")

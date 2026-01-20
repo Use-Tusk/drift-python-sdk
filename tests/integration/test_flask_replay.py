@@ -3,8 +3,9 @@
 import os
 import socket
 import time
-import unittest
 from pathlib import Path
+
+import pytest
 
 # Set replay mode before importing drift
 os.environ["TUSK_DRIFT_MODE"] = "REPLAY"
@@ -29,116 +30,118 @@ from drift.core.tracing.adapters import InMemorySpanAdapter, register_in_memory_
 from drift.core.types import SpanKind
 
 
-class TestFlaskReplayMode(unittest.TestCase):
+@pytest.fixture(scope="module")
+def flask_replay_app():
+    """Set up SDK and Flask app once for all tests."""
+    sdk = TuskDrift.initialize()
+    adapter = InMemorySpanAdapter()
+    register_in_memory_adapter(adapter)
+
+    app = Flask(__name__)
+
+    @app.route("/health")
+    def health():
+        return jsonify({"status": "healthy"})
+
+    @app.route("/user/<name>")
+    def get_user(name: str):
+        return jsonify({"user": name, "id": 123})
+
+    @app.route("/echo", methods=["POST"])
+    def echo():
+        from flask import request
+
+        data = request.get_json()
+        return jsonify({"echoed": data})
+
+    sdk.mark_app_as_ready()
+    client = app.test_client()
+
+    yield {"sdk": sdk, "adapter": adapter, "app": app, "client": client}
+
+    # Cleanup socket
+    try:
+        test_socket.close()
+        if Path(socket_path).exists():
+            os.unlink(socket_path)
+    except Exception:
+        pass
+
+
+@pytest.fixture
+def adapter(flask_replay_app):
+    """Get adapter and clear it before each test."""
+    adapter = flask_replay_app["adapter"]
+    adapter.clear()
+    return adapter
+
+
+@pytest.fixture
+def client(flask_replay_app):
+    """Get test client."""
+    return flask_replay_app["client"]
+
+
+def wait_for_spans(timeout: float = 0.5):
+    """Wait for spans to be processed."""
+    time.sleep(timeout)
+
+
+class TestFlaskReplayMode:
     """Test Flask instrumentation in REPLAY mode."""
 
-    @classmethod
-    def setUpClass(cls):
-        """Set up SDK and Flask app once for all tests."""
-        cls.sdk = TuskDrift.initialize()
-        cls.adapter = InMemorySpanAdapter()
-        register_in_memory_adapter(cls.adapter)
-
-        # Create Flask app
-        cls.app = Flask(__name__)
-
-        @cls.app.route("/health")
-        def health():
-            return jsonify({"status": "healthy"})
-
-        @cls.app.route("/user/<name>")
-        def get_user(name: str):
-            return jsonify({"user": name, "id": 123})
-
-        @cls.app.route("/echo", methods=["POST"])
-        def echo():
-            from flask import request
-
-            data = request.get_json()
-            return jsonify({"echoed": data})
-
-        cls.sdk.mark_app_as_ready()
-        cls.client = cls.app.test_client()
-
-    @classmethod
-    def tearDownClass(cls):
-        """Clean up socket."""
-        try:
-            test_socket.close()
-            if Path(socket_path).exists():
-                os.unlink(socket_path)
-        except Exception:
-            pass
-
-    def setUp(self):
-        """Clear spans before each test."""
-        self.adapter.clear()
-
-    def wait_for_spans(self, timeout: float = 0.5):
-        """Wait for spans to be processed."""
-        time.sleep(timeout)
-
-    def test_request_without_trace_id_header(self):
+    def test_request_without_trace_id_header(self, adapter, client):
         """Test that requests without trace ID don't create spans."""
-        response = self.client.get("/health")
+        response = client.get("/health")
 
-        self.assertEqual(response.status_code, 200)
-        self.wait_for_spans()
+        assert response.status_code == 200
+        wait_for_spans()
 
-        spans = self.adapter.get_all_spans()
-        # No span should be created without trace ID in replay mode
-        self.assertEqual(len(spans), 0)
+        spans = adapter.get_all_spans()
+        assert len(spans) == 0
 
-    def test_request_with_trace_id_header(self):
+    def test_request_with_trace_id_header(self, adapter, client):
         """Test that requests with trace ID create SERVER spans."""
-        response = self.client.get("/user/alice", headers={"x-td-trace-id": "test-trace-123"})
+        response = client.get("/user/alice", headers={"x-td-trace-id": "test-trace-123"})
 
-        self.assertEqual(response.status_code, 200)
+        assert response.status_code == 200
         data = response.get_json()
-        self.assertEqual(data["user"], "alice")
-        self.assertEqual(data["id"], 123)
+        assert data["user"] == "alice"
+        assert data["id"] == 123
 
-        self.wait_for_spans()
+        wait_for_spans()
 
-        spans = self.adapter.get_all_spans()
-        self.assertGreaterEqual(len(spans), 1)
+        spans = adapter.get_all_spans()
+        assert len(spans) >= 1
 
-        # Find SERVER span
         server_spans = [s for s in spans if s.kind == SpanKind.SERVER]
-        self.assertGreaterEqual(len(server_spans), 1)
+        assert len(server_spans) >= 1
 
         span = server_spans[0]
-        # Verify trace ID matches the one from header
-        self.assertEqual(span.trace_id, "test-trace-123")
-        self.assertIn("/user", span.name)
+        assert span.trace_id == "test-trace-123"
+        assert "/user" in span.name
 
-    def test_post_request_with_trace_id(self):
+    def test_post_request_with_trace_id(self, adapter, client):
         """Test that POST requests work in replay mode."""
-        response = self.client.post("/echo", json={"message": "test"}, headers={"x-td-trace-id": "post-trace-456"})
+        response = client.post("/echo", json={"message": "test"}, headers={"x-td-trace-id": "post-trace-456"})
 
-        self.assertEqual(response.status_code, 200)
+        assert response.status_code == 200
         data = response.get_json()
-        self.assertEqual(data["echoed"]["message"], "test")
+        assert data["echoed"]["message"] == "test"
 
-        self.wait_for_spans()
+        wait_for_spans()
 
-        spans = self.adapter.get_all_spans()
+        spans = adapter.get_all_spans()
         server_spans = [s for s in spans if s.kind == SpanKind.SERVER]
 
         if len(server_spans) > 0:
             span = server_spans[0]
-            self.assertEqual(span.trace_id, "post-trace-456")
+            assert span.trace_id == "post-trace-456"
 
-    def test_case_insensitive_headers(self):
+    def test_case_insensitive_headers(self, adapter, client):
         """Test that trace ID header is case-insensitive."""
-        # Try lowercase
-        response = self.client.get("/health", headers={"x-td-trace-id": "lowercase-trace"})
-        self.assertEqual(response.status_code, 200)
+        response = client.get("/health", headers={"x-td-trace-id": "lowercase-trace"})
+        assert response.status_code == 200
 
-        # Try uppercase
-        response = self.client.get("/health", headers={"X-TD-TRACE-ID": "uppercase-trace"})
-        self.assertEqual(response.status_code, 200)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        response = client.get("/health", headers={"X-TD-TRACE-ID": "uppercase-trace"})
+        assert response.status_code == 200

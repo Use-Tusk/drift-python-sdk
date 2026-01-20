@@ -5,7 +5,6 @@ Ported from src/core/utils/DataNormalization.test.ts
 
 import json
 import sys
-import unittest
 from datetime import datetime
 from pathlib import Path
 
@@ -18,7 +17,7 @@ from drift.core.data_normalization import (
 )
 
 
-class TestRemoveNoneValues(unittest.TestCase):
+class TestRemoveNoneValues:
     """Tests for remove_none_values function (normalizeInputData equivalent)."""
 
     def test_should_remove_none_values_from_objects(self):
@@ -26,7 +25,7 @@ class TestRemoveNoneValues(unittest.TestCase):
         input_data = {
             "a": "value",
             "b": None,
-            "c": None,  # explicit None (like JS null, but we remove it like JS undefined)
+            "c": None,
             "d": 0,
             "e": False,
             "f": "",
@@ -34,17 +33,14 @@ class TestRemoveNoneValues(unittest.TestCase):
 
         result = remove_none_values(input_data)
 
-        self.assertEqual(
-            result,
-            {
-                "a": "value",
-                "d": 0,
-                "e": False,
-                "f": "",
-            },
-        )
-        self.assertNotIn("b", result)
-        self.assertNotIn("c", result)
+        assert result == {
+            "a": "value",
+            "d": 0,
+            "e": False,
+            "f": "",
+        }
+        assert "b" not in result
+        assert "c" not in result
 
     def test_should_handle_nested_objects_with_none_values(self):
         """Handle nested objects with None values."""
@@ -71,10 +67,10 @@ class TestRemoveNoneValues(unittest.TestCase):
                 },
             },
         }
-        self.assertEqual(result, expected)
-        self.assertNotIn("age", result["user"])
-        self.assertNotIn("zip", result["user"]["address"])
-        self.assertNotIn("metadata", result)
+        assert result == expected
+        assert "age" not in result["user"]
+        assert "zip" not in result["user"]["address"]
+        assert "metadata" not in result
 
     def test_should_handle_arrays_with_none_values(self):
         """Arrays should preserve None (like JS null in arrays)."""
@@ -85,14 +81,10 @@ class TestRemoveNoneValues(unittest.TestCase):
 
         result = remove_none_values(input_data)
 
-        # In arrays, None is preserved (like JS null)
-        self.assertEqual(
-            result,
-            {
-                "items": ["a", None, "b", None, "c"],
-                "numbers": [1, None, 2, 0],
-            },
-        )
+        assert result == {
+            "items": ["a", None, "b", None, "c"],
+            "numbers": [1, None, 2, 0],
+        }
 
     def test_should_handle_circular_references_safely(self):
         """Circular references should be replaced with '[Circular]'."""
@@ -104,20 +96,17 @@ class TestRemoveNoneValues(unittest.TestCase):
 
         result = remove_none_values(input_data)
 
-        self.assertEqual(
-            result,
-            {
-                "name": "test",
-                "value": 123,
-                "self": "[Circular]",
-            },
-        )
+        assert result == {
+            "name": "test",
+            "value": 123,
+            "self": "[Circular]",
+        }
 
     def test_should_handle_empty_objects(self):
         """Empty objects should remain empty."""
         input_data = {}
         result = remove_none_values(input_data)
-        self.assertEqual(result, {})
+        assert result == {}
 
     def test_should_handle_primitive_values_wrapped_in_objects(self):
         """Test various primitive values in objects."""
@@ -131,14 +120,11 @@ class TestRemoveNoneValues(unittest.TestCase):
 
         result = remove_none_values(input_data)
 
-        self.assertEqual(
-            result,
-            {
-                "string": "test",
-                "number": 42,
-                "boolean": True,
-            },
-        )
+        assert result == {
+            "string": "test",
+            "number": 42,
+            "boolean": True,
+        }
 
     def test_should_preserve_date_objects_as_iso_strings(self):
         """Date objects should be converted to ISO strings."""
@@ -150,12 +136,9 @@ class TestRemoveNoneValues(unittest.TestCase):
 
         result = remove_none_values(input_data)
 
-        self.assertEqual(
-            result,
-            {
-                "timestamp": date.isoformat(),
-            },
-        )
+        assert result == {
+            "timestamp": date.isoformat(),
+        }
 
     def test_should_handle_complex_nested_structures(self):
         """Test complex nested structures with various types."""
@@ -183,10 +166,10 @@ class TestRemoveNoneValues(unittest.TestCase):
                 },
             },
         }
-        self.assertEqual(result, expected)
+        assert result == expected
 
 
-class TestCreateSpanInputValue(unittest.TestCase):
+class TestCreateSpanInputValue:
     """Tests for create_span_input_value function."""
 
     def test_should_return_json_string_of_normalized_data(self):
@@ -199,14 +182,11 @@ class TestCreateSpanInputValue(unittest.TestCase):
 
         result = create_span_input_value(input_data)
 
-        self.assertIsInstance(result, str)
-        self.assertEqual(
-            json.loads(result),
-            {
-                "user": "john",
-                "active": True,
-            },
-        )
+        assert isinstance(result, str)
+        assert json.loads(result) == {
+            "user": "john",
+            "active": True,
+        }
 
     def test_should_handle_circular_references_in_span_values(self):
         """Circular references should be handled in JSON output."""
@@ -217,14 +197,11 @@ class TestCreateSpanInputValue(unittest.TestCase):
 
         result = create_span_input_value(input_data)
 
-        self.assertIsInstance(result, str)
-        self.assertEqual(
-            json.loads(result),
-            {
-                "name": "test",
-                "circular": "[Circular]",
-            },
-        )
+        assert isinstance(result, str)
+        assert json.loads(result) == {
+            "name": "test",
+            "circular": "[Circular]",
+        }
 
     def test_should_produce_consistent_output_for_identical_normalized_data(self):
         """Same normalized data should produce same JSON output."""
@@ -234,10 +211,10 @@ class TestCreateSpanInputValue(unittest.TestCase):
         result1 = create_span_input_value(input1)
         result2 = create_span_input_value(input2)
 
-        self.assertEqual(result1, result2)
+        assert result1 == result2
 
 
-class TestCreateMockInputValue(unittest.TestCase):
+class TestCreateMockInputValue:
     """Tests for create_mock_input_value function."""
 
     def test_should_return_normalized_object_data(self):
@@ -250,14 +227,11 @@ class TestCreateMockInputValue(unittest.TestCase):
 
         result = create_mock_input_value(input_data)
 
-        self.assertEqual(
-            result,
-            {
-                "user": "john",
-                "active": True,
-            },
-        )
-        self.assertNotIn("age", result)
+        assert result == {
+            "user": "john",
+            "active": True,
+        }
+        assert "age" not in result
 
     def test_should_handle_circular_references_in_mock_values(self):
         """Circular references should be replaced with marker."""
@@ -268,13 +242,10 @@ class TestCreateMockInputValue(unittest.TestCase):
 
         result = create_mock_input_value(input_data)
 
-        self.assertEqual(
-            result,
-            {
-                "name": "test",
-                "circular": "[Circular]",
-            },
-        )
+        assert result == {
+            "name": "test",
+            "circular": "[Circular]",
+        }
 
     def test_should_produce_consistent_output_for_identical_normalized_data(self):
         """Same normalized data should produce same output."""
@@ -284,7 +255,7 @@ class TestCreateMockInputValue(unittest.TestCase):
         result1 = create_mock_input_value(input1)
         result2 = create_mock_input_value(input2)
 
-        self.assertEqual(result1, result2)
+        assert result1 == result2
 
     def test_should_preserve_type_information(self):
         """Type information should be preserved in output."""
@@ -296,16 +267,13 @@ class TestCreateMockInputValue(unittest.TestCase):
 
         result = create_mock_input_value(input_data)
 
-        self.assertEqual(
-            result,
-            {
-                "id": 1,
-                "name": "test",
-            },
-        )
+        assert result == {
+            "id": 1,
+            "name": "test",
+        }
 
 
-class TestConsistencyBetweenFunctions(unittest.TestCase):
+class TestConsistencyBetweenFunctions:
     """Tests ensuring consistency between span and mock value functions."""
 
     def test_should_ensure_functions_produce_equivalent_data_structures(self):
@@ -324,7 +292,7 @@ class TestConsistencyBetweenFunctions(unittest.TestCase):
         span_value = create_span_input_value(input_data)
         mock_value = create_mock_input_value(input_data)
 
-        self.assertEqual(json.loads(span_value), mock_value)
+        assert json.loads(span_value) == mock_value
 
     def test_should_handle_edge_cases_consistently(self):
         """Edge cases should be handled consistently by both functions."""
@@ -339,14 +307,10 @@ class TestConsistencyBetweenFunctions(unittest.TestCase):
             span_value = create_span_input_value(test_case)
             mock_value = create_mock_input_value(test_case)
 
-            self.assertEqual(
-                json.loads(span_value),
-                mock_value,
-                f"Mismatch for test case: {test_case}",
-            )
+            assert json.loads(span_value) == mock_value, f"Mismatch for test case: {test_case}"
 
 
-class TestEdgeCases(unittest.TestCase):
+class TestEdgeCases:
     """Additional edge case tests."""
 
     def test_deeply_nested_circular_reference(self):
@@ -356,7 +320,7 @@ class TestEdgeCases(unittest.TestCase):
 
         result = remove_none_values(input_data)
 
-        self.assertEqual(result["level1"]["level2"]["level3"]["back_to_root"], "[Circular]")
+        assert result["level1"]["level2"]["level3"]["back_to_root"] == "[Circular]"
 
     def test_multiple_circular_references(self):
         """Test multiple circular references to same object."""
@@ -365,10 +329,9 @@ class TestEdgeCases(unittest.TestCase):
 
         result = remove_none_values(input_data)
 
-        # All references should be preserved (not circular since we reset seen on exit)
-        self.assertEqual(result["ref1"]["name"], "shared")
-        self.assertEqual(result["ref2"]["name"], "shared")
-        self.assertEqual(result["nested"]["ref3"]["name"], "shared")
+        assert result["ref1"]["name"] == "shared"
+        assert result["ref2"]["name"] == "shared"
+        assert result["nested"]["ref3"]["name"] == "shared"
 
     def test_list_containing_dicts_with_none(self):
         """Test list containing dicts with None values."""
@@ -387,26 +350,22 @@ class TestEdgeCases(unittest.TestCase):
                 {"id": 2, "name": "second"},
             ]
         }
-        self.assertEqual(result, expected)
+        assert result == expected
 
     def test_empty_string_is_preserved(self):
         """Empty strings should be preserved."""
         input_data = {"empty": "", "none": None}
         result = remove_none_values(input_data)
-        self.assertEqual(result, {"empty": ""})
+        assert result == {"empty": ""}
 
     def test_zero_is_preserved(self):
         """Zero values should be preserved."""
         input_data = {"zero": 0, "none": None}
         result = remove_none_values(input_data)
-        self.assertEqual(result, {"zero": 0})
+        assert result == {"zero": 0}
 
     def test_false_is_preserved(self):
         """False values should be preserved."""
         input_data = {"false": False, "none": None}
         result = remove_none_values(input_data)
-        self.assertEqual(result, {"false": False})
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert result == {"false": False}
