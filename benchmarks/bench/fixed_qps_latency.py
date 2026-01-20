@@ -8,6 +8,8 @@ Unlike throughput tests that blast requests as fast as possible, this
 sends requests at a steady rate to measure realistic latency impact.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import subprocess

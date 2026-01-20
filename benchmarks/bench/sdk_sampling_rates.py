@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Benchmark: SDK with different sampling rates."""
 
+from __future__ import annotations
+
 import os
 import shutil
 import sys
