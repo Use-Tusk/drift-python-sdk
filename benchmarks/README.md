@@ -56,6 +56,36 @@ After running benchmarks, compare the results:
 python benchmarks/compare_benchmarks.py
 ```
 
+### Comparing Different Runs
+
+To compare results from different benchmark runs:
+
+```bash
+# Compare two result files
+python benchmarks/scripts/compare_runs.py results/old-results.json results/new-results.json
+
+# Output as JSON only (for programmatic use)
+python benchmarks/scripts/compare_runs.py --json results/old.json results/new.json
+```
+
+### GitHub Actions Workflow
+
+Benchmarks can be run via GitHub Actions for consistent, reproducible results:
+
+1. Go to **Actions** → **Benchmarks**
+2. Click **Run workflow**
+3. Optionally specify:
+   - `iterations`: Number of iterations for realistic workload (default: 200)
+   - `qps_duration`: Duration per QPS level in seconds (default: 10)
+   - `compare_with`: Run ID to compare against (optional)
+
+The workflow outputs:
+
+- Structured JSON with all results and metadata
+- Markdown summary in the workflow run
+- Artifacts containing full results (retained for 90 days)
+- Regression detection if overhead exceeds 3ms threshold
+
 ### Configuration
 
 You can configure benchmarks via environment variables:
@@ -151,11 +181,14 @@ benchmarks/
 │   ├── profile.sh             # Profiler runner script
 │   ├── simple_profile.py      # Profiling workload
 │   └── results/               # Profile output (gitignored)
+├── scripts/
+│   └── compare_runs.py        # Compare benchmark results across runs
 ├── server/
 │   └── test_server.py         # Flask test server
 ├── results/                   # JSON output (gitignored)
 ├── compare_benchmarks.py      # Result comparison script
 ├── run_benchmarks.sh          # Runner script
 ├── PROFILING.md               # Profiling documentation
+├── RESULTS.md                 # Historical results
 └── README.md
 ```

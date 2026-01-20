@@ -147,7 +147,13 @@ class ResourceMonitor:
 
     def _collect_memory_sample(self) -> None:
         """Collect a memory usage sample."""
-        if not self._is_running or not self._current_task_stats:
+        if not self._is_running:
+            return
+
+        # Take a local snapshot to avoid race condition where another thread
+        # sets _current_task_stats to None between check and usage
+        task_stats = self._current_task_stats
+        if task_stats is None:
             return
 
         # Get RSS from resource module (in bytes on macOS, kilobytes on Linux)
@@ -169,9 +175,9 @@ class ResourceMonitor:
         except (FileNotFoundError, PermissionError):
             pass  # Use ru_maxrss fallback
 
-        self._current_task_stats.rss_sum += rss
-        self._current_task_stats.rss_max = max(self._current_task_stats.rss_max, rss)
-        self._current_task_stats.sample_count += 1
+        task_stats.rss_sum += rss
+        task_stats.rss_max = max(task_stats.rss_max, rss)
+        task_stats.sample_count += 1
 
     def get_task_stats(self, task_name: str) -> TaskResourceStats | None:
         """Get resource statistics for a completed task."""

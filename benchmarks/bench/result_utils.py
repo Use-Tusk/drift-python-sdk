@@ -8,7 +8,7 @@ import platform
 import statistics
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -189,7 +189,7 @@ def create_benchmark_result(
     return BenchmarkRunResult(
         id=str(uuid.uuid4()),
         label=label,
-        timestamp=datetime.now(UTC).isoformat(),
+        timestamp=datetime.now(timezone.utc).isoformat(),
         duration_ms=duration_ms,
         options=options,
         system=get_system_info(),

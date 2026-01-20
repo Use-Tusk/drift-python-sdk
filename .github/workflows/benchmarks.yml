@@ -1,0 +1,276 @@
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: "Number of iterations for realistic workload benchmark"
+        required: false
+        default: "200"
+      qps_duration:
+        description: "Duration in seconds for each QPS level"
+        required: false
+        default: "10"
+      compare_with:
+        description: "Run ID to compare results against (optional)"
+        required: false
+        default: ""
+
+jobs:
+  benchmark:
+    name: Run Benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Setup Python
+        run: uv python install 3.9
+
+      - name: Cache uv + Python installs + venv
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/uv
+            ~/.local/share/uv/python
+            .venv
+          key: ${{ runner.os }}-uv-benchmark-3.9-${{ hashFiles('uv.lock') }}
+
+      - name: Install dependencies
+        run: |
+          uv sync --all-extras
+          uv pip install flask requests psutil
+
+      - name: Get system info
+        id: sysinfo
+        run: |
+          echo "python_version=$(python --version)" >> $GITHUB_OUTPUT
+          echo "os=$(uname -s)" >> $GITHUB_OUTPUT
+          echo "arch=$(uname -m)" >> $GITHUB_OUTPUT
+          echo "cpu_count=$(nproc)" >> $GITHUB_OUTPUT
+          echo "memory_gb=$(free -g | awk '/^Mem:/{print $2}')" >> $GITHUB_OUTPUT
+
+      - name: Run realistic workload benchmark
+        id: realistic
+        run: |
+          uv run python benchmarks/bench/realistic_workload.py 2>&1 | tee realistic_output.txt
+          # Extract just the results JSON
+          cat benchmarks/results/realistic-workload.json
+
+      - name: Run fixed QPS latency benchmark
+        id: fixed_qps
+        run: |
+          uv run python benchmarks/bench/fixed_qps_latency.py 2>&1 | tee fixed_qps_output.txt
+          # Extract just the results JSON
+          cat benchmarks/results/fixed-qps-latency.json
+
+      - name: Generate structured results
+        id: results
+        run: |
+          cat > benchmarks/results/benchmark-summary.json << 'EOF'
+          {
+            "metadata": {
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+              "run_id": "${{ github.run_id }}",
+              "run_number": "${{ github.run_number }}",
+              "commit_sha": "${{ github.sha }}",
+              "branch": "${{ github.ref_name }}",
+              "triggered_by": "${{ github.actor }}",
+              "environment": {
+                "python_version": "${{ steps.sysinfo.outputs.python_version }}",
+                "os": "${{ steps.sysinfo.outputs.os }}",
+                "arch": "${{ steps.sysinfo.outputs.arch }}",
+                "cpu_count": "${{ steps.sysinfo.outputs.cpu_count }}",
+                "memory_gb": "${{ steps.sysinfo.outputs.memory_gb }}"
+              }
+            }
+          }
+          EOF
+
+          # Create a proper JSON with jq
+          jq -n \
+            --slurpfile realistic benchmarks/results/realistic-workload.json \
+            --slurpfile fixed_qps benchmarks/results/fixed-qps-latency.json \
+            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg run_id "${{ github.run_id }}" \
+            --arg run_number "${{ github.run_number }}" \
+            --arg commit_sha "${{ github.sha }}" \
+            --arg branch "${{ github.ref_name }}" \
+            --arg triggered_by "${{ github.actor }}" \
+            --arg python_version "${{ steps.sysinfo.outputs.python_version }}" \
+            --arg os "${{ steps.sysinfo.outputs.os }}" \
+            --arg arch "${{ steps.sysinfo.outputs.arch }}" \
+            --arg cpu_count "${{ steps.sysinfo.outputs.cpu_count }}" \
+            --arg memory_gb "${{ steps.sysinfo.outputs.memory_gb }}" \
+            '{
+              metadata: {
+                timestamp: $timestamp,
+                run_id: $run_id,
+                run_number: ($run_number | tonumber),
+                commit_sha: $commit_sha,
+                branch: $branch,
+                triggered_by: $triggered_by,
+                environment: {
+                  python_version: $python_version,
+                  os: $os,
+                  arch: $arch,
+                  cpu_count: ($cpu_count | tonumber),
+                  memory_gb: ($memory_gb | tonumber)
+                }
+              },
+              realistic_workload: $realistic[0],
+              fixed_qps_latency: $fixed_qps[0]
+            }' > benchmarks/results/benchmark-summary.json
+
+      - name: Generate markdown summary
+        run: |
+          SUMMARY_FILE="benchmarks/results/benchmark-summary.md"
+
+          cat > "$SUMMARY_FILE" << EOF
+          # Benchmark Results
+
+          **Date**: $(date -u +%Y-%m-%d)
+          **Commit**: ${{ github.sha }}
+          **Branch**: ${{ github.ref_name }}
+          **Run ID**: ${{ github.run_id }}
+
+          ## Environment
+          - Python: ${{ steps.sysinfo.outputs.python_version }}
+          - OS: ${{ steps.sysinfo.outputs.os }} (${{ steps.sysinfo.outputs.arch }})
+          - CPUs: ${{ steps.sysinfo.outputs.cpu_count }}
+          - Memory: ${{ steps.sysinfo.outputs.memory_gb }} GB
+
+          ## Realistic Workload Results
+
+          EOF
+
+          # Parse and format realistic workload results
+          jq -r '
+            "| Endpoint | Baseline | SDK (100%) | Overhead | SDK (10%) | Overhead |",
+            "|----------|----------|------------|----------|-----------|----------|",
+            (.comparison_100 | to_entries[] |
+              "| \(.key) | \(.value.baseline_mean_ms | . * 10 | round / 10)ms | \(.value.sdk_mean_ms | . * 10 | round / 10)ms | +\(.value.mean_overhead_ms | . * 10 | round / 10)ms (\(.value.mean_overhead_pct | round)%) | - | - |"
+            )
+          ' benchmarks/results/realistic-workload.json >> "$SUMMARY_FILE"
+
+          cat >> "$SUMMARY_FILE" << 'EOF'
+
+          ## Fixed QPS Latency Results
+
+          ### Mean Latency
+
+          EOF
+
+          jq -r '
+            "| QPS | Baseline | SDK (100%) | Overhead | SDK (10%) | Overhead |",
+            "|-----|----------|------------|----------|-----------|----------|",
+            (.baseline | to_entries[] |
+              . as $b |
+              ($b.key | tostring) as $qps |
+              "| \($qps) | \($b.value.mean_ms | . * 10 | round / 10)ms | - | - | - | - |"
+            )
+          ' benchmarks/results/fixed-qps-latency.json >> "$SUMMARY_FILE"
+
+          cat >> "$SUMMARY_FILE" << 'EOF'
+
+          ---
+
+          📊 **Full results available in artifacts**
+
+          EOF
+
+          # Also write to GitHub step summary for UI display
+          cat "$SUMMARY_FILE" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-${{ github.run_id }}
+          path: |
+            benchmarks/results/*.json
+            benchmarks/results/*.md
+            realistic_output.txt
+            fixed_qps_output.txt
+          retention-days: 90
+
+      - name: Download comparison results (if specified)
+        if: ${{ inputs.compare_with != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: benchmark-results-${{ inputs.compare_with }}
+          path: benchmarks/results/comparison/
+        continue-on-error: true
+
+      - name: Compare with previous run
+        if: ${{ inputs.compare_with != '' }}
+        run: |
+          if [ -f benchmarks/results/comparison/benchmark-summary.json ]; then
+            echo "## Comparison with Run ${{ inputs.compare_with }}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # Compare realistic workload results
+            PREV_READ=$(jq '.realistic_workload.comparison_100.typical_read.mean_overhead_ms' benchmarks/results/comparison/benchmark-summary.json)
+            CURR_READ=$(jq '.realistic_workload.comparison_100.typical_read.mean_overhead_ms' benchmarks/results/benchmark-summary.json)
+
+            PREV_WRITE=$(jq '.realistic_workload.comparison_100.typical_write.mean_overhead_ms' benchmarks/results/comparison/benchmark-summary.json)
+            CURR_WRITE=$(jq '.realistic_workload.comparison_100.typical_write.mean_overhead_ms' benchmarks/results/benchmark-summary.json)
+
+            echo "| Metric | Previous | Current | Delta |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|----------|---------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Read API overhead | ${PREV_READ}ms | ${CURR_READ}ms | $(echo "$CURR_READ - $PREV_READ" | bc)ms |" >> $GITHUB_STEP_SUMMARY
+            echo "| Write API overhead | ${PREV_WRITE}ms | ${CURR_WRITE}ms | $(echo "$CURR_WRITE - $PREV_WRITE" | bc)ms |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Could not find comparison results for run ${{ inputs.compare_with }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Check for performance regression
+        id: regression
+        run: |
+          # Check if overhead exceeds threshold (3ms for 100% sampling)
+          THRESHOLD_MS=3.0
+
+          READ_OVERHEAD=$(jq '.comparison_100.typical_read.mean_overhead_ms' benchmarks/results/realistic-workload.json)
+          WRITE_OVERHEAD=$(jq '.comparison_100.typical_write.mean_overhead_ms' benchmarks/results/realistic-workload.json)
+          MIXED_OVERHEAD=$(jq '.comparison_100.realistic_mixed.mean_overhead_ms' benchmarks/results/realistic-workload.json)
+
+          REGRESSION=false
+
+          if (( $(echo "$READ_OVERHEAD > $THRESHOLD_MS" | bc -l) )); then
+            echo "⚠️ Read API overhead ($READ_OVERHEAD ms) exceeds threshold ($THRESHOLD_MS ms)" >> $GITHUB_STEP_SUMMARY
+            REGRESSION=true
+          fi
+
+          if (( $(echo "$WRITE_OVERHEAD > $THRESHOLD_MS" | bc -l) )); then
+            echo "⚠️ Write API overhead ($WRITE_OVERHEAD ms) exceeds threshold ($THRESHOLD_MS ms)" >> $GITHUB_STEP_SUMMARY
+            REGRESSION=true
+          fi
+
+          if (( $(echo "$MIXED_OVERHEAD > $THRESHOLD_MS" | bc -l) )); then
+            echo "⚠️ Mixed API overhead ($MIXED_OVERHEAD ms) exceeds threshold ($THRESHOLD_MS ms)" >> $GITHUB_STEP_SUMMARY
+            REGRESSION=true
+          fi
+
+          if [ "$REGRESSION" = true ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### ⚠️ Performance regression detected" >> $GITHUB_STEP_SUMMARY
+            echo "regression=true" >> $GITHUB_OUTPUT
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### ✅ No performance regression detected" >> $GITHUB_STEP_SUMMARY
+            echo "regression=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Output JSON results
+        run: |
+          echo "### Structured Results (JSON)"
+          echo ""
+          echo '```json'
+          cat benchmarks/results/benchmark-summary.json
+          echo '```'

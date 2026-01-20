@@ -25,6 +25,10 @@ case "$PROFILER" in
             exit 1
         fi
         
+        # Capture resolved binary path before sudo (root's PATH may not include user pip bin)
+        PYSPY_BIN="$(command -v py-spy)"
+        PYTHON_BIN="$(command -v python)"
+        
         OUTPUT="$RESULTS_DIR/flamegraph_$(date +%Y%m%d_%H%M%S).svg"
         echo "Output: $OUTPUT"
         echo ""
@@ -32,9 +36,9 @@ case "$PROFILER" in
         # py-spy needs sudo on macOS for sampling
         if [[ "$OSTYPE" == "darwin"* ]]; then
             echo "Note: py-spy may require sudo on macOS"
-            sudo py-spy record -o "$OUTPUT" --rate 100 -- python benchmarks/profile/simple_profile.py
+            sudo "$PYSPY_BIN" record -o "$OUTPUT" --rate 100 -- "$PYTHON_BIN" benchmarks/profile/simple_profile.py
         else
-            py-spy record -o "$OUTPUT" --rate 100 -- python benchmarks/profile/simple_profile.py
+            "$PYSPY_BIN" record -o "$OUTPUT" --rate 100 -- "$PYTHON_BIN" benchmarks/profile/simple_profile.py
         fi
         
         echo ""

@@ -49,7 +49,12 @@ def run_benchmarks(
     """Run all benchmarks with the given label."""
     opts = {**DEFAULT_OPTIONS, **(options or {})}
 
-    enable_memory_tracking = os.environ.get("BENCHMARK_ENABLE_MEMORY", "true").lower() != "false"
+    # Check environment variable first, then fall back to options
+    env_memory = os.environ.get("BENCHMARK_ENABLE_MEMORY")
+    if env_memory is not None:
+        enable_memory_tracking = env_memory.lower() != "false"
+    else:
+        enable_memory_tracking = bool(opts.get("enable_memory_tracking", True))
 
     # Start test server
     server = TestServer()

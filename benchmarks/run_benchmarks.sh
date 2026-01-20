@@ -25,6 +25,12 @@ if ! python -c "import flask" 2>/dev/null; then
     uv pip install flask
 fi
 
+# Check for requests
+if ! python -c "import requests" 2>/dev/null; then
+    echo "Installing requests..."
+    uv pip install requests
+fi
+
 echo ""
 echo "Running SDK Disabled (baseline)..."
 echo "----------------------------------------------"

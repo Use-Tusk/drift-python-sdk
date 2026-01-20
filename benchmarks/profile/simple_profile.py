@@ -66,48 +66,49 @@ def main():
     # Use session for connection pooling
     session = requests.Session()
 
-    print(f"\nTest server started at {server_url}")
-    print("Running profiling workload...")
+    try:
+        print(f"\nTest server started at {server_url}")
+        print("Running profiling workload...")
 
-    # Number of iterations (adjust for longer/shorter profiling)
-    iterations = 500
+        # Number of iterations (adjust for longer/shorter profiling)
+        iterations = 500
 
-    start_time = time.time()
+        start_time = time.time()
 
-    for i in range(iterations):
-        # Mix of different request types
-        if i % 3 == 0:
-            # Simple GET
-            response = session.get(f"{server_url}/api/simple")
-            response.json()
-        elif i % 3 == 1:
-            # POST with JSON body
-            response = session.post(
-                f"{server_url}/api/echo",
-                json={"data": "test", "iteration": i},
-            )
-            response.json()
-        else:
-            # Sensitive data endpoint (triggers transform checks)
-            response = session.post(
-                f"{server_url}/api/auth/login",
-                json={"email": "test@example.com", "password": "secret123"},
-            )
-            response.json()
+        for i in range(iterations):
+            # Mix of different request types
+            if i % 3 == 0:
+                # Simple GET
+                response = session.get(f"{server_url}/api/simple")
+                response.json()
+            elif i % 3 == 1:
+                # POST with JSON body
+                response = session.post(
+                    f"{server_url}/api/echo",
+                    json={"data": "test", "iteration": i},
+                )
+                response.json()
+            else:
+                # Sensitive data endpoint (triggers transform checks)
+                response = session.post(
+                    f"{server_url}/api/auth/login",
+                    json={"email": "test@example.com", "password": "secret123"},
+                )
+                response.json()
 
-        if (i + 1) % 100 == 0:
-            elapsed = time.time() - start_time
-            rate = (i + 1) / elapsed
-            print(f"  {i + 1}/{iterations} iterations ({rate:.1f} req/s)")
+            if (i + 1) % 100 == 0:
+                elapsed = time.time() - start_time
+                rate = (i + 1) / elapsed
+                print(f"  {i + 1}/{iterations} iterations ({rate:.1f} req/s)")
 
-    elapsed = time.time() - start_time
-    print(f"\nCompleted {iterations} iterations in {elapsed:.2f}s")
-    print(f"Average: {iterations / elapsed:.1f} req/s")
-
-    # Cleanup
-    session.close()
-    server.stop()
-    sdk.shutdown()
+        elapsed = time.time() - start_time
+        print(f"\nCompleted {iterations} iterations in {elapsed:.2f}s")
+        print(f"Average: {iterations / elapsed:.1f} req/s")
+    finally:
+        # Cleanup - always execute even if an exception is raised
+        session.close()
+        server.stop()
+        sdk.shutdown()
 
 
 if __name__ == "__main__":

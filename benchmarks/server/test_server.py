@@ -369,19 +369,13 @@ class TestServer:
 
     def start(self) -> dict[str, Any]:
         """Start the test server in a background thread."""
-        import socket
-
         from werkzeug.serving import make_server
 
-        # Find a free port if port is 0
-        if self.port == 0:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.bind((self.host, 0))
-                self._actual_port = s.getsockname()[1]
-        else:
-            self._actual_port = self.port
-
-        self._server = make_server(self.host, self._actual_port, self.app, threaded=True)
+        # Let make_server bind to port 0 to get an ephemeral port
+        # This avoids TOCTOU race where a separate socket finds a free port
+        # but another process binds to it before we can
+        self._server = make_server(self.host, self.port, self.app, threaded=True)
+        self._actual_port = self._server.server_port
 
         def run_server():
             self._server.serve_forever()
