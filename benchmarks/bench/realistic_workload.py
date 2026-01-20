@@ -71,7 +71,10 @@ for _ in range(10):
     session.post(f"{{server_url}}/api/realistic", json={{"userId": "u1", "query": "test"}})
 
 # Benchmark parameters (configurable via BENCHMARK_ITERATIONS env var)
-iterations = int(os.environ.get("BENCHMARK_ITERATIONS", "200"))
+try:
+    iterations = int(os.environ.get("BENCHMARK_ITERATIONS", "200"))
+except ValueError:
+    iterations = 200  # Fall back to default on invalid input
 results = {{}}
 
 # Test 1: Typical Read (~5-10ms baseline)

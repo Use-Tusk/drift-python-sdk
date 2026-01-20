@@ -157,7 +157,10 @@ def main():
 
     # Test at multiple QPS levels (duration configurable via BENCHMARK_QPS_DURATION env var)
     qps_levels = [25, 50, 75]  # Requests per second
-    duration = int(os.environ.get("BENCHMARK_QPS_DURATION", "10"))  # seconds per test
+    try:
+        duration = int(os.environ.get("BENCHMARK_QPS_DURATION", "10"))
+    except ValueError:
+        duration = 10  # Fall back to default on invalid input
 
     results = {"baseline": {}, "sdk_100": {}, "sdk_10": {}}
 
