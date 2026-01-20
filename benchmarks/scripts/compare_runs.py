@@ -3,7 +3,7 @@
 
 Usage:
     python compare_runs.py results1.json results2.json
-    python compare_runs.py --download RUN_ID1 RUN_ID2  # Download from GitHub Actions
+    python compare_runs.py --json results1.json results2.json  # JSON output only
 """
 
 import argparse

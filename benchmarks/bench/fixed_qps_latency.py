@@ -155,9 +155,9 @@ def main():
     print("Endpoint: POST /api/realistic (~10-15ms baseline)")
     print()
 
-    # Test at multiple QPS levels
+    # Test at multiple QPS levels (duration configurable via BENCHMARK_QPS_DURATION env var)
     qps_levels = [25, 50, 75]  # Requests per second
-    duration = 10  # seconds per test
+    duration = int(os.environ.get("BENCHMARK_QPS_DURATION", "10"))  # seconds per test
 
     results = {"baseline": {}, "sdk_100": {}, "sdk_10": {}}
 

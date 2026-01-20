@@ -59,6 +59,8 @@ jobs:
 
       - name: Run realistic workload benchmark
         id: realistic
+        env:
+          BENCHMARK_ITERATIONS: ${{ inputs.iterations }}
         run: |
           uv run python benchmarks/bench/realistic_workload.py 2>&1 | tee realistic_output.txt
           # Extract just the results JSON
@@ -66,6 +68,8 @@ jobs:
 
       - name: Run fixed QPS latency benchmark
         id: fixed_qps
+        env:
+          BENCHMARK_QPS_DURATION: ${{ inputs.qps_duration }}
         run: |
           uv run python benchmarks/bench/fixed_qps_latency.py 2>&1 | tee fixed_qps_output.txt
           # Extract just the results JSON
