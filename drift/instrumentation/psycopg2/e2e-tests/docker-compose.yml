@@ -16,7 +16,7 @@ services:
       context: ../../../..
       dockerfile: drift/instrumentation/psycopg2/e2e-tests/Dockerfile
       args:
-        - TUSK_CLI_VERSION=${TUSK_CLI_VERSION:-latest}
+        - BASE_IMAGE=${BASE_IMAGE:-python-e2e-base:latest}
     depends_on:
       postgres:
         condition: service_healthy

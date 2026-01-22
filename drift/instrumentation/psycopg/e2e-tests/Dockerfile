@@ -1,4 +1,5 @@
-FROM python-e2e-base:latest
+ARG BASE_IMAGE=python-e2e-base:latest
+FROM ${BASE_IMAGE}
 
 # Copy SDK source for editable install
 COPY . /sdk

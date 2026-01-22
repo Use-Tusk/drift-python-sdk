@@ -12,7 +12,7 @@ services:
       context: ../../../..
       dockerfile: drift/instrumentation/redis/e2e-tests/Dockerfile
       args:
-        - TUSK_CLI_VERSION=${TUSK_CLI_VERSION:-latest}
+        - BASE_IMAGE=${BASE_IMAGE:-python-e2e-base:latest}
     depends_on:
       redis:
         condition: service_healthy
