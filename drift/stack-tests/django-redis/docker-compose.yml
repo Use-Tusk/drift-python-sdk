@@ -9,7 +9,7 @@ services:
 
   app:
     build:
-      context: ../../../..
+      context: ../../..
       dockerfile: drift/stack-tests/django-redis/Dockerfile
       args:
         - TUSK_CLI_VERSION=${TUSK_CLI_VERSION:-latest}
@@ -26,7 +26,7 @@ services:
     working_dir: /app
     volumes:
       # Mount SDK source for hot reload (no rebuild needed for SDK changes)
-      - ../../../..:/sdk
+      - ../../..:/sdk
       # Mount app source for development
       - ./src:/app/src
       # Mount .tusk folder to persist traces
