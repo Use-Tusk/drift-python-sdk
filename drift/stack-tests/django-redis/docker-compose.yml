@@ -1,0 +1,33 @@
+services:
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: ../../../..
+      dockerfile: drift/stack-tests/django-redis/Dockerfile
+      args:
+        - TUSK_CLI_VERSION=${TUSK_CLI_VERSION:-latest}
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - PORT=8000
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - TUSK_ANALYTICS_DISABLED=1
+      - PYTHONUNBUFFERED=1
+      - DJANGO_SETTINGS_MODULE=settings
+    working_dir: /app
+    volumes:
+      # Mount SDK source for hot reload (no rebuild needed for SDK changes)
+      - ../../../..:/sdk
+      # Mount app source for development
+      - ./src:/app/src
+      # Mount .tusk folder to persist traces
+      - ./.tusk:/app/.tusk

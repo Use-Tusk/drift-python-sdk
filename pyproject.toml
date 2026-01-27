@@ -111,6 +111,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "drift/core/drift_sdk.py" = ["F401"]  # unused imports for availability checking
 "drift/instrumentation/**/e2e-tests/**" = ["F401", "F841"]  # test files
+"drift/stack-tests/**" = ["F401", "F841"]  # stack test files
 
 [tool.ruff.lint.isort]
 known-first-party = ["drift"]
@@ -125,8 +126,8 @@ line-ending = "auto"
 python-version = "3.9"
 
 [tool.ty.src]
-# Exclude e2e-tests directories from type checking
-exclude = ["**/e2e-tests/**"]
+# Exclude e2e-tests and stack-tests directories from type checking
+exclude = ["**/e2e-tests/**", "**/stack-tests/**"]
 
 [[tool.ty.overrides]]
 # Disable unresolved-import errors for instrumentation files with optional dependencies

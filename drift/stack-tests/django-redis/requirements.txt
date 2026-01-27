@@ -1,0 +1,5 @@
+-e /sdk  # Mount point for drift SDK
+Django>=4.2
+redis>=5.0.0
+django-redis>=5.4.0
+requests>=2.32.5
