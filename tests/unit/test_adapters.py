@@ -242,7 +242,7 @@ class TestFilesystemSpanAdapter:
         files = list(Path(temp_dir).glob("*.jsonl"))
         assert len(files) == 2
 
-        t1_file = [f for f in files if "t1" in str(f)][0]
+        t1_file = [f for f in files if "t1" in f.name][0]
         with open(t1_file) as f:
             lines = f.readlines()
             assert len(lines) == 2

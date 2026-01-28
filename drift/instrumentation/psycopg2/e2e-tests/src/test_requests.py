@@ -8,6 +8,10 @@ if __name__ == "__main__":
     # Execute test sequence
     make_request("GET", "/health")
 
+    # Test register_default_jsonb on InstrumentedConnection (Django compatibility)
+    # This simulates what Django's PostgreSQL backend does after connect()
+    make_request("GET", "/db/register-jsonb")
+
     # Query operations
     make_request("GET", "/db/query")
 

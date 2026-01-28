@@ -68,12 +68,14 @@ E2E tests validate full instrumentation workflows using Docker containers. They 
 
 #### Running E2E Tests
 
-Run all e2e tests:
+Run all tests (e2e + stack):
 
 ```bash
-./run-all-e2e-tests.sh        # Sequential (default)
-./run-all-e2e-tests.sh 2      # 2 tests in parallel
-./run-all-e2e-tests.sh 0      # All tests in parallel
+./run-all-e2e-tests.sh                         # Run all tests sequentially
+./run-all-e2e-tests.sh -c 2                    # Run 2 tests concurrently
+./run-all-e2e-tests.sh -c 0                    # Run all tests in parallel
+./run-all-e2e-tests.sh --instrumentation-only  # Run only e2e tests
+./run-all-e2e-tests.sh --stack-only            # Run only stack tests
 ```
 
 Run a single instrumentation's e2e test:
@@ -143,12 +145,28 @@ python src/test_requests.py
 
 For more details, see `drift/instrumentation/README-e2e-tests.md`.
 
+### Stack Tests
+
+Stack tests validate multiple instrumentations working together in realistic application architectures (e.g., Django + PostgreSQL, FastAPI + Redis). They catch bugs at integration points that don't surface in isolated e2e testing.
+
+```bash
+# Run a specific stack test
+cd drift/stack-tests/django-postgres
+./run.sh
+
+# Or run all tests (including stack tests) from the root
+./run-all-e2e-tests.sh
+```
+
+For available tests and details, see `drift/stack-tests/README.md`.
+
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
 | `docs/context-propagation.md` | Context propagation behavior, edge cases, and patterns |
 | `drift/instrumentation/README-e2e-tests.md` | E2E test architecture and debugging |
+| `drift/stack-tests/README.md` | Stack tests for multi-instrumentation scenarios |
 
 ## For Maintainers
 

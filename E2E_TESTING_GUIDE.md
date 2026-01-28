@@ -294,10 +294,16 @@ To run all E2E tests across all instrumentations:
 ./run-all-e2e-tests.sh
 
 # 2 tests in parallel
-./run-all-e2e-tests.sh 2
+./run-all-e2e-tests.sh -c 2
 
 # All tests in parallel (unlimited)
-./run-all-e2e-tests.sh 0
+./run-all-e2e-tests.sh -c 0
+
+# Run only single-instrumentation e2e tests
+./run-all-e2e-tests.sh --instrumentation-only
+
+# Run only stack tests
+./run-all-e2e-tests.sh --stack-only
 ```
 
 ## Quick Reference Commands

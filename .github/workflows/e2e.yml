@@ -15,27 +15,35 @@ on:
 
 jobs:
   discover:
-    name: Discover E2E Tests
+    name: Discover Tests
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      e2e_matrix: ${{ steps.set-matrix.outputs.e2e_matrix }}
+      stack_matrix: ${{ steps.set-matrix.outputs.stack_matrix }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Find all e2e-tests directories
+      - name: Find all test directories
         id: set-matrix
         run: |
-          # Find all directories with e2e-tests and convert to JSON array
-          LIBRARIES=$(find drift/instrumentation -type d -name "e2e-tests" \
+          # Find all e2e-tests directories (single instrumentation)
+          E2E_TESTS=$(find drift/instrumentation -type d -name "e2e-tests" \
             | sed 's|drift/instrumentation/||' | sed 's|/e2e-tests||' | sort \
             | jq -R -s -c 'split("\n") | map(select(length > 0))')
           
-          echo "Found libraries with e2e-tests: $LIBRARIES"
-          echo "matrix=$LIBRARIES" >> $GITHUB_OUTPUT
+          # Find all stack-tests directories (multi-instrumentation)
+          STACK_TESTS=$(find drift/stack-tests -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
+            | xargs -I {} basename {} | sort \
+            | jq -R -s -c 'split("\n") | map(select(length > 0))') || echo "[]"
+          
+          echo "Found e2e-tests: $E2E_TESTS"
+          echo "Found stack-tests: $STACK_TESTS"
+          echo "e2e_matrix=$E2E_TESTS" >> $GITHUB_OUTPUT
+          echo "stack_matrix=$STACK_TESTS" >> $GITHUB_OUTPUT
 
   e2e:
-    name: E2E Tests - ${{ matrix.library }}
+    name: E2E - ${{ matrix.library }}
     needs: discover
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -43,7 +51,7 @@ jobs:
       fail-fast: false
       max-parallel: 6
       matrix:
-        library: ${{ fromJSON(needs.discover.outputs.matrix) }}
+        library: ${{ fromJSON(needs.discover.outputs.e2e_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -98,6 +106,83 @@ jobs:
         run: |
           chmod +x ./drift/instrumentation/${{ matrix.library }}/e2e-tests/run.sh
           cd ./drift/instrumentation/${{ matrix.library }}/e2e-tests && ./run.sh 8000
+
+      - name: Cleanup Docker resources
+        if: always()
+        run: |
+          # Stop all running containers
+          docker ps -aq | xargs -r docker stop || true
+          docker ps -aq | xargs -r docker rm || true
+          # Clean up volumes
+          docker volume prune -f || true
+          # Clean up networks
+          docker network prune -f || true
+
+  stack:
+    name: Stack - ${{ matrix.test }}
+    needs: discover
+    if: ${{ needs.discover.outputs.stack_matrix != '[]' && needs.discover.outputs.stack_matrix != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        test: ${{ fromJSON(needs.discover.outputs.stack_matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Setup Python
+        run: uv python install 3.9
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
+
+      - name: Install SDK dependencies
+        run: uv sync --all-extras
+
+      - name: Build SDK
+        run: uv build
+
+      - name: Verify SDK build
+        run: |
+          ls -la dist/ || (echo "dist folder not found!" && exit 1)
+          test -f dist/*.whl || (echo "SDK build incomplete!" && exit 1)
+
+      - name: Get latest Tusk CLI version
+        id: tusk-version
+        run: |
+          VERSION=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/Use-Tusk/tusk-drift-cli/releases/latest" \
+            | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Latest Tusk CLI version: $VERSION"
+
+      - name: Build base image
+        env:
+          DOCKER_DEFAULT_PLATFORM: linux/amd64
+        run: |
+          docker build \
+            --build-arg TUSK_CLI_VERSION=${{ steps.tusk-version.outputs.version }} \
+            -t python-e2e-base:latest \
+            -f drift/instrumentation/e2e_common/Dockerfile.base \
+            .
+
+      - name: Run stack tests for ${{ matrix.test }}
+        env:
+          DOCKER_DEFAULT_PLATFORM: linux/amd64
+          TUSK_CLI_VERSION: ${{ steps.tusk-version.outputs.version }}
+        run: |
+          chmod +x ./drift/stack-tests/${{ matrix.test }}/run.sh
+          cd ./drift/stack-tests/${{ matrix.test }} && ./run.sh 8000
 
       - name: Cleanup Docker resources
         if: always()

@@ -155,6 +155,38 @@ def db_transaction():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/db/register-jsonb")
+def db_register_jsonb():
+    """Test register_default_jsonb on InstrumentedConnection.
+
+    This reproduces the Django admin panel bug where Django calls
+    psycopg2.extras.register_default_jsonb(connection) after connect(),
+    but the connection is wrapped in InstrumentedConnection which fails
+    the C extension type check.
+    """
+    try:
+        conn = psycopg2.connect(get_conn_string())
+
+        # This simulates what Django's PostgreSQL backend does:
+        # After getting a connection, it registers JSON/JSONB types
+        # This will fail if conn is InstrumentedConnection because
+        # register_type is a C extension that does strict type checking
+        psycopg2.extras.register_default_jsonb(conn, globally=False)
+
+        # If we get here, registration succeeded
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        cur.close()
+        conn.close()
+
+        return jsonify({"status": "success", "message": "register_default_jsonb worked on InstrumentedConnection"})
+    except TypeError as e:
+        # The expected error when InstrumentedConnection fails type check
+        return jsonify({"error": str(e), "error_type": "TypeError"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e), "error_type": type(e).__name__}), 500
+
+
 if __name__ == "__main__":
     sdk.mark_app_as_ready()
     app.run(host="0.0.0.0", port=8000, debug=False)

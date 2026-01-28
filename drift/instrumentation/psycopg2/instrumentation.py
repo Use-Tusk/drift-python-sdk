@@ -283,31 +283,69 @@ class Psycopg2Instrumentation(InstrumentationBase):
         instrumentation = self
         original_connect = self._original_connect
 
-        # In REPLAY mode, patch psycopg2.extras functions to be no-ops
-        # This allows Django to work without a real database connection
+        # Patch psycopg2.extras register functions to handle InstrumentedConnection
+        # In REPLAY mode: make them no-ops (no real DB connection)
+        # In RECORD mode: unwrap InstrumentedConnection before calling original
+        # This is needed because register_type is a C extension that does strict type checking
         from ...core.drift_sdk import TuskDrift
 
         sdk = TuskDrift.get_instance()
-        if sdk.mode == TuskDriftMode.REPLAY:
-            try:
-                import psycopg2.extensions
-                import psycopg2.extras
+        try:
+            import psycopg2.extras
 
-                # Patch register functions to be no-ops in REPLAY mode
-                original_register_default_json = getattr(psycopg2.extras, "register_default_json", None)
-                original_register_default_jsonb = getattr(psycopg2.extras, "register_default_jsonb", None)
-                original_register_uuid = getattr(psycopg2.extras, "register_uuid", None)
+            original_register_default_json = getattr(psycopg2.extras, "register_default_json", None)
+            original_register_default_jsonb = getattr(psycopg2.extras, "register_default_jsonb", None)
+            original_register_uuid = getattr(psycopg2.extras, "register_uuid", None)
 
+            def _unwrap_connection(conn_or_curs: Any) -> Any:
+                """Unwrap InstrumentedConnection to get the real connection."""
+                if isinstance(conn_or_curs, InstrumentedConnection):
+                    return conn_or_curs._connection
+                return conn_or_curs
+
+            if sdk.mode == TuskDriftMode.REPLAY:
+                # In REPLAY mode, make these no-ops since we may not have a real DB
                 if original_register_default_json:
                     psycopg2.extras.register_default_json = lambda *args, **kwargs: None
                 if original_register_default_jsonb:
                     psycopg2.extras.register_default_jsonb = lambda *args, **kwargs: None
                 if original_register_uuid:
                     psycopg2.extras.register_uuid = lambda *args, **kwargs: None
-
                 logger.info("[PSYCOPG2_REPLAY] Patched psycopg2.extras register functions to be no-ops")
-            except Exception as e:
-                logger.warning(f"[PSYCOPG2_REPLAY] Failed to patch psycopg2.extras: {e}")
+            else:
+                # In RECORD mode, unwrap InstrumentedConnection before calling original
+                if original_register_default_json:
+
+                    def patched_register_default_json(
+                        conn_or_curs: Any = None, globally: bool = False, loads: Any = None
+                    ) -> Any:
+                        return original_register_default_json(
+                            _unwrap_connection(conn_or_curs), globally=globally, loads=loads
+                        )
+
+                    psycopg2.extras.register_default_json = patched_register_default_json
+
+                if original_register_default_jsonb:
+
+                    def patched_register_default_jsonb(
+                        conn_or_curs: Any = None, globally: bool = False, loads: Any = None
+                    ) -> Any:
+                        return original_register_default_jsonb(
+                            _unwrap_connection(conn_or_curs), globally=globally, loads=loads
+                        )
+
+                    psycopg2.extras.register_default_jsonb = patched_register_default_jsonb
+
+                if original_register_uuid:
+
+                    def patched_register_uuid(oids: Any = None, conn_or_curs: Any = None) -> Any:
+                        return original_register_uuid(oids=oids, conn_or_curs=_unwrap_connection(conn_or_curs))
+
+                    psycopg2.extras.register_uuid = patched_register_uuid
+
+                logger.info("[PSYCOPG2] Patched psycopg2.extras register functions to unwrap InstrumentedConnection")
+        except Exception as e:
+            logger.warning(f"[PSYCOPG2] Failed to patch psycopg2.extras: {e}")
 
         def patched_connect(*args, **kwargs):
             """Patched psycopg2.connect method."""

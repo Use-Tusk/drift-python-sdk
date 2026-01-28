@@ -59,8 +59,6 @@ cd drift/instrumentation/flask/e2e-tests
 ./run.sh
 ```
 
----
-
 ### 2. fastapi
 
 **Purpose:** Test FastAPI ASGI instrumentation
@@ -80,8 +78,6 @@ cd drift/instrumentation/flask/e2e-tests
 cd drift/instrumentation/fastapi/e2e-tests
 ./run.sh
 ```
-
----
 
 ### 3. django
 
@@ -103,8 +99,6 @@ cd drift/instrumentation/django/e2e-tests
 ./run.sh
 ```
 
----
-
 ### 4. redis
 
 **Purpose:** Test Redis instrumentation
@@ -123,8 +117,6 @@ cd drift/instrumentation/django/e2e-tests
 cd drift/instrumentation/redis/e2e-tests
 ./run.sh
 ```
-
----
 
 ### 5. psycopg
 
@@ -146,8 +138,6 @@ cd drift/instrumentation/psycopg/e2e-tests
 ./run.sh
 ```
 
----
-
 ### 6. psycopg2
 
 **Purpose:** Test Psycopg2 (legacy) PostgreSQL instrumentation
@@ -165,8 +155,6 @@ cd drift/instrumentation/psycopg/e2e-tests
 cd drift/instrumentation/psycopg2/e2e-tests
 ./run.sh
 ```
-
----
 
 ## How E2E Tests Work
 
@@ -225,8 +213,6 @@ The e2e tests follow a **Docker entrypoint-driven architecture** where the Pytho
 - Python uses Docker entrypoint for orchestration
 - Both approaches work, but Python approach is more maintainable
 
----
-
 ## Prerequisites
 
 ### 1. Build Base Image
@@ -246,8 +232,6 @@ This image contains:
 ### 2. Install Docker
 
 All tests require Docker and Docker Compose.
-
----
 
 ## Running Tests
 
@@ -272,10 +256,16 @@ cd drift/instrumentation/flask/e2e-tests
 ./run-all-e2e-tests.sh
 
 # 2 tests in parallel
-./run-all-e2e-tests.sh 2
+./run-all-e2e-tests.sh -c 2
 
 # All tests in parallel (unlimited)
-./run-all-e2e-tests.sh 0
+./run-all-e2e-tests.sh -c 0
+
+# Run only single-instrumentation e2e tests
+./run-all-e2e-tests.sh --instrumentation-only
+
+# Run only stack tests
+./run-all-e2e-tests.sh --stack-only
 ```
 
 ### All Tests (Manual Parallel)
@@ -288,8 +278,6 @@ wait
 ```
 
 Each test uses a unique Docker Compose project name based on the port, so they don't conflict.
-
----
 
 ## Understanding Test Output
 
@@ -341,8 +329,6 @@ If the test fails, you'll see:
 
 Traces are preserved in `.tusk/traces/` for inspection.
 
----
-
 ## Debugging Tests
 
 ### View Traces
@@ -389,8 +375,6 @@ docker compose build
 docker compose run --rm app /bin/bash
 ```
 
----
-
 ## CI Integration
 
 ### GitHub Actions Example
@@ -436,8 +420,6 @@ jobs:
           path: drift/instrumentation/${{ matrix.test }}/e2e-tests/.tusk/traces/
 ```
 
----
-
 ## Adding New Tests
 
 To add a new e2e test:
@@ -463,8 +445,6 @@ To add a new e2e test:
    ```
 
 5. **Add to CI**: Update GitHub Actions workflow
-
----
 
 ## Troubleshooting
 
@@ -565,8 +545,6 @@ The e2e test runner checks for these warnings after running tests. If found, the
 
 This is equivalent to the Node.js SDK's `check_tcp_instrumentation_warning` check.
 
----
-
 ## Comparison with Node.js E2E Tests
 
 | Aspect | Node.js | Python |
@@ -581,16 +559,12 @@ This is equivalent to the Node.js SDK's `check_tcp_instrumentation_warning` chec
 
 Both approaches achieve the same goal, but Python's entrypoint-driven design is simpler and more maintainable.
 
----
-
 ## Related Documentation
 
 - [Base Dockerfile](./e2e_common/Dockerfile.base) - Python e2e base Docker image
 - [Base Runner](./e2e_common/base_runner.py) - Shared e2e test runner class
 - [Python SDK README](../../README.md) - Main Python SDK documentation
 - [CONTRIBUTING.md](../../CONTRIBUTING.md) - Contribution guidelines with e2e test instructions
-
----
 
 ## Maintaining These Tests
 
@@ -622,8 +596,6 @@ Update `requirements.txt` in specific test directory:
 # drift/instrumentation/flask/e2e-tests/requirements.txt
 Flask>=3.2.0  # Update version
 ```
-
----
 
 ## Success Criteria
 

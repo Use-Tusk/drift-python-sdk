@@ -1,0 +1,4 @@
+-e /sdk  # Mount point for drift SDK
+Django>=4.2
+psycopg2-binary>=2.9.9
+requests>=2.32.5
