@@ -150,6 +150,8 @@ class MockCursor:
     """Mock cursor for when we can't create a real cursor from base class.
 
     This is a fallback when the connection is completely mocked.
+    Provides all attributes that psycopg2 cursors have to ensure compatibility
+    with frameworks like Django that access cursor properties.
     """
 
     def __init__(self, connection):
@@ -159,6 +161,14 @@ class MockCursor:
         self.arraysize = 1
         self._mock_rows = []
         self._mock_index = 0
+        # psycopg2 cursor attributes that Django/Flask may access
+        self.query = None  # Last executed query string
+        self.statusmessage = None  # Status message from last command
+        self.lastrowid = None  # OID of last inserted row (if applicable)
+        self.closed = False
+        self.name = None  # Server-side cursor name (None for client-side)
+        self.scrollable = None
+        self.withhold = False
         logger.debug("[MOCK_CURSOR] Created fallback mock cursor")
 
     def execute(self, query: Any, vars: Any = None) -> None:
@@ -210,6 +220,58 @@ class InstrumentedConnection:
 
     def cursor(self, name: str | None = None, cursor_factory: Any = None, *args: Any, **kwargs: Any) -> Any:
         """Intercept cursor creation to wrap user-provided cursor_factory."""
+        # In REPLAY mode, use MockCursor to have full control over cursor state
+        # This is necessary because psycopg2's cursor.description is a read-only
+        # C-level property that cannot be set after the cursor is created
+        if self._sdk.mode == TuskDriftMode.REPLAY:
+            cursor = MockCursor(self)
+            instrumentation = self._instrumentation
+            sdk = self._sdk
+
+            # Detect if user wants dict-style cursors (RealDictCursor, DictCursor)
+            is_dict_cursor = False
+            effective_cursor_factory = cursor_factory if cursor_factory is not None else self._default_cursor_factory
+            if effective_cursor_factory is not None:
+                try:
+                    import psycopg2.extras
+
+                    if effective_cursor_factory in (
+                        psycopg2.extras.RealDictCursor,
+                        psycopg2.extras.DictCursor,
+                    ) or (
+                        isinstance(effective_cursor_factory, type)
+                        and issubclass(
+                            effective_cursor_factory, (psycopg2.extras.RealDictCursor, psycopg2.extras.DictCursor)
+                        )
+                    ):
+                        is_dict_cursor = True
+                except (ImportError, AttributeError):
+                    pass
+
+            # Store cursor type info on the cursor for _mock_execute_with_data
+            cursor._is_dict_cursor = is_dict_cursor  # type: ignore[attr-defined]
+
+            def mock_execute(query, vars=None):
+                def noop_execute(q, v):
+                    return None
+
+                return instrumentation._traced_execute(cursor, noop_execute, sdk, query, vars)
+
+            def mock_executemany(query, vars_list):
+                def noop_executemany(q, vl):
+                    return None
+
+                return instrumentation._traced_executemany(cursor, noop_executemany, sdk, query, vars_list)
+
+            cursor.execute = mock_execute  # type: ignore[method-assign]
+            cursor.executemany = mock_executemany  # type: ignore[method-assign]
+
+            logger.debug(
+                f"[INSTRUMENTED_CONNECTION] Created MockCursor for REPLAY mode (is_dict_cursor={is_dict_cursor})"
+            )
+            return cursor
+
+        # In RECORD mode, use real cursor with instrumentation
         # Use cursor_factory from cursor() call, or fall back to connection's default
         base_factory = cursor_factory if cursor_factory is not None else self._default_cursor_factory
         # Create instrumented cursor factory (wrapping the base factory)
@@ -493,6 +555,9 @@ class Psycopg2Instrumentation(InstrumentationBase):
                     logger.warning("[PSYCOPG2_REPLAY] No mock found for pre-app-start query, returning empty result")
                     empty_mock = {"rowcount": 0, "rows": [], "description": None}
                     self._mock_execute_with_data(cursor, empty_mock)
+                    # Set cursor.query to the executed query (psycopg2 cursor attribute)
+                    if hasattr(cursor, "query"):
+                        cursor.query = query_str.encode("utf-8") if isinstance(query_str, str) else query_str
                     span_info.span.end()
                     return None
 
@@ -503,6 +568,9 @@ class Psycopg2Instrumentation(InstrumentationBase):
                 )
 
             self._mock_execute_with_data(cursor, mock_result)
+            # Set cursor.query to the executed query (psycopg2 cursor attribute)
+            if hasattr(cursor, "query"):
+                cursor.query = query_str.encode("utf-8") if isinstance(query_str, str) else query_str
             span_info.span.end()
             return None
 
@@ -621,6 +689,9 @@ class Psycopg2Instrumentation(InstrumentationBase):
                     )
                     empty_mock = {"rowcount": 0, "rows": [], "description": None}
                     self._mock_execute_with_data(cursor, empty_mock)
+                    # Set cursor.query to the executed query (psycopg2 cursor attribute)
+                    if hasattr(cursor, "query"):
+                        cursor.query = query_str.encode("utf-8") if isinstance(query_str, str) else query_str
                     span_info.span.end()
                     return None
 
@@ -631,6 +702,9 @@ class Psycopg2Instrumentation(InstrumentationBase):
                 )
 
             self._mock_execute_with_data(cursor, mock_result)
+            # Set cursor.query to the executed query (psycopg2 cursor attribute)
+            if hasattr(cursor, "query"):
+                cursor.query = query_str.encode("utf-8") if isinstance(query_str, str) else query_str
             span_info.span.end()
             return None
 
@@ -777,15 +851,17 @@ class Psycopg2Instrumentation(InstrumentationBase):
         # Deserialize datetime strings back to datetime objects for consistent Flask/Django serialization
         mock_rows = [deserialize_db_value(row) for row in mock_rows]
 
-        # Check if this is a dict-cursor (like RealDictCursor) by checking if cursor class
-        # inherits from a dict-returning cursor type
-        is_dict_cursor = False
-        try:
-            import psycopg2.extras
+        # Check if this is a dict-cursor (like RealDictCursor)
+        # First check if cursor has _is_dict_cursor attribute (set by InstrumentedConnection.cursor())
+        # Then fall back to isinstance check for real dict cursors
+        is_dict_cursor = getattr(cursor, "_is_dict_cursor", False)
+        if not is_dict_cursor:
+            try:
+                import psycopg2.extras
 
-            is_dict_cursor = isinstance(cursor, (psycopg2.extras.RealDictCursor, psycopg2.extras.DictCursor))
-        except (ImportError, AttributeError):
-            pass
+                is_dict_cursor = isinstance(cursor, (psycopg2.extras.RealDictCursor, psycopg2.extras.DictCursor))
+            except (ImportError, AttributeError):
+                pass
 
         # If it's a dict cursor and we have description, convert rows to dicts
         if is_dict_cursor and description_data:

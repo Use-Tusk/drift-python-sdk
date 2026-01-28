@@ -7,6 +7,7 @@ from typing import Optional
 
 import psycopg
 from fastapi import FastAPI, HTTPException
+from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel
 
 from drift import TuskDrift
@@ -38,7 +39,7 @@ async def get_async_connection():
     """Get an async connection from pool."""
     global _async_pool
     if _async_pool is None:
-        _async_pool = psycopg.AsyncConnectionPool(get_conn_string(), min_size=1, max_size=5)
+        _async_pool = AsyncConnectionPool(get_conn_string(), min_size=1, max_size=5)
         await _async_pool.open()
     async with _async_pool.connection() as conn:
         yield conn
