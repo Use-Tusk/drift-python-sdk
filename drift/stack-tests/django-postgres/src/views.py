@@ -200,6 +200,9 @@ def db_raw_connection(request):
     psycopg2 instrumentation.
     """
     try:
+        # Ensure the database connection is established before accessing the raw connection
+        connection.ensure_connection()
+
         # Get the raw psycopg2 connection from Django
         raw_conn = connection.connection
 

@@ -32,7 +32,7 @@ def cache_set(request):
         if not key or value is None:
             return JsonResponse({"error": "key and value are required"}, status=400)
 
-        if timeout:
+        if timeout is not None:
             cache.set(key, value, timeout=timeout)
         else:
             cache.set(key, value)

@@ -269,11 +269,10 @@ async def db_pipeline():
             async with conn.pipeline():
                 async with conn.cursor() as cur1:
                     await cur1.execute("SELECT id, name FROM users ORDER BY id LIMIT 3")
+                    rows = await cur1.fetchall()
                 async with conn.cursor() as cur2:
                     await cur2.execute("SELECT COUNT(*) FROM users")
-
-                rows = await cur1.fetchall()
-                count = (await cur2.fetchone())[0]
+                    count = (await cur2.fetchone())[0]
 
         return {
             "rows": [{"id": r[0], "name": r[1]} for r in rows],
