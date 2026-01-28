@@ -27,11 +27,10 @@ if __name__ == "__main__":
     make_request("DELETE", "/cache/delete/test_key")
     make_request("DELETE", "/cache/delete/counter")
 
-    # TODO: Session tests commented out - session_key is dynamic and differs between
-    # RECORD and REPLAY, causing false test failures.
     # Session operations (Redis-backed)
-    # resp = make_request("POST", "/session/set", json={"user_name": "Alice", "logged_in": True})
-    # make_request("GET", "/session/get")
-    # make_request("POST", "/session/clear")
+    # Note: Session endpoints return dynamic session_key values, handled via comparison.ignore_fields in config
+    make_request("POST", "/session/set", json={"user_name": "Alice", "logged_in": True})
+    make_request("GET", "/session/get")
+    make_request("POST", "/session/clear")
 
     print_request_summary()

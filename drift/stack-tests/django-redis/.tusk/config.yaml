@@ -15,6 +15,9 @@ tusk_api:
 test_execution:
   timeout: 30s
 
+comparison:
+  ignore_fields: ["session_key", "cleared_session_key"]
+
 recording:
   sampling_rate: 1.0
   export_spans: false

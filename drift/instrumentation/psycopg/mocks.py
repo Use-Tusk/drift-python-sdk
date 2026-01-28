@@ -383,3 +383,231 @@ class MockPipeline:
     def sync(self):
         """No-op sync for mock pipeline."""
         pass
+
+
+# ==================== ASYNC MOCKS ====================
+
+
+class MockAsyncConnection:
+    """Mock async database connection for REPLAY mode when postgres is not available.
+
+    Provides minimal async interface for FastAPI/asyncio apps to work without a real database.
+    All queries are mocked at the cursor.execute() level.
+    """
+
+    def __init__(
+        self,
+        sdk: TuskDrift,
+        instrumentation: PsycopgInstrumentation,
+        cursor_factory,
+        row_factory=None,
+    ):
+        self.sdk = sdk
+        self.instrumentation = instrumentation
+        self.cursor_factory = cursor_factory
+        self.row_factory = row_factory
+        self.closed = False
+        self.autocommit = False
+
+        # psycopg3 async connection attributes
+        self.isolation_level = None
+        self.encoding = "UTF8"
+        self.adapters = MockAdapters()
+        self.pgconn = None
+
+        class MockInfo:
+            vendor = "postgresql"
+            server_version = 150000
+            encoding = "UTF8"
+
+            def parameter_status(self, param):
+                if param == "TimeZone":
+                    return "UTC"
+                elif param == "server_version":
+                    return "15.0"
+                return None
+
+        self.info = MockInfo()
+
+        logger.debug("[MOCK_ASYNC_CONNECTION] Created mock async connection for REPLAY mode (psycopg3)")
+
+    def cursor(self, name=None, *, cursor_factory=None, **kwargs):
+        """Create an async cursor using the instrumented cursor factory."""
+        cursor = MockAsyncCursor(self)
+
+        instrumentation = self.instrumentation
+        sdk = self.sdk
+
+        async def mock_execute(query, params=None, **kwargs):
+            # Use async execute handler
+            async def noop_execute(q, p, **kw):
+                return cursor
+
+            return await instrumentation._traced_async_execute(cursor, noop_execute, sdk, query, params, **kwargs)
+
+        async def mock_executemany(query, params_seq, **kwargs):
+            async def noop_executemany(q, ps, **kw):
+                return cursor
+
+            return await instrumentation._traced_async_executemany(
+                cursor, noop_executemany, sdk, query, params_seq, **kwargs
+            )
+
+        cursor.execute = mock_execute  # type: ignore[method-assign]
+        cursor.executemany = mock_executemany  # type: ignore[method-assign]
+
+        logger.debug("[MOCK_ASYNC_CONNECTION] Created async cursor (psycopg3)")
+        return cursor
+
+    async def commit(self):
+        """Mock async commit - no-op in REPLAY mode."""
+        logger.debug("[MOCK_ASYNC_CONNECTION] commit() called (no-op)")
+        pass
+
+    async def rollback(self):
+        """Mock async rollback - no-op in REPLAY mode."""
+        logger.debug("[MOCK_ASYNC_CONNECTION] rollback() called (no-op)")
+        pass
+
+    async def close(self):
+        """Mock async close - no-op in REPLAY mode."""
+        logger.debug("[MOCK_ASYNC_CONNECTION] close() called (no-op)")
+        self.closed = True
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is not None:
+            await self.rollback()
+        else:
+            await self.commit()
+        return False
+
+    def transaction(self):
+        """Return a mock async transaction context manager for REPLAY mode."""
+        return MockAsyncTransaction(self)
+
+    def pipeline(self):
+        """Return a mock async pipeline context manager for REPLAY mode."""
+        return MockAsyncPipeline(self)
+
+
+class MockAsyncCursor:
+    """Mock async cursor for when we can't create a real async cursor.
+
+    This is a fallback when the async connection is completely mocked.
+    """
+
+    def __init__(self, connection):
+        self.connection = connection
+        self.rowcount = -1
+        self._tusk_description = None
+        self.arraysize = 1
+        self._mock_rows = []
+        self._mock_index = 0
+        self._mock_result_sets = []
+        self._mock_result_set_index = 0
+        self.adapters = MockAdapters()
+        logger.debug("[MOCK_ASYNC_CURSOR] Created fallback mock async cursor (psycopg3)")
+
+    @property
+    def description(self):
+        return self._tusk_description
+
+    @property
+    def rownumber(self):
+        if self._mock_rows:
+            return self._mock_index
+        return None
+
+    @property
+    def statusmessage(self):
+        return getattr(self, "_mock_statusmessage", None)
+
+    async def execute(self, query, params=None, **kwargs):
+        """Will be replaced by instrumentation."""
+        logger.debug(f"[MOCK_ASYNC_CURSOR] execute() called: {query[:100]}")
+        return self
+
+    async def executemany(self, query, params_seq, **kwargs):
+        """Will be replaced by instrumentation."""
+        logger.debug(f"[MOCK_ASYNC_CURSOR] executemany() called: {query[:100]}")
+        return self
+
+    async def fetchone(self):
+        if self._mock_index < len(self._mock_rows):
+            row = self._mock_rows[self._mock_index]
+            self._mock_index += 1
+            return tuple(row) if isinstance(row, list) else row
+        return None
+
+    async def fetchmany(self, size=None):
+        if size is None:
+            size = self.arraysize
+        rows = []
+        for _ in range(size):
+            row = await self.fetchone()
+            if row is None:
+                break
+            rows.append(row)
+        return rows
+
+    async def fetchall(self):
+        rows = self._mock_rows[self._mock_index :]
+        self._mock_index = len(self._mock_rows)
+        return [tuple(row) if isinstance(row, list) else row for row in rows]
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._mock_index < len(self._mock_rows):
+            row = self._mock_rows[self._mock_index]
+            self._mock_index += 1
+            return tuple(row) if isinstance(row, list) else row
+        raise StopAsyncIteration
+
+    async def close(self):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+        return False
+
+
+class MockAsyncTransaction:
+    """Mock async transaction context manager for REPLAY mode."""
+
+    def __init__(self, connection: MockAsyncConnection):
+        self._conn = connection
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is not None:
+            await self._conn.rollback()
+        else:
+            await self._conn.commit()
+        return False
+
+
+class MockAsyncPipeline:
+    """Mock async Pipeline for REPLAY mode."""
+
+    def __init__(self, connection: MockAsyncConnection):
+        self._conn = connection
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        return False
+
+    async def sync(self):
+        """No-op async sync for mock pipeline."""
+        pass
