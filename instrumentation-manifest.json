@@ -1,8 +1,8 @@
 {
-  "sdkVersion": "0.1.13",
+  "sdkVersion": "0.1.14",
   "language": "python",
   "pythonVersion": ">=3.12",
-  "generatedAt": "2026-01-19T20:01:53.020592Z",
+  "generatedAt": "2026-01-28T23:15:19.797512Z",
   "instrumentations": [
     {
       "packageName": "aiohttp",
