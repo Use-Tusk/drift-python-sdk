@@ -221,3 +221,35 @@ def db_raw_connection(request):
         )
     except Exception as e:
         return JsonResponse({"error": str(e), "error_type": type(e).__name__}, status=500)
+
+
+@require_GET
+def cursor_iteration(request):
+    """Test cursor iteration using 'for row in cursor' syntax.
+
+    This validates that MockCursor implements
+    __iter__ and __next__.
+    """
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT id, name, email FROM users ORDER BY id LIMIT 5")
+
+            rows = []
+            for row in cursor:
+                rows.append({"id": row[0], "name": row[1], "email": row[2]})
+
+        return JsonResponse(
+            {"status": "success", "message": "Cursor iteration worked correctly", "count": len(rows), "data": rows}
+        )
+    except TypeError as e:
+        # Error when MockCursor doesn't implement __iter__
+        return JsonResponse(
+            {
+                "error": str(e),
+                "error_type": "TypeError",
+                "message": "Cursor iteration failed - MockCursor not iterable",
+            },
+            status=500,
+        )
+    except Exception as e:
+        return JsonResponse({"error": str(e), "error_type": type(e).__name__}, status=500)

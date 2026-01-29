@@ -14,10 +14,13 @@ DEBUG = True
 ALLOWED_HOSTS = ["*"]
 
 # Application definition
+# NOTE: django.contrib.postgres is included to test MockCursor cursor iteration.
+# Django's postgres extension iterates over cursor results to register type handlers.
 INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.auth",
     "django.contrib.sessions",
+    "django.contrib.postgres",
 ]
 
 MIDDLEWARE = [

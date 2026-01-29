@@ -14,4 +14,5 @@ urlpatterns = [
     path("db/register-jsonb", views.db_register_jsonb, name="db_register_jsonb"),
     path("db/transaction", views.db_transaction, name="db_transaction"),
     path("db/raw-connection", views.db_raw_connection, name="db_raw_connection"),
+    path("db/cursor-iteration", views.cursor_iteration, name="cursor_iteration"),
 ]
