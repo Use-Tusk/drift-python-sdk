@@ -8,8 +8,10 @@ if __name__ == "__main__":
     # Execute test sequence
     make_request("GET", "/health")
 
+    # Cursor iteration test - validates MockCursor.__iter__ fix for django.contrib.postgres
+    make_request("GET", "/db/cursor-iteration")
+
     # Key integration test: register_default_jsonb on InstrumentedConnection
-    # This is the main test for the bug fix
     make_request("GET", "/db/register-jsonb")
 
     # Transaction test (rollback, doesn't return data)

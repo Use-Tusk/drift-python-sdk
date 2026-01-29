@@ -195,6 +195,22 @@ class MockCursor:
     def close(self):
         pass
 
+    def __iter__(self):
+        """Support direct cursor iteration (for row in cursor).
+
+        This is required by Django's django.contrib.postgres which iterates
+        over cursor results to register type handlers (hstore, citext, etc.).
+        """
+        return self
+
+    def __next__(self):
+        """Return next row for iteration."""
+        if self._mock_index >= len(self._mock_rows):
+            raise StopIteration
+        row = self._mock_rows[self._mock_index]
+        self._mock_index += 1
+        return tuple(row) if isinstance(row, list) else row
+
     def __enter__(self):
         return self
 
@@ -485,6 +501,30 @@ class Psycopg2Instrumentation(InstrumentationBase):
             def executemany(self, query: QueryType, vars_list: Any) -> Any:
                 logger.debug("[INSTRUMENTED_CURSOR] executemany() called on instrumented cursor")
                 return instrumentation._traced_executemany(self, super().executemany, sdk, query, vars_list)
+
+            def __iter__(self):
+                """Support direct cursor iteration (for row in cursor).
+
+                If _tusk_rows is set (from _finalize_query_span recording), use it.
+                Otherwise fall back to the base cursor's iteration.
+                """
+                if hasattr(self, "_tusk_rows"):
+                    return self
+                return super().__iter__()
+
+            def __next__(self):
+                """Return next row for iteration.
+
+                If _tusk_rows is set (from _finalize_query_span recording), iterate over stored rows.
+                Otherwise fall back to the base cursor's __next__.
+                """
+                if hasattr(self, "_tusk_rows"):
+                    if self._tusk_index < len(self._tusk_rows):  # pyright: ignore[reportAttributeAccessIssue]
+                        row = self._tusk_rows[self._tusk_index]  # pyright: ignore[reportAttributeAccessIssue]
+                        self._tusk_index += 1  # pyright: ignore[reportAttributeAccessIssue]
+                        return row
+                    raise StopIteration
+                return super().__next__()
 
         return InstrumentedCursor
 
@@ -1014,6 +1054,8 @@ class Psycopg2Instrumentation(InstrumentationBase):
                             cursor.fetchone = patched_fetchone  # pyright: ignore[reportAttributeAccessIssue]
                             cursor.fetchmany = patched_fetchmany  # pyright: ignore[reportAttributeAccessIssue]
                             cursor.fetchall = patched_fetchall  # pyright: ignore[reportAttributeAccessIssue]
+                            # Note: __iter__ and __next__ are handled at class level in InstrumentedCursor
+                            # (instance-level dunder patching doesn't work for C extension cursors)
 
                         except Exception as fetch_error:
                             logger.debug(f"Could not fetch rows (query might not return rows): {fetch_error}")
