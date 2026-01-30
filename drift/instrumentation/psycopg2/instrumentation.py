@@ -817,7 +817,7 @@ class Psycopg2Instrumentation(InstrumentationBase):
                 "query": query_str.strip(),
             }
             if params is not None:
-                input_value["parameters"] = params
+                input_value["parameters"] = serialize_value(params)
 
             # Use centralized mock finding utility
             from ...core.mock_utils import find_mock_response_sync
