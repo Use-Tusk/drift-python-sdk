@@ -99,7 +99,9 @@ def deserialize_db_value(val: Any) -> Any:
     return val
 
 
-def restore_row_integer_types(row: list[Any], description: list[dict[str, Any]] | None) -> list[Any]:
+def restore_row_integer_types(
+    row: list[Any] | dict[str, Any], description: list[dict[str, Any]] | None
+) -> list[Any] | dict[str, Any]:
     """Restore integer types for database row values using column metadata.
 
     During the record/replay cycle, integer values are lost due to JSON serialization:
@@ -110,7 +112,8 @@ def restore_row_integer_types(row: list[Any], description: list[dict[str, Any]] 
     which columns should contain integers and converts whole-number floats back to int.
 
     Args:
-        row: A row of values from the mocked database query.
+        row: A row of values from the mocked database query. Can be a list (standard cursor)
+             or dict (dict cursor like RealDictCursor).
         description: Column metadata from the cursor description, containing 'type_code' for each column.
                     Format: [{"name": "col1", "type_code": 23}, ...]
 
@@ -120,11 +123,30 @@ def restore_row_integer_types(row: list[Any], description: list[dict[str, Any]] 
     if not description or not row:
         return row
 
+    # Handle dict rows (from dict cursors like RealDictCursor)
+    if isinstance(row, dict):
+        # Build a mapping of column names to type codes
+        type_code_by_name = {}
+        for col in description:
+            if isinstance(col, dict):
+                col_name = col.get("name")
+                if col_name:
+                    type_code_by_name[col_name] = col.get("type_code")
+
+        result = {}
+        for key, value in row.items():
+            type_code = type_code_by_name.get(key)
+            if type_code in POSTGRES_INTEGER_TYPE_CODES and isinstance(value, float) and value.is_integer():
+                result[key] = int(value)
+            else:
+                result[key] = value
+        return result
+
+    # Handle list/tuple rows (standard cursors)
     result = []
     for i, value in enumerate(row):
         if i < len(description):
             type_code = description[i].get("type_code") if isinstance(description[i], dict) else None
-            # Only convert if this is an INTEGER column and value is a whole-number float
             if type_code in POSTGRES_INTEGER_TYPE_CODES and isinstance(value, float) and value.is_integer():
                 result.append(int(value))
             else:
