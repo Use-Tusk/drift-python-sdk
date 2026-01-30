@@ -29,7 +29,7 @@ from ...core.types import (
     TuskDriftMode,
 )
 from ..base import InstrumentationBase
-from ..utils.psycopg_utils import deserialize_db_value
+from ..utils.psycopg_utils import deserialize_db_value, restore_row_integer_types
 from ..utils.serialization import serialize_value
 
 logger = logging.getLogger(__name__)
@@ -890,6 +890,7 @@ class Psycopg2Instrumentation(InstrumentationBase):
         mock_rows = actual_data.get("rows", [])
         # Deserialize datetime strings back to datetime objects for consistent Flask/Django serialization
         mock_rows = [deserialize_db_value(row) for row in mock_rows]
+        mock_rows = [restore_row_integer_types(row, description_data) for row in mock_rows]
 
         # Check if this is a dict-cursor (like RealDictCursor)
         # First check if cursor has _is_dict_cursor attribute (set by InstrumentedConnection.cursor())

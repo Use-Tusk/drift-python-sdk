@@ -8,6 +8,17 @@ import uuid
 from decimal import Decimal
 from typing import Any
 
+# PostgreSQL integer type OIDs
+# These are the type codes for integer columns in PostgreSQL
+# See: https://github.com/postgres/postgres/blob/master/src/include/catalog/pg_type.dat
+POSTGRES_INTEGER_TYPE_CODES = {
+    20,  # BIGINT (int8)
+    21,  # SMALLINT (int2)
+    23,  # INTEGER (int4)
+    26,  # OID
+    28,  # XID
+}
+
 # Try to import psycopg Range type for deserialization support
 try:
     from psycopg.types.range import Range as PsycopgRange  # type: ignore[import-untyped]
@@ -86,3 +97,38 @@ def deserialize_db_value(val: Any) -> Any:
     elif isinstance(val, list):
         return [deserialize_db_value(v) for v in val]
     return val
+
+
+def restore_row_integer_types(row: list[Any], description: list[dict[str, Any]] | None) -> list[Any]:
+    """Restore integer types for database row values using column metadata.
+
+    During the record/replay cycle, integer values are lost due to JSON serialization:
+    - Recording: PostgreSQL INTEGER column → psycopg2 returns int(0) -> JSON stores 0
+    - Replay: CLI parses JSON -> Go float64(0) -> protobuf double -> Python float(0.0)
+
+    This function uses the column type_code from the cursor description to identify
+    which columns should contain integers and converts whole-number floats back to int.
+
+    Args:
+        row: A row of values from the mocked database query.
+        description: Column metadata from the cursor description, containing 'type_code' for each column.
+                    Format: [{"name": "col1", "type_code": 23}, ...]
+
+    Returns:
+        The row with integer types restored for INTEGER columns.
+    """
+    if not description or not row:
+        return row
+
+    result = []
+    for i, value in enumerate(row):
+        if i < len(description):
+            type_code = description[i].get("type_code") if isinstance(description[i], dict) else None
+            # Only convert if this is an INTEGER column and value is a whole-number float
+            if type_code in POSTGRES_INTEGER_TYPE_CODES and isinstance(value, float) and value.is_integer():
+                result.append(int(value))
+            else:
+                result.append(value)
+        else:
+            result.append(value)
+    return result
