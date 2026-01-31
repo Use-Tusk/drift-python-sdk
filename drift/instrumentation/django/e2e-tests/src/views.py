@@ -4,7 +4,8 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
+from django.middleware.csrf import get_token
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 from opentelemetry import context as otel_context
@@ -127,3 +128,26 @@ def get_activity(request):
         return JsonResponse(response.json())
     except Exception as e:
         return JsonResponse({"error": f"Failed to fetch activity: {str(e)}"}, status=500)
+
+
+@require_GET
+def csrf_form(request):
+    """Return an HTML form with CSRF token for testing CSRF normalization.
+
+    This endpoint tests that CSRF tokens are properly normalized during
+    recording so that replay comparisons succeed.
+    """
+    csrf_token = get_token(request)
+    html = f"""<!DOCTYPE html>
+<html>
+<head><title>CSRF Test Form</title></head>
+<body>
+    <h1>CSRF Test Form</h1>
+    <form method="POST" action="/api/submit">
+        <input type="hidden" name="csrfmiddlewaretoken" value="{csrf_token}">
+        <input type="text" name="message" placeholder="Enter message">
+        <button type="submit">Submit</button>
+    </form>
+</body>
+</html>"""
+    return HttpResponse(html, content_type="text/html")

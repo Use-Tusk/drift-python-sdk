@@ -147,6 +147,8 @@ class DriftMiddleware:
             with SpanUtils.with_span(span_info):
                 response = self.get_response(request)
                 # REPLAY mode: don't capture the span (it's already recorded)
+                # But do normalize CSRF tokens in the response so comparison succeeds
+                response = self._normalize_csrf_in_response(response)
                 return response
         finally:
             # Reset context
@@ -262,6 +264,38 @@ class DriftMiddleware:
             if route:
                 request._drift_route_template = route  # type: ignore
 
+    def _normalize_csrf_in_response(self, response: HttpResponse) -> HttpResponse:
+        """Normalize CSRF tokens in the actual response body for REPLAY mode.
+
+        In REPLAY mode, we need the actual HTTP response to match the recorded
+        response (which had CSRF tokens normalized during recording). This modifies
+        the response body to replace real CSRF tokens with the normalized placeholder.
+
+        This only affects HTML responses.
+
+        Args:
+            response: Django HttpResponse object
+
+        Returns:
+            Modified response with normalized CSRF tokens
+        """
+        content_type = response.get("Content-Type", "")
+        if "text/html" not in content_type.lower():
+            return response
+
+        # Get response body and normalize CSRF tokens
+        if hasattr(response, "content") and response.content:
+            from .csrf_utils import normalize_csrf_in_body
+
+            normalized_body = normalize_csrf_in_body(response.content)
+            if normalized_body is not None and normalized_body != response.content:
+                response.content = normalized_body
+                # Update Content-Length header if present
+                if "Content-Length" in response:
+                    response["Content-Length"] = len(normalized_body)
+
+        return response
+
     def _capture_span(self, request: HttpRequest, response: HttpResponse, span_info: SpanInfo) -> None:
         """Create and collect a span from request/response data.
 
@@ -300,6 +334,15 @@ class DriftMiddleware:
             content = response.content
             if isinstance(content, bytes) and len(content) > 0:
                 response_body = content
+
+        # Normalize CSRF tokens in HTML responses for consistent record/replay comparison
+        # This only affects what is stored in the span, not what the browser receives
+        if response_body:
+            content_type = dict(response.items()).get("Content-Type", "") if hasattr(response, "items") else ""
+            if "text/html" in content_type.lower():
+                from .csrf_utils import normalize_csrf_in_body
+
+                response_body = normalize_csrf_in_body(response_body)
 
         output_value = build_output_value(
             status_code,
