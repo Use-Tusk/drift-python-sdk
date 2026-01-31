@@ -147,8 +147,8 @@ class DriftMiddleware:
             with SpanUtils.with_span(span_info):
                 response = self.get_response(request)
                 # REPLAY mode: don't capture the span (it's already recorded)
-                # But do normalize CSRF tokens in the response so comparison succeeds
-                response = self._normalize_csrf_in_response(response)
+                # But do normalize the response so comparison succeeds
+                response = self._normalize_html_response(response)
                 return response
         finally:
             # Reset context
@@ -264,42 +264,22 @@ class DriftMiddleware:
             if route:
                 request._drift_route_template = route  # type: ignore
 
-    def _normalize_csrf_in_response(self, response: HttpResponse) -> HttpResponse:
-        """Normalize CSRF tokens in the actual response body for REPLAY mode.
+    def _normalize_html_response(self, response: HttpResponse) -> HttpResponse:
+        """Normalize HTML response body for REPLAY mode comparison.
 
         In REPLAY mode, we need the actual HTTP response to match the recorded
-        response (which had CSRF tokens normalized during recording). This modifies
-        the response body to replace real CSRF tokens with the normalized placeholder.
-
-        This only affects HTML responses.
+        response (which had CSRF tokens and class ordering normalized during recording).
+        This modifies the response body in-place.
 
         Args:
             response: Django HttpResponse object
 
         Returns:
-            Modified response with normalized CSRF tokens
+            Modified response with normalized body
         """
-        content_type = response.get("Content-Type", "")
-        if "text/html" not in content_type.lower():
-            return response
+        from .html_utils import normalize_html_response
 
-        # Skip normalization for compressed responses - decoding gzip/deflate as UTF-8 would corrupt the body
-        content_encoding = response.get("Content-Encoding", "").lower()
-        if content_encoding and content_encoding != "identity":
-            return response
-
-        # Get response body and normalize CSRF tokens
-        if hasattr(response, "content") and response.content:
-            from .csrf_utils import normalize_csrf_in_body
-
-            normalized_body = normalize_csrf_in_body(response.content)
-            if normalized_body is not None and normalized_body != response.content:
-                response.content = normalized_body
-                # Update Content-Length header if present
-                if "Content-Length" in response:
-                    response["Content-Length"] = len(normalized_body)
-
-        return response
+        return normalize_html_response(response)
 
     def _capture_span(self, request: HttpRequest, response: HttpResponse, span_info: SpanInfo) -> None:
         """Create and collect a span from request/response data.
@@ -340,16 +320,14 @@ class DriftMiddleware:
             if isinstance(content, bytes) and len(content) > 0:
                 response_body = content
 
-        # Normalize CSRF tokens in HTML responses for consistent record/replay comparison
+        # Normalize HTML responses for consistent record/replay comparison
         # This only affects what is stored in the span, not what the browser receives
         if response_body:
-            content_type = response_headers.get("Content-Type", "")
-            content_encoding = response_headers.get("Content-Encoding", "").lower()
-            # Skip normalization for compressed responses - decoding gzip/deflate as UTF-8 would corrupt the body
-            if "text/html" in content_type.lower() and (not content_encoding or content_encoding == "identity"):
-                from .csrf_utils import normalize_csrf_in_body
+            from .html_utils import normalize_html_body
 
-                response_body = normalize_csrf_in_body(response_body)
+            content_type = response_headers.get("Content-Type", "")
+            content_encoding = response_headers.get("Content-Encoding", "")
+            response_body = normalize_html_body(response_body, content_type, content_encoding)
 
         output_value = build_output_value(
             status_code,

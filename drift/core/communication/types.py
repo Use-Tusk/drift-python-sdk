@@ -379,6 +379,8 @@ def extract_response_data(struct: Any) -> dict[str, Any]:
 
     The CLI returns response data wrapped in a Struct with a "response" field.
     """
+    from ..protobuf_utils import value_to_python
+
     try:
         # Handle betterproto dict-like struct
         if hasattr(struct, "items"):
@@ -391,8 +393,8 @@ def extract_response_data(struct: Any) -> dict[str, Any]:
         if hasattr(struct, "fields"):
             fields = struct.fields
             if "response" in fields:
-                return _value_to_python(fields["response"])
-            return {k: _value_to_python(v) for k, v in fields.items()}
+                return value_to_python(fields["response"])
+            return {k: value_to_python(v) for k, v in fields.items()}
 
         # Direct dict access
         if isinstance(struct, dict):
@@ -403,20 +405,3 @@ def extract_response_data(struct: Any) -> dict[str, Any]:
         return {}
     except Exception:
         return {}
-
-
-def _value_to_python(value: Any) -> Any:
-    """Convert a protobuf Value to Python native type."""
-    if hasattr(value, "null_value"):
-        return None
-    if hasattr(value, "number_value"):
-        return value.number_value
-    if hasattr(value, "string_value"):
-        return value.string_value
-    if hasattr(value, "bool_value"):
-        return value.bool_value
-    if hasattr(value, "struct_value"):
-        return {k: _value_to_python(v) for k, v in value.struct_value.fields.items()}
-    if hasattr(value, "list_value"):
-        return [_value_to_python(v) for v in value.list_value.values]
-    return value
