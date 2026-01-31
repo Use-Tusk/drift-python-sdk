@@ -281,9 +281,9 @@ class TestNormalizeHtmlResponse:
 
     def test_handles_response_without_content(self):
         """Response without content attribute should be returned unchanged."""
+        # spec=["get"] ensures mock only has 'get' attribute, no 'content'
         response = MagicMock(spec=["get"])
         response.get.return_value = "text/html"
-        del response.content  # Remove content attribute
 
         result = normalize_html_response(response)
 
