@@ -3,6 +3,7 @@
 from django.urls import path
 from views import (
     create_post,
+    csrf_form,
     delete_post,
     get_activity,
     get_post,
@@ -19,4 +20,5 @@ urlpatterns = [
     path("api/post/<int:post_id>", get_post, name="get_post"),
     path("api/post/<int:post_id>/delete", delete_post, name="delete_post"),
     path("api/activity", get_activity, name="get_activity"),
+    path("api/csrf-form", csrf_form, name="csrf_form"),
 ]

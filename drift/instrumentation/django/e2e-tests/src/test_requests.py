@@ -22,4 +22,7 @@ if __name__ == "__main__":
     )
     make_request("DELETE", "/api/post/1/delete")
 
+    # Test CSRF token normalization
+    make_request("GET", "/api/csrf-form")
+
     print_request_summary()
