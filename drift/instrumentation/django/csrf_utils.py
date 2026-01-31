@@ -34,7 +34,7 @@ def normalize_csrf_in_body(body: bytes | None) -> bytes | None:
         return body
 
     try:
-        body_str = body.decode("utf-8", errors="ignore")
+        body_str = body.decode("utf-8")
 
         # Pattern 1: Hidden input fields with csrfmiddlewaretoken
         # <input type="hidden" name="csrfmiddlewaretoken" value="ABC123...">

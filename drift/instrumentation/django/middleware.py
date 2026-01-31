@@ -283,6 +283,11 @@ class DriftMiddleware:
         if "text/html" not in content_type.lower():
             return response
 
+        # Skip normalization for compressed responses - decoding gzip/deflate as UTF-8 would corrupt the body
+        content_encoding = response.get("Content-Encoding", "").lower()
+        if content_encoding and content_encoding != "identity":
+            return response
+
         # Get response body and normalize CSRF tokens
         if hasattr(response, "content") and response.content:
             from .csrf_utils import normalize_csrf_in_body
@@ -338,8 +343,10 @@ class DriftMiddleware:
         # Normalize CSRF tokens in HTML responses for consistent record/replay comparison
         # This only affects what is stored in the span, not what the browser receives
         if response_body:
-            content_type = dict(response.items()).get("Content-Type", "") if hasattr(response, "items") else ""
-            if "text/html" in content_type.lower():
+            content_type = response_headers.get("Content-Type", "")
+            content_encoding = response_headers.get("Content-Encoding", "").lower()
+            # Skip normalization for compressed responses - decoding gzip/deflate as UTF-8 would corrupt the body
+            if "text/html" in content_type.lower() and (not content_encoding or content_encoding == "identity"):
                 from .csrf_utils import normalize_csrf_in_body
 
                 response_body = normalize_csrf_in_body(response_body)
