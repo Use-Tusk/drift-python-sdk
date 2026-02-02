@@ -79,24 +79,13 @@ class PsycopgInstrumentation(InstrumentationBase):
             # Create server cursor factory for named cursors (conn.cursor(name="..."))
             server_cursor_factory = instrumentation._create_server_cursor_factory(sdk)
 
-            # In REPLAY mode, try to connect but fall back to mock connection if DB is unavailable
+            # In REPLAY mode, skip real DB connection entirely - use MockConnection directly
+            # This enables true dependency-free replay without requiring a database server
             if sdk.mode == TuskDriftMode.REPLAY:
-                try:
-                    kwargs["cursor_factory"] = cursor_factory
-                    if user_row_factory is not None:
-                        kwargs["row_factory"] = user_row_factory
-                    connection = original_connect(*args, **kwargs)
-                    # Set server cursor factory on the connection for named cursors
-                    if server_cursor_factory:
-                        connection.server_cursor_factory = server_cursor_factory
-                    logger.info("[PATCHED_CONNECT] REPLAY mode: Successfully connected to database (psycopg3)")
-                    return connection
-                except Exception as e:
-                    logger.info(
-                        f"[PATCHED_CONNECT] REPLAY mode: Database connection failed ({e}), using mock connection (psycopg3)"
-                    )
-                    # Return mock connection that doesn't require a real database
-                    return MockConnection(sdk, instrumentation, cursor_factory, row_factory=user_row_factory)
+                logger.info(
+                    "[PATCHED_CONNECT] REPLAY mode: Using MockConnection (no real DB connection needed, psycopg3)"
+                )
+                return MockConnection(sdk, instrumentation, cursor_factory, row_factory=user_row_factory)
 
             # In RECORD mode, always require real connection
             kwargs["cursor_factory"] = cursor_factory
