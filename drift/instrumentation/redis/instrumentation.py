@@ -82,6 +82,101 @@ class RedisInstrumentation(InstrumentationBase):
             redis_class.execute_command = patched_execute_command
             logger.debug("redis.Redis.execute_command instrumented")
 
+        # Patch Connection.connect() to be a no-op in REPLAY mode
+        # This enables true dependency-free replay without requiring a Redis server
+        try:
+            from redis.connection import Connection
+
+            original_connect = Connection.connect
+            original_disconnect = Connection.disconnect
+            original_can_read = Connection.can_read
+            original_send_command = Connection.send_command
+            original_read_response = Connection.read_response
+
+            def patched_connection_connect(conn_self, *args, **kwargs):
+                """Patched Connection.connect - no-op in REPLAY mode."""
+                sdk = TuskDrift.get_instance()
+                if sdk.mode == TuskDriftMode.REPLAY:
+                    # Mark as "connected" without actually connecting
+                    conn_self._connected = True
+                    logger.debug("[REDIS] REPLAY mode: Skipping real connection (no Redis server needed)")
+                    return
+                return original_connect(conn_self, *args, **kwargs)
+
+            def patched_connection_disconnect(conn_self, *args, **kwargs):
+                """Patched Connection.disconnect - no-op in REPLAY mode."""
+                sdk = TuskDrift.get_instance()
+                if sdk.mode == TuskDriftMode.REPLAY:
+                    conn_self._connected = False
+                    return
+                return original_disconnect(conn_self, *args, **kwargs)
+
+            def patched_connection_can_read(conn_self, timeout=0):
+                """Patched Connection.can_read - returns False in REPLAY mode."""
+                sdk = TuskDrift.get_instance()
+                if sdk.mode == TuskDriftMode.REPLAY:
+                    return False
+                return original_can_read(conn_self, timeout)
+
+            def patched_connection_send_command(conn_self, *args, **kwargs):
+                """Patched Connection.send_command - no-op in REPLAY mode."""
+                sdk = TuskDrift.get_instance()
+                if sdk.mode == TuskDriftMode.REPLAY:
+                    # In REPLAY mode, execute_command handles mocking before send_command is called
+                    # This is a safety fallback in case something bypasses execute_command
+                    return
+                return original_send_command(conn_self, *args, **kwargs)
+
+            def patched_connection_read_response(conn_self, *args, **kwargs):
+                """Patched Connection.read_response - returns None in REPLAY mode."""
+                sdk = TuskDrift.get_instance()
+                if sdk.mode == TuskDriftMode.REPLAY:
+                    # In REPLAY mode, execute_command handles mocking before read_response is called
+                    # This is a safety fallback in case something bypasses execute_command
+                    return None
+                return original_read_response(conn_self, *args, **kwargs)
+
+            Connection.connect = patched_connection_connect
+            Connection.disconnect = patched_connection_disconnect
+            Connection.can_read = patched_connection_can_read
+            Connection.send_command = patched_connection_send_command
+            Connection.read_response = patched_connection_read_response
+            logger.info("[REDIS] Connection methods patched for dependency-free REPLAY mode")
+
+            # Also patch async Connection if available
+            try:
+                from redis.asyncio.connection import Connection as AsyncConnection
+
+                original_async_connect = AsyncConnection.connect
+                original_async_disconnect = AsyncConnection.disconnect
+
+                async def patched_async_connection_connect(conn_self, *args, **kwargs):
+                    """Patched async Connection.connect - no-op in REPLAY mode."""
+                    sdk = TuskDrift.get_instance()
+                    if sdk.mode == TuskDriftMode.REPLAY:
+                        conn_self._connected = True
+                        logger.debug("[REDIS] REPLAY mode: Skipping real async connection")
+                        return
+                    return await original_async_connect(conn_self, *args, **kwargs)
+
+                async def patched_async_connection_disconnect(conn_self, *args, **kwargs):
+                    """Patched async Connection.disconnect - no-op in REPLAY mode."""
+                    sdk = TuskDrift.get_instance()
+                    if sdk.mode == TuskDriftMode.REPLAY:
+                        conn_self._connected = False
+                        return
+                    return await original_async_disconnect(conn_self, *args, **kwargs)
+
+                AsyncConnection.connect = patched_async_connection_connect
+                AsyncConnection.disconnect = patched_async_connection_disconnect
+                logger.debug("[REDIS] Async connection methods patched for REPLAY mode")
+            except ImportError:
+                logger.debug("[REDIS] redis.asyncio.connection not available, skipping async connection patching")
+        except ImportError as e:
+            logger.warning(f"[REDIS] Could not patch Connection class: {e}")
+        except Exception as e:
+            logger.warning(f"[REDIS] Error patching Connection: {e}")
+
         # Patch Pipeline.execute
         try:
             from redis.client import Pipeline
