@@ -14,7 +14,7 @@ from opentelemetry.trace import Status
 from opentelemetry.trace import StatusCode as OTelStatusCode
 
 from ...core.drift_sdk import TuskDrift
-from ...core.json_schema_helper import JsonSchemaHelper
+from ...core.json_schema_helper import JsonSchemaHelper, SchemaMerge
 from ...core.mode_utils import handle_record_mode, handle_replay_mode
 from ...core.tracing import TdSpanAttributes
 from ...core.tracing.span_utils import CreateSpanOptions, SpanUtils
@@ -1468,7 +1468,21 @@ class PsycopgInstrumentation(InstrumentationBase):
             input_value: The input data dictionary (query, parameters, etc.)
             output_value: The output data dictionary (rows, rowcount, error, etc.)
         """
-        input_result = JsonSchemaHelper.generate_schema_and_hash(input_value, {})
+        # IMPORTANT: Tell the exporter (otel_converter) how to generate schema + hashes.
+        # The exporter recomputes the schema/hashes at export time from td.input_value and td.input_schema_merges.
+        # Mark parameters as match_importance=0.0 so non-deterministic values (e.g. timestamps) don't prevent mock matching.
+        span.set_attribute(
+            TdSpanAttributes.INPUT_SCHEMA_MERGES,
+            json.dumps({"parameters": {"match_importance": 0.0}}),
+        )
+
+        # Set match_importance=0 for parameters to allow fuzzy matching on query text
+        # This handles non-deterministic values like timestamps while still exact-matching
+        # deterministic values like IDs (exact hash match takes priority over reduced hash)
+        input_result = JsonSchemaHelper.generate_schema_and_hash(
+            input_value,
+            {"parameters": SchemaMerge(match_importance=0.0)},
+        )
         output_result = JsonSchemaHelper.generate_schema_and_hash(output_value, {})
 
         span.set_attribute(TdSpanAttributes.INPUT_VALUE, json.dumps(input_value))
@@ -1614,6 +1628,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                 submodule_name="query",
                 input_value=input_value,
                 kind=SpanKind.CLIENT,
+                input_schema_merges={"parameters": SchemaMerge(match_importance=0.0)},
                 is_pre_app_start=not sdk.app_ready,
             )
 
