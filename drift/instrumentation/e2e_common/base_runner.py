@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -42,6 +43,7 @@ class E2ETestRunnerBase:
     - Trace recording and verification
     - Tusk CLI test execution
     - Result parsing and reporting
+    - Benchmark mode (BENCHMARKS env var)
     """
 
     def __init__(self, app_port: int = 8000):
@@ -130,6 +132,92 @@ class E2ETestRunnerBase:
 
         self.log("Setup complete", Colors.GREEN)
 
+    def _start_app(self, mode: str) -> bool:
+        """Start the application with the given TUSK_DRIFT_MODE and wait for it to be ready.
+
+        Returns True if the app started successfully, False otherwise.
+        """
+        self.log(f"Starting application with TUSK_DRIFT_MODE={mode}", Colors.GREEN)
+        app_env = {**os.environ, "TUSK_DRIFT_MODE": mode, "PYTHONUNBUFFERED": "1"}
+
+        # Use a temporary file to capture app output for debugging.
+        # Note: Can't use context manager here - file must stay open for subprocess
+        # and be cleaned up later in cleanup(). Using delete=False + manual unlink.
+        self.app_log_file = tempfile.NamedTemporaryFile(mode="w+", suffix=".log", delete=False)  # noqa: SIM115
+
+        self.app_process = subprocess.Popen(
+            ["python", "src/app.py"],
+            env=app_env,
+            stdout=self.app_log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+
+        # Wait for app to be ready
+        self.log("Waiting for application to be ready...", Colors.BLUE)
+        try:
+            self.wait_for_service(
+                ["curl", "-fsS", f"http://localhost:{self.app_port}/health"],
+                timeout=30,
+            )
+            self.log("Application is ready", Colors.GREEN)
+
+            # Show early app output for diagnostics (SDK init messages, mode confirmation)
+            if self.app_log_file:
+                self.app_log_file.flush()
+                self.app_log_file.seek(0)
+                early_output = self.app_log_file.read(2048)
+                if early_output.strip():
+                    self.log(f"App startup output:\n{early_output.rstrip()}", Colors.YELLOW)
+
+            return True
+        except TimeoutError:
+            self.log("Application failed to become ready", Colors.RED)
+            if self.app_process:
+                self.app_process.terminate()
+                try:
+                    self.app_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.app_process.kill()
+                    self.app_process.wait()
+            # Read and display app output for debugging
+            if self.app_log_file:
+                self.app_log_file.flush()
+                self.app_log_file.seek(0)
+                app_output = self.app_log_file.read()
+                self.log(f"App output:\n{app_output}", Colors.YELLOW)
+            return False
+
+    def _stop_app(self):
+        """Stop the running application process and clean up the log file."""
+        self.log("Stopping application...", Colors.YELLOW)
+        if self.app_process:
+            self.app_process.terminate()
+            try:
+                self.app_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.app_process.kill()
+                self.app_process.wait()
+            self.app_process = None
+
+        if self.app_log_file:
+            try:
+                self.app_log_file.close()
+                os.unlink(self.app_log_file.name)
+            except OSError:
+                pass
+            self.app_log_file = None
+
+    def _run_test_requests(self, extra_env: dict | None = None) -> subprocess.CompletedProcess:
+        """Run test_requests.py and return the completed process result."""
+        env = {"PYTHONPATH": "/sdk"}
+        if extra_env:
+            env.update(extra_env)
+        return self.run_command(
+            ["python", "src/test_requests.py"],
+            env=env,
+        )
+
     def record_traces(self) -> bool:
         """Phase 2: Start app and record traces."""
         self.log("=" * 50, Colors.BLUE)
@@ -147,58 +235,14 @@ class E2ETestRunnerBase:
             for f in logs_dir.glob("*"):
                 f.unlink()
 
-        # Start application in RECORD mode
-        self.log("Starting application in RECORD mode...", Colors.GREEN)
-        env = {"TUSK_DRIFT_MODE": "RECORD", "PYTHONUNBUFFERED": "1"}
-
-        # Use a temporary file to capture app output for debugging.
-        # This avoids pipe buffer issues while still allowing diagnostics.
-        # Note: Can't use context manager here - file must stay open for subprocess
-        # and be cleaned up later in cleanup(). Using delete=False + manual unlink.
-        self.app_log_file = tempfile.NamedTemporaryFile(mode="w+", suffix=".log", delete=False)  # noqa: SIM115
-
-        self.app_process = subprocess.Popen(
-            ["python", "src/app.py"],
-            env={**os.environ, **env},
-            stdout=self.app_log_file,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-
-        # Wait for app to be ready
-        self.log("Waiting for application to be ready...", Colors.BLUE)
-        try:
-            self.wait_for_service(
-                ["curl", "-fsS", f"http://localhost:{self.app_port}/health"],
-                timeout=30,
-            )
-            self.log("Application is ready", Colors.GREEN)
-        except TimeoutError:
-            self.log("Application failed to become ready", Colors.RED)
-            if self.app_process:
-                self.app_process.terminate()
-                try:
-                    self.app_process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    self.app_process.kill()
-                    self.app_process.wait()
-            # Read and display app output for debugging
-            if self.app_log_file:
-                self.app_log_file.flush()
-                self.app_log_file.seek(0)
-                app_output = self.app_log_file.read()
-                self.log(f"App output:\n{app_output}", Colors.YELLOW)
+        if not self._start_app(mode="RECORD"):
             self.exit_code = 1
             return False
 
         # Execute test requests
         self.log("Executing test requests...", Colors.GREEN)
         try:
-            # Pass PYTHONPATH so test_requests.py can import from e2e_common
-            result = self.run_command(
-                ["python", "src/test_requests.py"],
-                env={"PYTHONPATH": "/sdk"},
-            )
+            result = self._run_test_requests()
             # Parse request count from output
             self._parse_request_count(result.stdout)
         except subprocess.CalledProcessError:
@@ -211,15 +255,7 @@ class E2ETestRunnerBase:
         time.sleep(3)
 
         # Stop application
-        self.log("Stopping application...", Colors.YELLOW)
-        if self.app_process:
-            self.app_process.terminate()
-            try:
-                self.app_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.app_process.kill()
-                self.app_process.wait()
-            self.app_process = None
+        self._stop_app()
 
         # Verify traces were created
         trace_files = list(traces_dir.glob("*.jsonl"))
@@ -415,9 +451,126 @@ class E2ETestRunnerBase:
         # Traces are kept in container for inspection
         self.log("Cleanup complete", Colors.GREEN)
 
+    # ── Benchmark mode ──────────────────────────────────────────────
+
+    def run_benchmarks(self):
+        """Run test_requests.py twice (DISABLED vs RECORD) and compare results."""
+        duration = os.environ.get("BENCHMARK_DURATION", "10")
+        warmup = os.environ.get("BENCHMARK_WARMUP", "3")
+        benchmark_env = {
+            "BENCHMARKS": os.environ.get("BENCHMARKS", "1"),
+            "BENCHMARK_DURATION": duration,
+            "BENCHMARK_WARMUP": warmup,
+        }
+        self.log(f"Benchmark config: duration={duration}s, warmup={warmup}s per endpoint", Colors.BLUE)
+
+        # Run 1: SDK disabled (baseline)
+        self.log("=" * 60, Colors.BLUE)
+        self.log("BASELINE (SDK DISABLED)", Colors.BLUE)
+        self.log("=" * 60, Colors.BLUE)
+
+        if not self._start_app(mode="DISABLED"):
+            self.log("Failed to start app in DISABLED mode", Colors.RED)
+            self.exit_code = 1
+            return
+
+        try:
+            baseline_result = self._run_test_requests(extra_env=benchmark_env)
+            baseline_output = baseline_result.stdout
+            print(baseline_output, end="")
+        except subprocess.CalledProcessError:
+            self.log("Benchmark test requests failed (DISABLED mode)", Colors.RED)
+            self.exit_code = 1
+            self._stop_app()
+            return
+
+        self._stop_app()
+
+        # Run 2: SDK enabled (RECORD mode)
+        self.log("")
+        self.log("=" * 60, Colors.BLUE)
+        self.log("WITH SDK (TUSK_DRIFT_MODE=RECORD)", Colors.BLUE)
+        self.log("=" * 60, Colors.BLUE)
+
+        if not self._start_app(mode="RECORD"):
+            self.log("Failed to start app in RECORD mode", Colors.RED)
+            self.exit_code = 1
+            return
+
+        try:
+            sdk_result = self._run_test_requests(extra_env=benchmark_env)
+            sdk_output = sdk_result.stdout
+            print(sdk_output, end="")
+        except subprocess.CalledProcessError:
+            self.log("Benchmark test requests failed (RECORD mode)", Colors.RED)
+            self.exit_code = 1
+            self._stop_app()
+            return
+
+        self._stop_app()
+
+        # Parse and compare
+        baseline = self._parse_benchmark_output(baseline_output)
+        sdk = self._parse_benchmark_output(sdk_output)
+        self._print_comparison(baseline, sdk)
+
+    def _parse_benchmark_output(self, output: str) -> dict[str, dict]:
+        """Parse Go-style benchmark lines and return {name: {ops: float, reliable: bool}}."""
+        results = {}
+        for line in output.split("\n"):
+            # Match: Benchmark_GET_/health   5200   961538 ns/op   1040.00 ops/s
+            # Optional trailing " (~)" marks unreliable (low iteration count)
+            m = re.match(r"(Benchmark_\S+)\s+\d+\s+\d+\s+ns/op\s+([\d.]+)\s+ops/s(\s+\(~\))?", line)
+            if m:
+                results[m.group(1)] = {
+                    "ops": float(m.group(2)),
+                    "reliable": m.group(3) is None,
+                }
+        return results
+
+    def _print_comparison(self, baseline: dict[str, dict], sdk: dict[str, dict]):
+        """Print a comparison table between baseline and SDK benchmark results."""
+        self.log("")
+        self.log("=" * 78, Colors.BLUE)
+        self.log("COMPARISON (negative = slower with SDK)  (~) = low iterations, unreliable", Colors.BLUE)
+        self.log("=" * 78, Colors.BLUE)
+        self.log(f"{'Benchmark':<40} {'Baseline':>12} {'Current':>12} {'Diff':>10}")
+        self.log("-" * 78)
+
+        all_names = sorted(set(list(baseline.keys()) + list(sdk.keys())))
+        for name in all_names:
+            base = baseline.get(name)
+            cur = sdk.get(name)
+
+            if base is None:
+                self.log(f"{name:<40} {'N/A':>12} {cur['ops']:>10.2f}/s {'':>10}")
+                continue
+            if cur is None:
+                self.log(f"{name:<40} {base['ops']:>10.2f}/s {'N/A':>12} {'':>10}")
+                continue
+
+            base_ops = base["ops"]
+            sdk_ops = cur["ops"]
+            reliable = base["reliable"] and cur["reliable"]
+
+            if base_ops > 0:
+                diff_pct = ((sdk_ops - base_ops) / base_ops) * 100
+            else:
+                diff_pct = 0.0
+
+            diff_str = f"{diff_pct:+.1f}%"
+            flag = "" if reliable else " (~)"
+            color = Colors.RED if diff_pct < -5 else Colors.YELLOW if diff_pct < 0 else Colors.GREEN
+            self.log(f"{name:<40} {base_ops:>10.2f}/s {sdk_ops:>10.2f}/s {diff_str:>10}{flag}", color)
+
     def run(self) -> int:
         """Run the full e2e test lifecycle."""
         try:
+            if os.environ.get('BENCHMARKS'):
+                self.setup()
+                self.run_benchmarks()
+                return self.exit_code
+
             self.setup()
 
             if not self.record_traces():
