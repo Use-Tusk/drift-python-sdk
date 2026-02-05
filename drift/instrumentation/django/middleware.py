@@ -105,6 +105,17 @@ class DriftMiddleware:
             logger.warning("[DJANGO_MIDDLEWARE] No replay_trace_id found in headers, proceeding without span")
             return self.get_response(request)
 
+        # Start time travel as early as possible (inbound request start) to ensure deterministic
+        # behavior for time-dependent code paths, especially cache key generation (e.g. django-cachalot).
+        root_timestamp = headers_lower.get("http_x_td_root_timestamp")
+        if root_timestamp:
+            try:
+                from drift.instrumentation.datetime.instrumentation import start_time_travel
+
+                start_time_travel(root_timestamp, trace_id=replay_trace_id)
+            except Exception as e:
+                logger.debug(f"[DJANGO_MIDDLEWARE] Failed to start time travel from x-td-root-timestamp: {e}")
+
         # Set replay trace context
         replay_token = replay_trace_id_context.set(replay_trace_id)
 

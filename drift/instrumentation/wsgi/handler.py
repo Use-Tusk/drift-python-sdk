@@ -142,6 +142,17 @@ def _handle_replay_request(
         # No trace context in REPLAY mode; proceed without span
         return original_wsgi_app(app, environ, start_response)
 
+    # Start time travel at inbound request start when provided by CLI.
+    # This prevents time drift before the first outbound span is matched (critical for cache keys).
+    root_timestamp = headers_lower.get("x-td-root-timestamp")
+    if root_timestamp:
+        try:
+            from drift.instrumentation.datetime.instrumentation import start_time_travel
+
+            start_time_travel(root_timestamp, trace_id=replay_trace_id)
+        except Exception as e:
+            logger.debug(f"[WSGI] Failed to start time travel from x-td-root-timestamp: {e}")
+
     # Set replay trace context
     replay_token = replay_trace_id_context.set(replay_trace_id)
 

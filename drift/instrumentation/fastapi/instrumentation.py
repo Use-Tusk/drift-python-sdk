@@ -131,6 +131,17 @@ async def _handle_replay_request(
 
     logger.debug(f"[FastAPIInstrumentation] Setting replay trace ID: {replay_trace_id}")
 
+    # Start time travel at inbound request start when provided by CLI.
+    # This prevents time drift before the first outbound span is matched (critical for cache keys).
+    root_timestamp = headers_lower.get("x-td-root-timestamp")
+    if root_timestamp:
+        try:
+            from drift.instrumentation.datetime.instrumentation import start_time_travel
+
+            start_time_travel(root_timestamp, trace_id=replay_trace_id)
+        except Exception as e:
+            logger.debug(f"[FastAPIInstrumentation] Failed to start time travel from x-td-root-timestamp: {e}")
+
     # Remove accept-encoding header to prevent compression during replay
     # (responses are stored decompressed, compression would double-compress)
     if "accept-encoding" in headers_lower:
