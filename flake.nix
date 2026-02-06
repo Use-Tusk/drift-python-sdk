@@ -39,6 +39,7 @@
         mkShell {
           buildInputs = [
             (python3.withPackages (p: with p; [ ]))
+            uv
           ];
         }
       ) defaultSystems;

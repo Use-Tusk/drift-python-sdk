@@ -13,9 +13,9 @@ import requests
 BASE_URL = "http://localhost:8000"
 _request_count = 0
 
-BENCHMARK_MODE = os.environ.get('BENCHMARKS', '') != ''
-BENCHMARK_DURATION = int(os.environ.get('BENCHMARK_DURATION', '10'))
-BENCHMARK_WARMUP = int(os.environ.get('BENCHMARK_WARMUP', '3'))
+BENCHMARK_MODE = os.environ.get("BENCHMARKS", "") != ""
+BENCHMARK_DURATION = int(os.environ.get("BENCHMARK_DURATION", "10"))
+BENCHMARK_WARMUP = int(os.environ.get("BENCHMARK_WARMUP", "3"))
 
 # Minimum iterations required for a result to be considered reliable
 _MIN_RELIABLE_ITERATIONS = 30
@@ -88,7 +88,9 @@ def _benchmark_request(method, endpoint, **kwargs):
                 if iterations > 0:
                     ns_per_op = elapsed_ns // iterations
                     ops_per_sec = iterations / (elapsed_ns / 1_000_000_000)
-                    print(f"{name:<40} {iterations:>8} {ns_per_op:>15} ns/op {ops_per_sec:>12.2f} ops/s (partial, {errors} errors)")
+                    print(
+                        f"{name:<40} {iterations:>8} {ns_per_op:>15} ns/op {ops_per_sec:>12.2f} ops/s (partial, {errors} errors)"
+                    )
                 else:
                     print(f"{name:<40} FAILED ({errors} errors, 0 successful iterations)")
                 return last_resp

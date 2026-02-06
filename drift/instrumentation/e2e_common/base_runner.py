@@ -566,7 +566,7 @@ class E2ETestRunnerBase:
     def run(self) -> int:
         """Run the full e2e test lifecycle."""
         try:
-            if os.environ.get('BENCHMARKS'):
+            if os.environ.get("BENCHMARKS"):
                 self.setup()
                 self.run_benchmarks()
                 return self.exit_code
