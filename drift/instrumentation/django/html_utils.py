@@ -62,6 +62,17 @@ def normalize_csrf_in_body(body: bytes | None) -> bytes | None:
             flags=re.IGNORECASE,
         )
 
+        # Pattern 3: JavaScript CSRF token assignment (e.g., DRF Swagger UI)
+        # request.headers["X-CSRFTOKEN"] = "ABC123...";
+        # Also handles single quotes and X-CSRFToken variants
+        csrf_js_pattern = r'(headers\[["\']X-CSRFTOKEN["\']\]\s*=\s*["\'])[^"\']+(["\'])'
+        body_str = re.sub(
+            csrf_js_pattern,
+            rf"\g<1>{CSRF_PLACEHOLDER}\2",
+            body_str,
+            flags=re.IGNORECASE,
+        )
+
         return body_str.encode("utf-8")
 
     except Exception as e:
