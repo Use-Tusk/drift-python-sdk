@@ -172,6 +172,68 @@ class TestNormalizeCsrfInBody:
         result = normalize_csrf_in_body(html)
         assert result == html
 
+    def test_normalizes_js_csrf_header_assignment_double_quotes(self):
+        """JavaScript CSRF header assignment with double quotes should be normalized."""
+        html = b"""<script>
+    const requestInterceptor = (request) => {
+      request.headers["X-CSRFTOKEN"] = "7180AeP5yScQ72FIE7z8tCtrrQc32Sgaqpqgk8ktVXeBXw7a5qDgXoGgLiWF22Ew";
+      return request;
+    };
+    </script>"""
+        result = normalize_csrf_in_body(html)
+        assert result is not None
+        assert CSRF_PLACEHOLDER.encode() in result
+        assert b"7180AeP5yScQ72FIE7z8tCtrrQc32Sgaqpqgk8ktVXeBXw7a5qDgXoGgLiWF22Ew" not in result
+
+    def test_normalizes_js_csrf_header_assignment_single_quotes(self):
+        """JavaScript CSRF header assignment with single quotes should be normalized."""
+        html = b"""<script>
+    request.headers['X-CSRFTOKEN'] = 'someToken123';
+    </script>"""
+        result = normalize_csrf_in_body(html)
+        assert result is not None
+        assert CSRF_PLACEHOLDER.encode() in result
+        assert b"someToken123" not in result
+
+    def test_normalizes_js_csrf_header_case_insensitive(self):
+        """JavaScript CSRF header matching should be case-insensitive (X-CSRFToken)."""
+        html = b"""<script>
+    request.headers["X-CSRFToken"] = "myToken456";
+    </script>"""
+        result = normalize_csrf_in_body(html)
+        assert result is not None
+        assert CSRF_PLACEHOLDER.encode() in result
+        assert b"myToken456" not in result
+
+    def test_normalizes_js_csrf_header_preserves_surrounding_js(self):
+        """Surrounding JavaScript should be preserved when normalizing CSRF header."""
+        html = b"""<script>
+    const requestInterceptor = (request) => {
+      if (!["GET", undefined].includes(request.method)) {
+        request.headers["X-CSRFTOKEN"] = "tokenABC";
+      }
+      return request;
+    };
+    </script>"""
+        result = normalize_csrf_in_body(html)
+        assert result is not None
+        assert b"requestInterceptor" in result
+        assert b"return request" in result
+        assert CSRF_PLACEHOLDER.encode() in result
+        assert b"tokenABC" not in result
+
+    def test_normalizes_both_form_and_js_csrf_tokens(self):
+        """Both form hidden inputs and JS CSRF header assignments should be normalized."""
+        html = b"""<html>
+    <form><input name="csrfmiddlewaretoken" value="formToken123"></form>
+    <script>request.headers["X-CSRFTOKEN"] = "jsToken456";</script>
+    </html>"""
+        result = normalize_csrf_in_body(html)
+        assert result is not None
+        assert result.count(CSRF_PLACEHOLDER.encode()) == 2
+        assert b"formToken123" not in result
+        assert b"jsToken456" not in result
+
 
 class TestNormalizeHtmlBody:
     """Tests for normalize_html_body function."""
