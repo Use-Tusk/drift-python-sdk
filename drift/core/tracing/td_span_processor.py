@@ -122,19 +122,6 @@ class TdSpanProcessor(SpanProcessor):
             )
             return
 
-        # Skip spans already exported by framework middleware (e.g., Django _capture_span).
-        # Those middlewares create a full CleanSpanData with HTTP body data and export it
-        # directly via sdk.collect_span(). Processing them again here would produce a
-        # duplicate root span with empty inputValue/outputValue.
-        attributes = dict(span.attributes) if span.attributes else {}
-        from .td_attributes import TdSpanAttributes
-
-        if attributes.get(TdSpanAttributes.EXPORTED_BY_INSTRUMENTATION):
-            logger.debug(
-                f"[TdSpanProcessor] Skipping span '{span.name}' - already exported by instrumentation"
-            )
-            return
-
         try:
             # Convert OTel span to CleanSpanData
             logger.debug(f"[TdSpanProcessor] Converting span '{span.name}' to CleanSpanData")
