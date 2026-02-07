@@ -39,5 +39,11 @@ class TdSpanAttributes:
     TRANSFORM_METADATA = "td.transform_metadata"
     STACK_TRACE = "td.stack_trace"
 
+    # Export control
+    # Set by framework middleware (e.g., Django) after exporting a full span
+    # via sdk.collect_span(). Tells TdSpanProcessor.on_end() to skip the span
+    # so it doesn't produce a duplicate empty root span.
+    EXPORTED_BY_INSTRUMENTATION = "td.exported_by_instrumentation"
+
     # Replay mode
     REPLAY_TRACE_ID = "td.replay_trace_id"

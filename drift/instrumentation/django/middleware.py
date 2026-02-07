@@ -457,6 +457,10 @@ class DriftMiddleware:
 
             sdk.collect_span(clean_span)
 
+            # Mark OTel span so TdSpanProcessor.on_end() skips it - we already
+            # exported the full span with HTTP body data above.
+            span_info.span.set_attribute(TdSpanAttributes.EXPORTED_BY_INSTRUMENTATION, True)
+
     def _capture_error_span(self, request: HttpRequest, exception: Exception, span_info: SpanInfo) -> None:
         """Create and collect an error span.
 
@@ -553,3 +557,7 @@ class DriftMiddleware:
         )
 
         sdk.collect_span(clean_span)
+
+        # Mark OTel span so TdSpanProcessor.on_end() skips it - we already
+        # exported the full error span above.
+        span_info.span.set_attribute(TdSpanAttributes.EXPORTED_BY_INSTRUMENTATION, True)
