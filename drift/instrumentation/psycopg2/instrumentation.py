@@ -49,7 +49,15 @@ class MockConnection:
     def __init__(self, sdk: TuskDrift, instrumentation: Psycopg2Instrumentation, cursor_factory):
         self.sdk = sdk
         self.instrumentation = instrumentation
+
+        # Set default cursor factory if None (needed for django_prometheus compatibility)
+        # django_prometheus does: conn.cursor_factory or Cursor() which fails if cursor_factory is None
+        if cursor_factory is None:
+            from psycopg2.extensions import cursor as DefaultCursor
+
+            cursor_factory = DefaultCursor
         self.cursor_factory = cursor_factory
+
         self.closed = False
         self.autocommit = False
 
@@ -440,21 +448,11 @@ class Psycopg2Instrumentation(InstrumentationBase):
                 logger.debug("[PATCHED_CONNECT] SDK disabled, passing through")
                 return original_connect(*args, **kwargs)
 
-            # In REPLAY mode, try to connect but fall back to mock connection if DB is unavailable
+            # In REPLAY mode, skip real DB connection entirely - use MockConnection directly
+            # This enables true dependency-free replay without requiring a database server
             if sdk.mode == TuskDriftMode.REPLAY:
-                try:
-                    logger.debug("[PATCHED_CONNECT] REPLAY mode: Attempting real DB connection...")
-                    connection = original_connect(*args, **kwargs)
-                    logger.info("[PATCHED_CONNECT] REPLAY mode: Successfully connected to real database")
-                    # Wrap connection to intercept cursor() calls
-                    return InstrumentedConnection(connection, instrumentation, sdk)
-                except Exception as e:
-                    logger.info(
-                        f"[PATCHED_CONNECT] REPLAY mode: Database connection failed ({e}), using mock connection"
-                    )
-                    # Return mock connection that doesn't require a real database
-                    # MockConnection already handles cursor_factory correctly in its cursor() method
-                    return MockConnection(sdk, instrumentation, None)
+                logger.info("[PATCHED_CONNECT] REPLAY mode: Using MockConnection (no real DB connection needed)")
+                return MockConnection(sdk, instrumentation, None)
 
             # In RECORD mode, always require real connection
             logger.debug("[PATCHED_CONNECT] RECORD mode: Connecting to database...")
