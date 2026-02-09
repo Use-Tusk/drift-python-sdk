@@ -9,7 +9,7 @@ places to run tests.
 
 The simplest way to get started it simply
 ```
-./run-all-e2e-tests.sh
+./run-all-benchmarks.sh
 ```
 or to run a single (or a few) instrumentations,
 ```
