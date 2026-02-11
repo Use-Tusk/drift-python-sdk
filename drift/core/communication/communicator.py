@@ -612,31 +612,7 @@ class ProtobufCommunicator:
             return {}
 
         try:
-
-            def value_to_python(value):
-                """Convert protobuf Value to Python type."""
-                if hasattr(value, "null_value"):
-                    return None
-                elif hasattr(value, "number_value"):
-                    return value.number_value
-                elif hasattr(value, "string_value"):
-                    return value.string_value
-                elif hasattr(value, "bool_value"):
-                    return value.bool_value
-                elif hasattr(value, "struct_value") and value.struct_value:
-                    return struct_to_dict(value.struct_value)
-                elif hasattr(value, "list_value") and value.list_value:
-                    return [value_to_python(v) for v in value.list_value.values]
-                return None
-
-            def struct_to_dict(s):
-                """Convert protobuf Struct to Python dict."""
-                if not hasattr(s, "fields"):
-                    return {}
-                result = {}
-                for key, value in s.fields.items():
-                    result[key] = value_to_python(value)
-                return result
+            from ..protobuf_utils import struct_to_dict
 
             data = struct_to_dict(struct)
 
