@@ -243,7 +243,7 @@ class PsycopgInstrumentation(InstrumentationBase):
         # Replace the classmethod with our patched version
         AsyncConnection.connect = classmethod(
             lambda cls, conninfo="", **kwargs: patched_async_connect(conninfo, **kwargs)
-        )  # type: ignore[method-assign]
+        )
         logger.info("psycopg.AsyncConnection.connect instrumented")
 
         # Also patch AsyncConnectionPool to inject cursor_factory
@@ -281,7 +281,7 @@ class PsycopgInstrumentation(InstrumentationBase):
 
             return original_init(pool_self, conninfo, **kwargs)
 
-        AsyncConnectionPool.__init__ = patched_init  # type: ignore[method-assign]
+        AsyncConnectionPool.__init__ = patched_init
         logger.info("psycopg_pool.AsyncConnectionPool.__init__ instrumented")
 
     def _create_async_cursor_factory(self, sdk: TuskDrift, base_factory=None):
@@ -296,7 +296,7 @@ class PsycopgInstrumentation(InstrumentationBase):
             from psycopg import AsyncCursor as BaseAsyncCursor
         except ImportError:
             logger.warning("[ASYNC_CURSOR_FACTORY] Could not import psycopg.AsyncCursor")
-            BaseAsyncCursor = object  # type: ignore
+            BaseAsyncCursor = object
 
         base = base_factory or BaseAsyncCursor
 

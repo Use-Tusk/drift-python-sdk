@@ -543,6 +543,7 @@ class E2ETestRunnerBase:
             cur = sdk.get(name)
 
             if base is None:
+                assert cur is not None
                 self.log(f"{name:<40} {'N/A':>12} {cur['ops']:>10.2f}/s {'':>10}")
                 continue
             if cur is None:
