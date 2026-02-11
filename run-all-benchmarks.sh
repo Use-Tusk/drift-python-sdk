@@ -1,13 +1,19 @@
 #!/bin/bash
 
-# Script to run benchmarks for all Python SDK E2E instrumentation tests serially.
-# Each instrumentation runs with BENCHMARKS=1, producing a comparison of
+# Script to run benchmarks for all Python SDK E2E instrumentation and stack tests serially.
+# Each test runs with BENCHMARKS=1, producing a comparison of
 # SDK disabled vs enabled (RECORD mode) with Go-style ns/op stats.
+#
+# Test types:
+#   - Instrumentation: Single instrumentation benchmarks (e.g., flask, fastapi, django)
+#   - Stack: Multi-instrumentation integration benchmarks (e.g., django-postgres, fastapi-postgres)
 #
 # Usage:
 #   ./run-all-benchmarks.sh                     # Run all, 10s per endpoint
 #   ./run-all-benchmarks.sh -d 20               # Run all, 20s per endpoint
 #   ./run-all-benchmarks.sh -f flask,fastapi     # Run only flask and fastapi
+#   ./run-all-benchmarks.sh --stack-only         # Run only stack-test benchmarks
+#   ./run-all-benchmarks.sh -f stack:django-postgres  # Run a single stack benchmark
 #   ./run-all-benchmarks.sh -h                  # Show help
 
 set -e
@@ -16,6 +22,8 @@ set -e
 BENCHMARK_DURATION=${BENCHMARK_DURATION:-10}
 BENCHMARK_WARMUP=${BENCHMARK_WARMUP:-3}
 FILTER=""
+RUN_INSTRUMENTATION=true
+RUN_STACK=true
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -27,13 +35,15 @@ NC='\033[0m' # No Color
 usage() {
   echo "Usage: $0 [OPTIONS]"
   echo ""
-  echo "Run SDK benchmarks for all (or selected) instrumentations serially."
+  echo "Run SDK benchmarks for all (or selected) instrumentations and stack tests serially."
   echo ""
   echo "Options:"
   echo "  -d, --duration N       Seconds per endpoint for timed loop (default: 10)"
   echo "  -w, --warmup N         Seconds of warmup per endpoint before timing (default: 3)"
-  echo "  -f, --filter LIST      Comma-separated list of instrumentations to benchmark"
-  echo "                         e.g. flask,fastapi,django"
+  echo "  -f, --filter LIST      Comma-separated list of benchmarks to run"
+  echo "                         e.g. flask,fastapi,stack:django-postgres"
+  echo "  --instrumentation-only Run only single-instrumentation benchmarks"
+  echo "  --stack-only           Run only stack-test benchmarks"
   echo "  -h, --help             Show this help message"
   echo ""
   echo "Environment variables:"
@@ -42,10 +52,12 @@ usage() {
   echo "  TUSK_CLI_VERSION       CLI version to use in Docker builds"
   echo ""
   echo "Examples:"
-  echo "  $0                           # Benchmark all instrumentations"
+  echo "  $0                           # Benchmark all instrumentations and stack tests"
   echo "  $0 -d 20                     # 20s per endpoint"
   echo "  $0 -d 30 -w 5               # 30s timed, 5s warmup"
   echo "  $0 -f flask,fastapi          # Only benchmark flask and fastapi"
+  echo "  $0 --stack-only              # Only benchmark stack tests"
+  echo "  $0 -f stack:django-postgres  # Only benchmark django-postgres stack test"
 }
 
 # Parse arguments
@@ -75,6 +87,16 @@ while [[ $# -gt 0 ]]; do
       FILTER="$2"
       shift 2
       ;;
+    --instrumentation-only)
+      RUN_INSTRUMENTATION=true
+      RUN_STACK=false
+      shift
+      ;;
+    --stack-only)
+      RUN_INSTRUMENTATION=false
+      RUN_STACK=true
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -100,19 +122,34 @@ fi
 # Get the directory where this script is located (SDK root)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Discover all e2e test run.sh scripts
-ALL_SCRIPTS=($(find "$SCRIPT_DIR/drift/instrumentation" -path "*/e2e-tests/run.sh" -type f | sort))
+# Discover test scripts based on flags
+E2E_SCRIPTS=()
+STACK_SCRIPTS=()
+
+if [ "$RUN_INSTRUMENTATION" = true ]; then
+  E2E_SCRIPTS=($(find "$SCRIPT_DIR/drift/instrumentation" -path "*/e2e-tests/run.sh" -type f | sort))
+fi
+
+if [ "$RUN_STACK" = true ]; then
+  STACK_SCRIPTS=($(find "$SCRIPT_DIR/drift/stack-tests" -mindepth 2 -maxdepth 2 -name "run.sh" -type f 2>/dev/null | sort))
+fi
+
+ALL_SCRIPTS=("${E2E_SCRIPTS[@]}" "${STACK_SCRIPTS[@]}")
 
 if [ ${#ALL_SCRIPTS[@]} -eq 0 ]; then
-  echo -e "${RED}No e2e test scripts found!${NC}"
+  echo -e "${RED}No benchmark scripts found!${NC}"
   exit 1
 fi
 
-# Apply filter if provided
+# Extract names and apply filter
 RUN_SCRIPTS=()
 RUN_NAMES=()
 for script in "${ALL_SCRIPTS[@]}"; do
-  NAME=$(echo "$script" | sed -E 's|.*/instrumentation/([^/]+)/e2e-tests/run.sh|\1|')
+  if [[ "$script" == *"/stack-tests/"* ]]; then
+    NAME=$(echo "$script" | sed -E 's|.*/stack-tests/([^/]+)/run.sh|stack:\1|')
+  else
+    NAME=$(echo "$script" | sed -E 's|.*/instrumentation/([^/]+)/e2e-tests/run.sh|\1|')
+  fi
   if [ -n "$FILTER" ]; then
     # Check if NAME is in the comma-separated filter list
     if echo ",$FILTER," | grep -q ",$NAME,"; then
@@ -128,8 +165,17 @@ done
 NUM_TESTS=${#RUN_SCRIPTS[@]}
 
 if [ $NUM_TESTS -eq 0 ]; then
-  echo -e "${RED}No matching instrumentations found for filter: $FILTER${NC}"
-  echo "Available: $(printf '%s\n' "${ALL_SCRIPTS[@]}" | sed -E 's|.*/instrumentation/([^/]+)/e2e-tests/run.sh|\1|' | tr '\n' ' ')"
+  echo -e "${RED}No matching benchmarks found for filter: $FILTER${NC}"
+  # Show all available names
+  ALL_NAMES=()
+  for script in "${ALL_SCRIPTS[@]}"; do
+    if [[ "$script" == *"/stack-tests/"* ]]; then
+      ALL_NAMES+=($(echo "$script" | sed -E 's|.*/stack-tests/([^/]+)/run.sh|stack:\1|'))
+    else
+      ALL_NAMES+=($(echo "$script" | sed -E 's|.*/instrumentation/([^/]+)/e2e-tests/run.sh|\1|'))
+    fi
+  done
+  echo "Available: ${ALL_NAMES[*]}"
   exit 1
 fi
 
@@ -137,10 +183,10 @@ echo ""
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}Python SDK Benchmarks${NC}"
 echo -e "${BLUE}========================================${NC}"
-echo "Instrumentations: ${RUN_NAMES[*]}"
+echo "Benchmarks: ${RUN_NAMES[*]}"
 echo "Warmup per endpoint: ${BENCHMARK_WARMUP}s"
 echo "Duration per endpoint: ${BENCHMARK_DURATION}s"
-echo "Total instrumentations: $NUM_TESTS"
+echo "Total benchmarks: $NUM_TESTS"
 echo -e "${BLUE}========================================${NC}"
 echo ""
 
