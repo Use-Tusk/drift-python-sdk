@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tusk-drift-python-sdk"
-version = "0.1.18"
+version = "0.1.19"
 description = "Python SDK for Tusk Drift instrumentation and replay"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -110,8 +110,8 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "drift/core/drift_sdk.py" = ["F401"]  # unused imports for availability checking
-"drift/instrumentation/**/e2e-tests/**" = ["F401", "F841"]  # test files
-"drift/stack-tests/**" = ["F401", "F841"]  # stack test files
+"drift/instrumentation/**/e2e-tests/**" = ["F401", "F841", "UP045"]  # test files
+"drift/stack-tests/**" = ["F401", "F841", "UP045"]  # stack test files
 
 [tool.ruff.lint.isort]
 known-first-party = ["drift"]
@@ -136,6 +136,7 @@ include = [
     "drift/instrumentation/grpc/**",
     "drift/instrumentation/psycopg/**",
     "drift/instrumentation/psycopg2/**",
+    "drift/instrumentation/sqlalchemy/**",
     "drift/instrumentation/pyjwt/**",
     "drift/instrumentation/redis/**",
     "drift/instrumentation/kinde/**",

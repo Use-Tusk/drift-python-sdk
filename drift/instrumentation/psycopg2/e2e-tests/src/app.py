@@ -135,6 +135,61 @@ def db_batch_insert():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/db/fetchmany-arraysize")
+def db_fetchmany_arraysize():
+    """Test that fetchmany() respects runtime cursor.arraysize updates."""
+    try:
+        conn = psycopg2.connect(get_conn_string())
+        cur = conn.cursor()
+        cur.execute("SELECT id, name FROM users ORDER BY id")
+        cur.arraysize = 2
+        batch = cur.fetchmany()
+        cur.close()
+        conn.close()
+
+        return jsonify({"arraysize": 2, "batch_len": len(batch), "ids": [row[0] for row in batch]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/db/error-then-query")
+def db_error_then_query():
+    """Test error handling + follow-up query in same session/transaction."""
+    error_message = ""
+    follow_up_count = 0
+    conn = None
+    cur = None
+    try:
+        conn = psycopg2.connect(get_conn_string())
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT * FROM users_missing_table")
+            cur.fetchall()
+        except Exception as exc:
+            error_message = str(exc)
+            conn.rollback()
+
+        cur.execute("SELECT id FROM users ORDER BY id LIMIT 1")
+        rows = cur.fetchall()
+        follow_up_count = len(rows)
+        cur.close()
+        conn.close()
+
+        return jsonify(
+            {
+                "had_error": bool(error_message),
+                "error_contains_missing_table": "users_missing_table" in error_message,
+                "follow_up_count": follow_up_count,
+            }
+        )
+    except Exception as e:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/db/transaction", methods=["POST"])
 def db_transaction():
     """Test transaction with rollback."""
