@@ -27,6 +27,7 @@ _ISO_DATETIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
 _PCT_BIND_RE = re.compile(r"%\(([A-Za-z_][A-Za-z0-9_]*)\)s")
 _COLON_BIND_RE = re.compile(r"(?<!:):([A-Za-z_][A-Za-z0-9_]*)")
 _AUTO_BIND_SUFFIX_RE = re.compile(r"_(\d+)$")
+_AUTO_BIND_M_SUFFIX_RE = re.compile(r"_m(\d+)$")
 
 
 class SqlAlchemyInstrumentation(InstrumentationBase):
@@ -399,25 +400,36 @@ class SqlAlchemyInstrumentation(InstrumentationBase):
 
     def _canonicalize_bind_key(self, key: str) -> str:
         """Canonicalize auto-generated SQLAlchemy bind names."""
+        if _AUTO_BIND_M_SUFFIX_RE.search(key):
+            return _AUTO_BIND_M_SUFFIX_RE.sub("_mN", key)
         if _AUTO_BIND_SUFFIX_RE.search(key):
             return _AUTO_BIND_SUFFIX_RE.sub("_N", key)
         return key
 
-    def _canonicalize_parameters(self, value: Any) -> Any:
+    def _canonicalize_parameters(self, value: Any, key_name: str | None = None) -> Any:
         """Canonicalize parameter containers so auto-generated bind names hash stably."""
         if isinstance(value, dict):
             # Keep deterministic ordering and canonical key names.
             items = []
             for key, child in value.items():
                 canonical_key = self._canonicalize_bind_key(str(key))
-                items.append((canonical_key, str(key), self._canonicalize_parameters(child)))
+                items.append((canonical_key, str(key), self._canonicalize_parameters(child, key_name=str(key))))
             items.sort(key=lambda x: (x[0], x[1]))
             return [{"k": canonical_key, "v": child} for canonical_key, _, child in items]
 
         if isinstance(value, list):
-            return [self._canonicalize_parameters(v) for v in value]
+            canonical_items = [self._canonicalize_parameters(v, key_name=key_name) for v in value]
+
+            # SQLAlchemy executemany can encode batch params as a list of generated
+            # bind key strings under "_batch". Their iteration order can vary.
+            if key_name == "_batch" and all(isinstance(v, str) for v in canonical_items):
+                canonical_bind_keys = [self._canonicalize_bind_key(v) for v in canonical_items]
+                canonical_bind_keys.sort()
+                return canonical_bind_keys
+
+            return canonical_items
 
         if isinstance(value, tuple):
-            return [self._canonicalize_parameters(v) for v in value]
+            return [self._canonicalize_parameters(v, key_name=key_name) for v in value]
 
         return value
