@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 from collections import Counter
 from datetime import datetime, timezone
+from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -71,7 +72,7 @@ class Task(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="todo")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -87,7 +88,7 @@ class CreateProjectRequest(BaseModel):
 
 class CreateTaskRequest(BaseModel):
     title: str = Field(min_length=3, max_length=200)
-    description: str | None = None
+    description: Optional[str] = None
     status: str = Field(default="todo")
 
 
