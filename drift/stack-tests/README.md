@@ -14,6 +14,7 @@ These tests exercise complete technology stacks (e.g., Django + PostgreSQL, Fast
 |------|-------------|------------|
 | `django-postgres/` | Django with PostgreSQL database | Django middleware + psycopg2 |
 | `fastapi-postgres/` | FastAPI with async PostgreSQL | FastAPI + psycopg (async) |
+| `fastapi-sqlalchemy/` | FastAPI project tracker with SQLAlchemy ORM | FastAPI + SQLAlchemy + psycopg |
 | `django-redis/` | Django with Redis cache/sessions | Django middleware + Redis |
 
 ## Why Stack Tests?

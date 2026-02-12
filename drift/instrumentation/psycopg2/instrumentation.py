@@ -29,6 +29,7 @@ from ...core.types import (
     TuskDriftMode,
 )
 from ..base import InstrumentationBase
+from ..sqlalchemy.context import sqlalchemy_execution_active_context, sqlalchemy_replay_mock_context
 from ..utils.psycopg_utils import deserialize_db_value, restore_row_integer_types
 from ..utils.serialization import serialize_value
 
@@ -540,6 +541,18 @@ class Psycopg2Instrumentation(InstrumentationBase):
         if sdk.mode == TuskDriftMode.DISABLED:
             return original_execute(query, params)
 
+        # If SQLAlchemy already resolved replay mock, use that payload and skip
+        # driver-level matching/span creation to avoid duplicate/colliding lookups.
+        if sdk.mode == TuskDriftMode.REPLAY and sqlalchemy_execution_active_context.get():
+            mock_result = sqlalchemy_replay_mock_context.get()
+            if mock_result is not None:
+                self._raise_replay_error_if_present(mock_result)
+                query_str = _query_to_str(query)
+                self._mock_execute_with_data(cursor, mock_result)
+                if hasattr(cursor, "query"):
+                    cursor.query = query_str.encode("utf-8") if isinstance(query_str, str) else query_str
+                return None
+
         query_str = _query_to_str(query)
 
         if sdk.mode == TuskDriftMode.REPLAY:
@@ -591,22 +604,13 @@ class Psycopg2Instrumentation(InstrumentationBase):
 
             if mock_result is None:
                 is_pre_app_start = not sdk.app_ready
-                if is_pre_app_start:
-                    logger.warning("[PSYCOPG2_REPLAY] No mock found for pre-app-start query, returning empty result")
-                    empty_mock = {"rowcount": 0, "rows": [], "description": None}
-                    self._mock_execute_with_data(cursor, empty_mock)
-                    # Set cursor.query to the executed query (psycopg2 cursor attribute)
-                    if hasattr(cursor, "query"):
-                        cursor.query = query_str.encode("utf-8") if isinstance(query_str, str) else query_str
-                    span_info.span.end()
-                    return None
-
                 raise RuntimeError(
                     f"[Tusk REPLAY] No mock found for psycopg2 execute query. "
-                    f"This query was not recorded during the trace capture. "
+                    f"This {'pre-app-start ' if is_pre_app_start else ''}query was not recorded during the trace capture. "
                     f"Query: {query_str[:100]}..."
                 )
 
+            self._raise_replay_error_if_present(mock_result)
             self._mock_execute_with_data(cursor, mock_result)
             # Set cursor.query to the executed query (psycopg2 cursor attribute)
             if hasattr(cursor, "query"):
@@ -625,6 +629,21 @@ class Psycopg2Instrumentation(InstrumentationBase):
         is_pre_app_start: bool,
     ) -> Any:
         """Handle RECORD mode for execute - create span and execute query."""
+        # Under SQLAlchemy instrumentation, skip creating/exporting driver spans
+        # but keep cursor-state capture for SQLAlchemy span output construction.
+        if sqlalchemy_execution_active_context.get():
+            error = None
+            try:
+                return original_execute(query, params)
+            except Exception as e:
+                error = e
+                raise
+            finally:
+                try:
+                    self._finalize_query_span(trace.INVALID_SPAN, cursor, query, params, error)
+                except Exception as e:
+                    logger.error(f"Error in SQLAlchemy-scoped psycopg2 record finalization: {e}")
+
         span_info = SpanUtils.create_span(
             CreateSpanOptions(
                 name="psycopg2.query",
@@ -675,6 +694,18 @@ class Psycopg2Instrumentation(InstrumentationBase):
         if sdk.mode == TuskDriftMode.DISABLED:
             return original_executemany(query, params_list)
 
+        # SQLAlchemy replay source-of-truth path: consume SQLAlchemy-resolved
+        # payload and skip driver-level mock matching.
+        if sdk.mode == TuskDriftMode.REPLAY and sqlalchemy_execution_active_context.get():
+            mock_result = sqlalchemy_replay_mock_context.get()
+            if mock_result is not None:
+                self._raise_replay_error_if_present(mock_result)
+                query_str = _query_to_str(query)
+                self._mock_execute_with_data(cursor, mock_result)
+                if hasattr(cursor, "query"):
+                    cursor.query = query_str.encode("utf-8") if isinstance(query_str, str) else query_str
+                return None
+
         query_str = _query_to_str(query)
         # Convert to list BEFORE executing to avoid iterator exhaustion
         params_as_list = list(params_list)
@@ -723,30 +754,30 @@ class Psycopg2Instrumentation(InstrumentationBase):
 
             if mock_result is None:
                 is_pre_app_start = not sdk.app_ready
-                if is_pre_app_start:
-                    logger.warning(
-                        "[PSYCOPG2_REPLAY] No mock found for pre-app-start executemany query, returning empty result"
-                    )
-                    empty_mock = {"rowcount": 0, "rows": [], "description": None}
-                    self._mock_execute_with_data(cursor, empty_mock)
-                    # Set cursor.query to the executed query (psycopg2 cursor attribute)
-                    if hasattr(cursor, "query"):
-                        cursor.query = query_str.encode("utf-8") if isinstance(query_str, str) else query_str
-                    span_info.span.end()
-                    return None
-
                 raise RuntimeError(
                     f"[Tusk REPLAY] No mock found for psycopg2 executemany query. "
-                    f"This query was not recorded during the trace capture. "
+                    f"This {'pre-app-start ' if is_pre_app_start else ''}query was not recorded during the trace capture. "
                     f"Query: {query_str[:100]}..."
                 )
 
+            self._raise_replay_error_if_present(mock_result)
             self._mock_execute_with_data(cursor, mock_result)
             # Set cursor.query to the executed query (psycopg2 cursor attribute)
             if hasattr(cursor, "query"):
                 cursor.query = query_str.encode("utf-8") if isinstance(query_str, str) else query_str
             span_info.span.end()
             return None
+
+    def _raise_replay_error_if_present(self, mock_result: dict[str, Any]) -> None:
+        """Raise recorded DB error in replay instead of emulating success."""
+        if not isinstance(mock_result, dict):
+            return
+        error_message = mock_result.get("errorMessage")
+        if error_message:
+            raise RuntimeError(str(error_message))
+        error_name = mock_result.get("errorName")
+        if error_name:
+            raise RuntimeError(str(error_name))
 
     def _record_executemany(
         self,
@@ -759,6 +790,19 @@ class Psycopg2Instrumentation(InstrumentationBase):
         is_pre_app_start: bool,
     ) -> Any:
         """Handle RECORD mode for executemany - create span and execute query."""
+        if sqlalchemy_execution_active_context.get():
+            error = None
+            try:
+                return original_executemany(query, params_list)
+            except Exception as e:
+                error = e
+                raise
+            finally:
+                try:
+                    self._finalize_query_span(trace.INVALID_SPAN, cursor, query, {"_batch": params_list}, error)
+                except Exception as e:
+                    logger.error(f"Error in SQLAlchemy-scoped psycopg2 executemany finalization: {e}")
+
         span_info = SpanUtils.create_span(
             CreateSpanOptions(
                 name="psycopg2.query",
@@ -877,6 +921,17 @@ class Psycopg2Instrumentation(InstrumentationBase):
             except AttributeError:
                 logger.debug("Could not set _rowcount either")
 
+        # Preserve insert metadata for ORM write paths.
+        lastrowid = actual_data.get("lastrowid")
+        if lastrowid is not None:
+            try:
+                object.__setattr__(cursor, "lastrowid", lastrowid)
+            except (AttributeError, TypeError):
+                try:
+                    cursor._lastrowid = lastrowid
+                except AttributeError:
+                    logger.debug("Could not set lastrowid")
+
         # description: psycopg2 description format
         description_data = actual_data.get("description")
         if description_data:
@@ -938,9 +993,10 @@ class Psycopg2Instrumentation(InstrumentationBase):
                 return tuple(row) if isinstance(row, list) else row
             return None
 
-        def mock_fetchmany(size=cursor.arraysize):
+        def mock_fetchmany(size=None):
+            effective_size = cursor.arraysize if size is None else size
             rows = []
-            for _ in range(size):
+            for _ in range(effective_size):
                 row = mock_fetchone()
                 if row is None:
                     break
@@ -1054,8 +1110,11 @@ class Psycopg2Instrumentation(InstrumentationBase):
                                     return row
                                 return None
 
-                            def patched_fetchmany(size=cursor.arraysize):
-                                result = cursor._tusk_rows[cursor._tusk_index : cursor._tusk_index + size]  # pyright: ignore[reportAttributeAccessIssue]
+                            def patched_fetchmany(size=None):
+                                effective_size = cursor.arraysize if size is None else size
+                                result = cursor._tusk_rows[  # pyright: ignore[reportAttributeAccessIssue]
+                                    cursor._tusk_index : cursor._tusk_index + effective_size  # pyright: ignore[reportAttributeAccessIssue]
+                                ]
                                 cursor._tusk_index += len(result)  # pyright: ignore[reportAttributeAccessIssue]
                                 return result
 
@@ -1077,6 +1136,8 @@ class Psycopg2Instrumentation(InstrumentationBase):
                     output_value = {
                         "rowcount": cursor.rowcount if hasattr(cursor, "rowcount") else -1,
                     }
+                    if hasattr(cursor, "lastrowid") and cursor.lastrowid is not None:
+                        output_value["lastrowid"] = serialize_value(cursor.lastrowid)
 
                     if description:
                         output_value["description"] = description

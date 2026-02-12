@@ -416,6 +416,16 @@ class TuskDrift:
         except ImportError:
             pass
 
+        try:
+            import sqlalchemy  # type: ignore[unresolved-import]
+
+            from ..instrumentation.sqlalchemy import SqlAlchemyInstrumentation
+
+            _ = SqlAlchemyInstrumentation()
+            logger.debug("SQLAlchemy instrumentation initialized")
+        except ImportError:
+            pass
+
         # Initialize PostgreSQL instrumentation before Django
         # Instrument BOTH psycopg2 and psycopg if available
         # This allows apps to use either or both

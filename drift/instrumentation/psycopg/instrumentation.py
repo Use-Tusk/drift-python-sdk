@@ -24,6 +24,7 @@ from ...core.types import (
     TuskDriftMode,
 )
 from ..base import InstrumentationBase
+from ..sqlalchemy.context import sqlalchemy_execution_active_context, sqlalchemy_replay_mock_context
 from ..utils.psycopg_utils import deserialize_db_value, restore_row_integer_types
 from ..utils.serialization import serialize_value
 from .mocks import MockConnection, MockCopy
@@ -531,6 +532,15 @@ class PsycopgInstrumentation(InstrumentationBase):
         if sdk.mode == TuskDriftMode.DISABLED:
             return original_execute(query, params, **kwargs)
 
+        # SQLAlchemy replay source-of-truth path: consume SQLAlchemy-resolved
+        # payload and skip driver-level mock matching/span creation.
+        if sdk.mode == TuskDriftMode.REPLAY and sqlalchemy_execution_active_context.get():
+            mock_result = sqlalchemy_replay_mock_context.get()
+            if mock_result is not None:
+                self._raise_replay_error_if_present(mock_result)
+                self._mock_execute_with_data(cursor, mock_result)
+                return cursor
+
         query_str = self._query_to_string(query, cursor)
 
         if sdk.mode == TuskDriftMode.REPLAY:
@@ -577,6 +587,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                     f"Query: {query_str[:100]}..."
                 )
 
+            self._raise_replay_error_if_present(mock_result)
             self._mock_execute_with_data(cursor, mock_result, is_async=is_async)
             span_info.span.end()
             return cursor
@@ -593,6 +604,21 @@ class PsycopgInstrumentation(InstrumentationBase):
         kwargs: dict,
     ) -> Any:
         """Handle RECORD mode for execute - create span and execute query."""
+        # Under SQLAlchemy instrumentation, skip creating/exporting a driver span
+        # but keep cursor-state capture so SQLAlchemy span can include result data.
+        if sqlalchemy_execution_active_context.get():
+            error = None
+            try:
+                return original_execute(query, params, **kwargs)
+            except Exception as e:
+                error = e
+                raise
+            finally:
+                try:
+                    self._finalize_query_span(trace.INVALID_SPAN, cursor, query_str, params, error)
+                except Exception as e:
+                    logger.error(f"Error in SQLAlchemy-scoped psycopg record finalization: {e}")
+
         # Reset cursor state from any previous execute() on this cursor.
         # Delete instance attribute overrides to expose original class methods.
         # This is safer than saving/restoring bound methods which can become stale.
@@ -663,6 +689,18 @@ class PsycopgInstrumentation(InstrumentationBase):
         if sdk.mode == TuskDriftMode.DISABLED:
             return original_executemany(query, params_seq, **kwargs)
 
+        # SQLAlchemy replay source-of-truth path: consume SQLAlchemy-resolved
+        # payload and skip driver-level mock matching/span creation.
+        if sdk.mode == TuskDriftMode.REPLAY and sqlalchemy_execution_active_context.get():
+            mock_result = sqlalchemy_replay_mock_context.get()
+            if mock_result is not None:
+                self._raise_replay_error_if_present(mock_result)
+                if mock_result.get("executemany_returning"):
+                    self._mock_executemany_returning_with_data(cursor, mock_result)
+                else:
+                    self._mock_execute_with_data(cursor, mock_result)
+                return cursor
+
         query_str = self._query_to_string(query, cursor)
         # Convert to list BEFORE executing to avoid iterator exhaustion
         params_list = list(params_seq)
@@ -713,6 +751,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                     f"Query: {query_str[:100]}..."
                 )
 
+            self._raise_replay_error_if_present(mock_result)
             # Check if this is executemany_returning format (multiple result sets)
             if mock_result.get("executemany_returning"):
                 self._mock_executemany_returning_with_data(cursor, mock_result)
@@ -722,6 +761,17 @@ class PsycopgInstrumentation(InstrumentationBase):
 
             span_info.span.end()
             return cursor
+
+    def _raise_replay_error_if_present(self, mock_result: dict[str, Any]) -> None:
+        """Raise recorded DB error in replay instead of emulating success."""
+        if not isinstance(mock_result, dict):
+            return
+        error_message = mock_result.get("errorMessage")
+        if error_message:
+            raise RuntimeError(str(error_message))
+        error_name = mock_result.get("errorName")
+        if error_name:
+            raise RuntimeError(str(error_name))
 
     def _record_executemany(
         self,
@@ -736,6 +786,36 @@ class PsycopgInstrumentation(InstrumentationBase):
         returning: bool = False,
     ) -> Any:
         """Handle RECORD mode for executemany - create span and execute query."""
+        # Under SQLAlchemy instrumentation, skip driver span export while preserving
+        # result capture needed for SQLAlchemy source-of-truth spans.
+        if sqlalchemy_execution_active_context.get():
+            error = None
+            try:
+                return original_executemany(query, params_list, **kwargs)
+            except Exception as e:
+                error = e
+                raise
+            finally:
+                try:
+                    if returning and error is None:
+                        self._finalize_executemany_returning_span(
+                            trace.INVALID_SPAN,
+                            cursor,
+                            query_str,
+                            {"_batch": params_list, "_returning": True},
+                            error,
+                        )
+                    else:
+                        self._finalize_query_span(
+                            trace.INVALID_SPAN,
+                            cursor,
+                            query_str,
+                            {"_batch": params_list},
+                            error,
+                        )
+                except Exception as e:
+                    logger.error(f"Error in SQLAlchemy-scoped psycopg executemany finalization: {e}")
+
         span_info = self._create_query_span(sdk, "query", is_pre_app_start)
 
         if not span_info:
@@ -792,6 +872,12 @@ class PsycopgInstrumentation(InstrumentationBase):
         if sdk.mode == TuskDriftMode.DISABLED:
             return await original_execute(query, params, **kwargs)
 
+        if sdk.mode == TuskDriftMode.REPLAY and sqlalchemy_execution_active_context.get():
+            mock_result = sqlalchemy_replay_mock_context.get()
+            if mock_result is not None:
+                self._mock_execute_with_data(cursor, mock_result, is_async=True)
+                return cursor
+
         query_str = self._query_to_string(query, cursor)
 
         if sdk.mode == TuskDriftMode.REPLAY:
@@ -812,6 +898,19 @@ class PsycopgInstrumentation(InstrumentationBase):
         kwargs: dict,
     ) -> Any:
         """Handle RECORD mode for async execute - create span and execute query."""
+        if sqlalchemy_execution_active_context.get():
+            error = None
+            try:
+                return await original_execute(query, params, **kwargs)
+            except Exception as e:
+                error = e
+                raise
+            finally:
+                try:
+                    self._finalize_query_span(trace.INVALID_SPAN, cursor, query_str, params, error)
+                except Exception as e:
+                    logger.error(f"Error in SQLAlchemy-scoped async psycopg finalization: {e}")
+
         is_pre_app_start = not sdk.app_ready
 
         # Reset cursor state from any previous execute() on this cursor
@@ -867,6 +966,15 @@ class PsycopgInstrumentation(InstrumentationBase):
         if sdk.mode == TuskDriftMode.DISABLED:
             return await original_executemany(query, params_seq, **kwargs)
 
+        if sdk.mode == TuskDriftMode.REPLAY and sqlalchemy_execution_active_context.get():
+            mock_result = sqlalchemy_replay_mock_context.get()
+            if mock_result is not None:
+                if mock_result.get("executemany_returning"):
+                    self._mock_executemany_returning_with_data(cursor, mock_result)
+                else:
+                    self._mock_execute_with_data(cursor, mock_result, is_async=True)
+                return cursor
+
         query_str = self._query_to_string(query, cursor)
         params_list = list(params_seq)
         returning = kwargs.get("returning", False)
@@ -892,6 +1000,34 @@ class PsycopgInstrumentation(InstrumentationBase):
         returning: bool = False,
     ) -> Any:
         """Handle RECORD mode for async executemany - create span and execute query."""
+        if sqlalchemy_execution_active_context.get():
+            error = None
+            try:
+                return await original_executemany(query, params_list, **kwargs)
+            except Exception as e:
+                error = e
+                raise
+            finally:
+                try:
+                    if returning and error is None:
+                        self._finalize_executemany_returning_span(
+                            trace.INVALID_SPAN,
+                            cursor,
+                            query_str,
+                            {"_batch": params_list, "_returning": True},
+                            error,
+                        )
+                    else:
+                        self._finalize_query_span(
+                            trace.INVALID_SPAN,
+                            cursor,
+                            query_str,
+                            {"_batch": params_list},
+                            error,
+                        )
+                except Exception as e:
+                    logger.error(f"Error in SQLAlchemy-scoped async psycopg executemany finalization: {e}")
+
         is_pre_app_start = not sdk.app_ready
         span_info = self._create_query_span(sdk, "query", is_pre_app_start)
 
@@ -1657,6 +1793,18 @@ class PsycopgInstrumentation(InstrumentationBase):
         except AttributeError:
             object.__setattr__(cursor, "rowcount", actual_data.get("rowcount", -1))
 
+        # Preserve insert metadata for ORM write paths.
+        lastrowid = actual_data.get("lastrowid")
+        if lastrowid is not None:
+            try:
+                cursor._mock_lastrowid = lastrowid
+            except Exception:
+                pass
+            try:
+                object.__setattr__(cursor, "lastrowid", lastrowid)
+            except Exception:
+                pass
+
         description_data = actual_data.get("description")
         self._set_cursor_description(cursor, description_data)
 
@@ -1822,9 +1970,10 @@ class PsycopgInstrumentation(InstrumentationBase):
                     return fetchone
 
                 def make_fetchmany(cn, RC):
-                    def fetchmany(size=cursor.arraysize):
+                    def fetchmany(size=None):
+                        effective_size = cursor.arraysize if size is None else size
                         rows = []
-                        for _ in range(size):
+                        for _ in range(effective_size):
                             if cursor._mock_index < len(cursor._mock_rows):  # pyright: ignore[reportAttributeAccessIssue]
                                 row = cursor._mock_rows[cursor._mock_index]  # pyright: ignore[reportAttributeAccessIssue]
                                 cursor._mock_index += 1  # pyright: ignore[reportAttributeAccessIssue]
@@ -1877,9 +2026,10 @@ class PsycopgInstrumentation(InstrumentationBase):
                 return fetchone
 
             def make_fetchmany_replay(cn, RC):
-                def fetchmany(size=cursor.arraysize):
+                def fetchmany(size=None):
+                    effective_size = cursor.arraysize if size is None else size
                     rows = []
-                    for _ in range(size):
+                    for _ in range(effective_size):
                         if cursor._mock_index < len(cursor._mock_rows):  # pyright: ignore[reportAttributeAccessIssue]
                             row = cursor._mock_rows[cursor._mock_index]  # pyright: ignore[reportAttributeAccessIssue]
                             cursor._mock_index += 1  # pyright: ignore[reportAttributeAccessIssue]
@@ -2060,6 +2210,8 @@ class PsycopgInstrumentation(InstrumentationBase):
                     output_value = {
                         "rowcount": cursor.rowcount if hasattr(cursor, "rowcount") else -1,
                     }
+                    if hasattr(cursor, "lastrowid") and cursor.lastrowid is not None:
+                        output_value["lastrowid"] = serialize_value(cursor.lastrowid)
 
                     # Capture statusmessage for replay
                     if hasattr(cursor, "statusmessage") and cursor.statusmessage is not None:
@@ -2772,8 +2924,11 @@ class PsycopgInstrumentation(InstrumentationBase):
                                     return row
                                 return None
 
-                            def patched_fetchmany(size=cursor.arraysize):
-                                result = cursor._tusk_rows[cursor._tusk_index : cursor._tusk_index + size]  # pyright: ignore[reportAttributeAccessIssue]
+                            def patched_fetchmany(size=None):
+                                effective_size = cursor.arraysize if size is None else size
+                                result = cursor._tusk_rows[  # pyright: ignore[reportAttributeAccessIssue]
+                                    cursor._tusk_index : cursor._tusk_index + effective_size  # pyright: ignore[reportAttributeAccessIssue]
+                                ]
                                 cursor._tusk_index += len(result)  # pyright: ignore[reportAttributeAccessIssue]
                                 return result
 
@@ -2808,8 +2963,11 @@ class PsycopgInstrumentation(InstrumentationBase):
                             return patched_fetchone
 
                         def make_patched_fetchmany_record():
-                            def patched_fetchmany(size=cursor.arraysize):
-                                result = cursor._tusk_rows[cursor._tusk_index : cursor._tusk_index + size]  # pyright: ignore[reportAttributeAccessIssue]
+                            def patched_fetchmany(size=None):
+                                effective_size = cursor.arraysize if size is None else size
+                                result = cursor._tusk_rows[  # pyright: ignore[reportAttributeAccessIssue]
+                                    cursor._tusk_index : cursor._tusk_index + effective_size  # pyright: ignore[reportAttributeAccessIssue]
+                                ]
                                 cursor._tusk_index += len(result)  # pyright: ignore[reportAttributeAccessIssue]
                                 return result
 

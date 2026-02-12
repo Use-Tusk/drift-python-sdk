@@ -136,6 +136,7 @@ include = [
     "drift/instrumentation/grpc/**",
     "drift/instrumentation/psycopg/**",
     "drift/instrumentation/psycopg2/**",
+    "drift/instrumentation/sqlalchemy/**",
     "drift/instrumentation/pyjwt/**",
     "drift/instrumentation/redis/**",
     "drift/instrumentation/kinde/**",
