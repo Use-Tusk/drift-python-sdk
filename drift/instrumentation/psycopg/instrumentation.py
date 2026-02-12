@@ -875,6 +875,7 @@ class PsycopgInstrumentation(InstrumentationBase):
         if sdk.mode == TuskDriftMode.REPLAY and sqlalchemy_execution_active_context.get():
             mock_result = sqlalchemy_replay_mock_context.get()
             if mock_result is not None:
+                self._raise_replay_error_if_present(mock_result)
                 self._mock_execute_with_data(cursor, mock_result, is_async=True)
                 return cursor
 
@@ -969,6 +970,7 @@ class PsycopgInstrumentation(InstrumentationBase):
         if sdk.mode == TuskDriftMode.REPLAY and sqlalchemy_execution_active_context.get():
             mock_result = sqlalchemy_replay_mock_context.get()
             if mock_result is not None:
+                self._raise_replay_error_if_present(mock_result)
                 if mock_result.get("executemany_returning"):
                     self._mock_executemany_returning_with_data(cursor, mock_result)
                 else:

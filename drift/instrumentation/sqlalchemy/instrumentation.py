@@ -88,6 +88,14 @@ class SqlAlchemyInstrumentation(InstrumentationBase):
 
             if mock_result is None:
                 is_pre_app_start = not sdk.app_ready
+                span_info.span.set_status(
+                    Status(
+                        OTelStatusCode.ERROR,
+                        "No mock found for sqlalchemy query in replay",
+                    )
+                )
+                span_info.span.end()
+                instrumentation._reset_context_state(context)
                 raise RuntimeError(
                     f"[Tusk REPLAY] No mock found for sqlalchemy query. "
                     f"This {'pre-app-start ' if is_pre_app_start else ''}query was not recorded during the trace capture. "
@@ -98,8 +106,14 @@ class SqlAlchemyInstrumentation(InstrumentationBase):
             if isinstance(mock_result, dict):
                 recorded_error_message = mock_result.get("errorMessage")
                 if recorded_error_message:
+                    span_info.span.set_status(Status(OTelStatusCode.ERROR, str(recorded_error_message)))
+                    span_info.span.end()
+                    instrumentation._reset_context_state(context)
                     raise RuntimeError(str(recorded_error_message))
                 if mock_result.get("errorName"):
+                    span_info.span.set_status(Status(OTelStatusCode.ERROR, str(mock_result["errorName"])))
+                    span_info.span.end()
+                    instrumentation._reset_context_state(context)
                     raise RuntimeError(str(mock_result["errorName"]))
 
             replay_token = sqlalchemy_replay_mock_context.set(mock_result)
