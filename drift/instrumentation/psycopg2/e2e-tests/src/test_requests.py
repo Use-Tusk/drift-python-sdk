@@ -44,6 +44,10 @@ if __name__ == "__main__":
     # Query again to see all users
     make_request("GET", "/db/query")
 
+    # Regression coverage for cursor fetch semantics and error replay fidelity
+    make_request("GET", "/db/fetchmany-arraysize")
+    make_request("GET", "/db/error-then-query")
+
     # Delete operation
     if resp2.status_code == 201:
         user_id = resp2.json().get("id")

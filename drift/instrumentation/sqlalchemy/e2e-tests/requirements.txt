@@ -1,0 +1,5 @@
+-e /sdk  # Mount point for drift SDK
+Flask>=3.1.2
+SQLAlchemy>=2.0.0
+psycopg2-binary>=2.9.0
+requests>=2.32.5

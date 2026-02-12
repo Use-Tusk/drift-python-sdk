@@ -88,4 +88,8 @@ if __name__ == "__main__":
     make_request("GET", "/test/inet-cidr-types")
     make_request("GET", "/test/range-types")
 
+    # Regression coverage for cursor fetch semantics and error replay fidelity
+    make_request("GET", "/db/fetchmany-arraysize")
+    make_request("GET", "/db/error-then-query")
+
     print_request_summary()

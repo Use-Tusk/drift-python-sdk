@@ -1,0 +1,21 @@
+service:
+  id: fastapi-sqlalchemy-stack-test-id
+  name: fastapi-sqlalchemy-stack-test
+  port: 8000
+  start:
+    command: python src/app.py
+  readiness_check:
+    command: curl -f http://localhost:8000/health
+    timeout: 45s
+    interval: 5s
+
+tusk_api:
+  url: http://localhost:8000
+
+test_execution:
+  timeout: 40s
+
+recording:
+  sampling_rate: 1.0
+  export_spans: false
+  exclude_paths: []

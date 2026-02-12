@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: postgres:13
+    environment:
+      - POSTGRES_DB=testdb
+      - POSTGRES_USER=testuser
+      - POSTGRES_PASSWORD=testpass
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U testuser -d testdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: ../../..
+      dockerfile: drift/stack-tests/fastapi-sqlalchemy/Dockerfile
+      args:
+        - TUSK_CLI_VERSION=${TUSK_CLI_VERSION:-latest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - PORT=8000
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=testdb
+      - POSTGRES_USER=testuser
+      - POSTGRES_PASSWORD=testpass
+      - TUSK_ANALYTICS_DISABLED=1
+      - PYTHONUNBUFFERED=1
+    working_dir: /app
+    volumes:
+      - ../../..:/sdk
+      - ./src:/app/src
+      - ./.tusk:/app/.tusk

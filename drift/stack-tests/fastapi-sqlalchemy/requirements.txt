@@ -1,0 +1,7 @@
+-e /sdk
+fastapi>=0.109.0
+uvicorn>=0.27.0
+sqlalchemy>=2.0.0
+psycopg[binary]>=3.1.0
+httpx>=0.26.0
+requests>=2.32.5
