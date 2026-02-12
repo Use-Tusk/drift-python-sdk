@@ -2927,7 +2927,8 @@ class PsycopgInstrumentation(InstrumentationBase):
                             def patched_fetchmany(size=None):
                                 effective_size = cursor.arraysize if size is None else size
                                 result = cursor._tusk_rows[  # pyright: ignore[reportAttributeAccessIssue]
-                                    cursor._tusk_index : cursor._tusk_index + effective_size  # pyright: ignore[reportAttributeAccessIssue]
+                                    cursor._tusk_index : cursor._tusk_index
+                                    + effective_size  # pyright: ignore[reportAttributeAccessIssue]
                                 ]
                                 cursor._tusk_index += len(result)  # pyright: ignore[reportAttributeAccessIssue]
                                 return result
@@ -2966,7 +2967,8 @@ class PsycopgInstrumentation(InstrumentationBase):
                             def patched_fetchmany(size=None):
                                 effective_size = cursor.arraysize if size is None else size
                                 result = cursor._tusk_rows[  # pyright: ignore[reportAttributeAccessIssue]
-                                    cursor._tusk_index : cursor._tusk_index + effective_size  # pyright: ignore[reportAttributeAccessIssue]
+                                    cursor._tusk_index : cursor._tusk_index
+                                    + effective_size  # pyright: ignore[reportAttributeAccessIssue]
                                 ]
                                 cursor._tusk_index += len(result)  # pyright: ignore[reportAttributeAccessIssue]
                                 return result
