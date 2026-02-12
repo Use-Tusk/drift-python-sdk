@@ -1,8 +1,8 @@
 {
-  "sdkVersion": "0.1.18",
+  "sdkVersion": "0.1.19",
   "language": "python",
   "pythonVersion": ">=3.12",
-  "generatedAt": "2026-02-07T00:34:47.352497Z",
+  "generatedAt": "2026-02-12T05:02:40.430348Z",
   "instrumentations": [
     {
       "packageName": "aiohttp",
@@ -74,6 +74,12 @@
       "packageName": "requests",
       "supportedVersions": [
         "*"
+      ]
+    },
+    {
+      "packageName": "sqlalchemy",
+      "supportedVersions": [
+        ">=1.4.0"
       ]
     },
     {
