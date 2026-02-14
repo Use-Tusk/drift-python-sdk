@@ -12,6 +12,7 @@ services:
       - BENCHMARKS=${BENCHMARKS:-}
       - BENCHMARK_DURATION=${BENCHMARK_DURATION:-10}
       - BENCHMARK_WARMUP=${BENCHMARK_WARMUP:-3}
+      - TUSK_SAMPLING_RATE=${TUSK_SAMPLING_RATE:-}
     working_dir: /app
     volumes:
       # Mount SDK source for hot reload (no rebuild needed for SDK changes)
