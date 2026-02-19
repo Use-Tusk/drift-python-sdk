@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import TYPE_CHECKING
 
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
@@ -25,6 +26,20 @@ if TYPE_CHECKING:
     from .span_exporter import TdSpanExporter
 
 logger = logging.getLogger(__name__)
+
+
+def _should_skip_proto_validation(clean_span) -> bool:
+    """Skip expensive betterproto validation when Rust precomputed payloads are present."""
+    if os.getenv("TUSK_SKIP_PROTO_VALIDATION", "0").lower() in {"1", "true", "yes"}:
+        return True
+
+    use_rust = os.getenv("TUSK_USE_RUST_CORE", "0").lower() in {"1", "true", "yes"}
+    if not use_rust:
+        return False
+
+    return clean_span.proto_span_bytes is not None or (
+        clean_span.input_value_proto_struct_bytes is not None and clean_span.output_value_proto_struct_bytes is not None
+    )
 
 
 class TdSpanProcessor(SpanProcessor):
@@ -141,11 +156,12 @@ class TdSpanProcessor(SpanProcessor):
                 return
 
             # Validate protobuf serialization
-            try:
-                clean_span.to_proto()
-            except Exception as e:
-                logger.error(f"Failed to serialize span to protobuf: {e}")
-                return
+            if not _should_skip_proto_validation(clean_span):
+                try:
+                    clean_span.to_proto()
+                except Exception as e:
+                    logger.error(f"Failed to serialize span to protobuf: {e}")
+                    return
 
             # Handle REPLAY mode inbound spans
             if self._mode == TuskDriftMode.REPLAY and clean_span.kind == TdSpanKind.SERVER:

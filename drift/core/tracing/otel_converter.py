@@ -289,6 +289,27 @@ def parse_package_type(package_type_str: str) -> PackageType:
         return PackageType.UNSPECIFIED
 
 
+def _schema_merges_to_primitive(schema_merges: dict | None) -> dict | None:
+    if not schema_merges:
+        return None
+
+    primitive: dict[str, dict[str, int | float]] = {}
+    for key, merge in schema_merges.items():
+        merge_data: dict[str, int | float] = {}
+        if getattr(merge, "encoding", None) is not None:
+            enc = merge.encoding
+            merge_data["encoding"] = enc.value if hasattr(enc, "value") else enc
+        if getattr(merge, "decoded_type", None) is not None:
+            dec = merge.decoded_type
+            merge_data["decoded_type"] = dec.value if hasattr(dec, "value") else dec
+        if getattr(merge, "match_importance", None) is not None:
+            merge_data["match_importance"] = merge.match_importance
+        if merge_data:
+            primitive[key] = merge_data
+
+    return primitive or None
+
+
 def otel_span_to_clean_span_data(
     otel_span: ReadableSpan,
     environment: str | None = None,
@@ -336,19 +357,44 @@ def otel_span_to_clean_span_data(
     input_schema_merges = get_attribute_as_schema_merges(attributes, TdSpanAttributes.INPUT_SCHEMA_MERGES)
     output_schema_merges = get_attribute_as_schema_merges(attributes, TdSpanAttributes.OUTPUT_SCHEMA_MERGES)
 
-    # Generate schemas and hashes at export time
+    # Generate schemas/hashes and protobuf-ready payloads at export time.
     from ..json_schema_helper import JsonSchemaHelper
+    from ..rust_core_binding import build_span_proto_bytes, process_export_payload_jsonable
 
-    input_schema_result = JsonSchemaHelper.generate_schema_and_hash(input_value, input_schema_merges)
-    output_schema_result = JsonSchemaHelper.generate_schema_and_hash(output_value, output_schema_merges)
+    input_proto_bytes: bytes | None = None
+    output_proto_bytes: bytes | None = None
 
-    # Extract computed values
-    input_schema = input_schema_result.schema.to_primitive()
-    output_schema = output_schema_result.schema.to_primitive()
-    input_schema_hash = input_schema_result.decoded_schema_hash
-    output_schema_hash = output_schema_result.decoded_schema_hash
-    input_value_hash = input_schema_result.decoded_value_hash
-    output_value_hash = output_schema_result.decoded_value_hash
+    input_export_result = process_export_payload_jsonable(
+        input_value,
+        _schema_merges_to_primitive(input_schema_merges),
+    )
+    if input_export_result is not None:
+        input_value = input_export_result["normalized_value"]
+        input_value_hash = input_export_result["decoded_value_hash"]
+        input_schema = input_export_result["decoded_schema"]
+        input_schema_hash = input_export_result["decoded_schema_hash"]
+        input_proto_bytes = input_export_result["protobuf_struct_bytes"]
+    else:
+        input_schema_result = JsonSchemaHelper.generate_schema_and_hash(input_value, input_schema_merges)
+        input_schema = input_schema_result.schema.to_primitive()
+        input_schema_hash = input_schema_result.decoded_schema_hash
+        input_value_hash = input_schema_result.decoded_value_hash
+
+    output_export_result = process_export_payload_jsonable(
+        output_value,
+        _schema_merges_to_primitive(output_schema_merges),
+    )
+    if output_export_result is not None:
+        output_value = output_export_result["normalized_value"]
+        output_value_hash = output_export_result["decoded_value_hash"]
+        output_schema = output_export_result["decoded_schema"]
+        output_schema_hash = output_export_result["decoded_schema_hash"]
+        output_proto_bytes = output_export_result["protobuf_struct_bytes"]
+    else:
+        output_schema_result = JsonSchemaHelper.generate_schema_and_hash(output_value, output_schema_merges)
+        output_schema = output_schema_result.schema.to_primitive()
+        output_schema_hash = output_schema_result.decoded_schema_hash
+        output_value_hash = output_schema_result.decoded_value_hash
 
     # Extract flags
     is_pre_app_start = get_attribute_as_bool(attributes, TdSpanAttributes.IS_PRE_APP_START)
@@ -374,7 +420,44 @@ def otel_span_to_clean_span_data(
     # Convert kind
     kind = otel_span_kind_to_drift(otel_span.kind)
 
-    # Convert schema dicts to JsonSchema objects recursively
+    kind_value = kind.value if hasattr(kind, "value") else kind
+    status_code_value = status.code.value if hasattr(status.code, "value") else status.code
+    package_type_value = package_type.value if hasattr(package_type, "value") else package_type
+    span_proto_bytes = build_span_proto_bytes(
+        trace_id=trace_id,
+        span_id=span_id,
+        parent_span_id=parent_span_id,
+        name=name,
+        package_name=package_name,
+        instrumentation_name=instrumentation_name,
+        submodule_name=submodule_name,
+        package_type=package_type_value,
+        environment=environment,
+        kind=kind_value,
+        input_schema=input_schema,
+        output_schema=output_schema,
+        input_schema_hash=input_schema_hash,
+        output_schema_hash=output_schema_hash,
+        input_value_hash=input_value_hash,
+        output_value_hash=output_value_hash,
+        status_code=status_code_value,
+        status_message=status.message,
+        is_pre_app_start=is_pre_app_start,
+        is_root_span=is_root_span,
+        timestamp_seconds=timestamp.seconds,
+        timestamp_nanos=timestamp.nanos,
+        duration_seconds=duration.seconds,
+        duration_nanos=duration.nanos,
+        metadata=metadata,
+        input_value=input_value,
+        output_value=output_value,
+        input_value_proto_struct_bytes=input_proto_bytes,
+        output_value_proto_struct_bytes=output_proto_bytes,
+    )
+
+    # Keep schema objects populated for all export paths (API + filesystem).
+    # Even when Rust prebuilds Span bytes for API export, other sinks still
+    # serialize from `CleanSpanData` fields.
     input_schema_obj = dict_to_json_schema(input_schema)
     output_schema_obj = dict_to_json_schema(output_schema)
 
@@ -398,6 +481,9 @@ def otel_span_to_clean_span_data(
         output_schema_hash=output_schema_hash,
         input_value_hash=input_value_hash,
         output_value_hash=output_value_hash,
+        input_value_proto_struct_bytes=input_proto_bytes,
+        output_value_proto_struct_bytes=output_proto_bytes,
+        proto_span_bytes=span_proto_bytes,
         status=status,
         is_pre_app_start=is_pre_app_start,
         is_root_span=is_root_span,

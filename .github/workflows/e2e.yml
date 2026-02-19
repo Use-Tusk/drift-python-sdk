@@ -103,6 +103,7 @@ jobs:
         env:
           DOCKER_DEFAULT_PLATFORM: linux/amd64
           TUSK_CLI_VERSION: ${{ steps.tusk-version.outputs.version }}
+          TUSK_USE_RUST_CORE: "1"
         run: |
           chmod +x ./drift/instrumentation/${{ matrix.library }}/e2e-tests/run.sh
           cd ./drift/instrumentation/${{ matrix.library }}/e2e-tests && ./run.sh 8000
@@ -180,6 +181,7 @@ jobs:
         env:
           DOCKER_DEFAULT_PLATFORM: linux/amd64
           TUSK_CLI_VERSION: ${{ steps.tusk-version.outputs.version }}
+          TUSK_USE_RUST_CORE: "1"
         run: |
           chmod +x ./drift/stack-tests/${{ matrix.test }}/run.sh
           cd ./drift/stack-tests/${{ matrix.test }} && ./run.sh 8000

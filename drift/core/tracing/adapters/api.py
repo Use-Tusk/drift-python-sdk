@@ -197,18 +197,34 @@ class ApiSpanAdapter(SpanExportAdapter):
         import aiohttp
         from tusk.drift.backend.v1 import ExportSpansRequest, ExportSpansResponse
 
-        proto_spans = [self._transform_span_to_protobuf(span) for span in spans]
+        from ...rust_core_binding import build_export_spans_request_bytes
 
-        # Build the protobuf request
-        request = ExportSpansRequest(
+        # Build span protobuf bytes per item, so one missing prebuilt span does not
+        # force the entire batch down Python serialization.
+        span_proto_bytes_list: list[bytes] = []
+        for span in spans:
+            if span.proto_span_bytes is not None:
+                span_proto_bytes_list.append(span.proto_span_bytes)
+            else:
+                span_proto_bytes_list.append(bytes(span.to_proto()))
+
+        request_bytes = build_export_spans_request_bytes(
             observable_service_id=self._config.observable_service_id,
             environment=self._config.environment,
             sdk_version=self._config.sdk_version,
             sdk_instance_id=self._config.sdk_instance_id,
-            spans=proto_spans,
+            span_proto_bytes_list=span_proto_bytes_list,
         )
-
-        request_bytes = bytes(request)
+        if request_bytes is None:
+            proto_spans = [span.to_proto() for span in spans]
+            request = ExportSpansRequest(
+                observable_service_id=self._config.observable_service_id,
+                environment=self._config.environment,
+                sdk_version=self._config.sdk_version,
+                sdk_instance_id=self._config.sdk_instance_id,
+                spans=proto_spans,
+            )
+            request_bytes = bytes(request)
         original_size = len(request_bytes)
 
         # Apply compression if enabled and payload is large enough

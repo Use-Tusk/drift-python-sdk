@@ -131,6 +131,9 @@ class CleanSpanData:
     output_schema_hash: str = ""
     input_value_hash: str = ""
     output_value_hash: str = ""
+    input_value_proto_struct_bytes: bytes | None = None
+    output_value_proto_struct_bytes: bytes | None = None
+    proto_span_bytes: bytes | None = None
 
     # Status
     status: SpanStatus = field(default_factory=lambda: SpanStatus())

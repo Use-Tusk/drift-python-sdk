@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -84,8 +85,32 @@ def _dict_to_struct(data: Any) -> ProtoStruct:
     return struct
 
 
+def _struct_from_precomputed_or_dict(proto_struct_bytes: bytes | None, data: Any) -> ProtoStruct:
+    """Prefer precomputed protobuf bytes; fall back to Python dict conversion."""
+    if proto_struct_bytes:
+        try:
+            struct = ProtoStruct()
+            parse_fn = getattr(struct, "parse", None)
+            if callable(parse_fn):
+                parse_fn(proto_struct_bytes)
+                return struct
+        except Exception:
+            # Fallback to Python conversion if parsing fails.
+            pass
+    return _dict_to_struct(data)
+
+
 def clean_span_to_proto(span: CleanSpanData) -> ProtoSpan:
     """Convert a CleanSpanData instance to a tusk.drift.core.v1.Span message."""
+    if span.proto_span_bytes:
+        try:
+            proto = ProtoSpan()
+            parse_fn = getattr(proto, "parse", None)
+            if callable(parse_fn):
+                parse_fn(span.proto_span_bytes)
+                return proto
+        except Exception:
+            pass
 
     return ProtoSpan(
         trace_id=span.trace_id,
@@ -98,8 +123,8 @@ def clean_span_to_proto(span: CleanSpanData) -> ProtoSpan:
         package_type=span.package_type.value if span.package_type else PackageType.UNSPECIFIED.value,  # type: ignore[arg-type]
         environment=span.environment,
         kind=span.kind.value if hasattr(span.kind, "value") else span.kind,
-        input_value=_dict_to_struct(span.input_value),
-        output_value=_dict_to_struct(span.output_value),
+        input_value=_struct_from_precomputed_or_dict(span.input_value_proto_struct_bytes, span.input_value),
+        output_value=_struct_from_precomputed_or_dict(span.output_value_proto_struct_bytes, span.output_value),
         input_schema=_json_schema_to_proto(span.input_schema),
         output_schema=_json_schema_to_proto(span.output_schema),
         input_schema_hash=span.input_schema_hash,
@@ -153,5 +178,8 @@ def _map_decoded_type(decoded: DecodedType) -> ProtoDecodedType:
 def _metadata_to_dict(metadata: Any) -> dict[str, Any]:
     if metadata is None:
         return {}
+
+    if isinstance(metadata, Mapping):
+        return {str(key): value for key, value in metadata.items() if value is not None}
 
     return {key: value for key, value in metadata.__dict__.items() if value is not None}
