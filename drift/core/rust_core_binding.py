@@ -219,4 +219,3 @@ def build_export_spans_request_bytes(
     except Exception as exc:  # pragma: no cover - defensive fallback path
         logger.debug("Rust build_export_spans_request_bytes failed, falling back: %s", exc)
         return None
-

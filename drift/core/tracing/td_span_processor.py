@@ -37,12 +37,8 @@ def _should_skip_proto_validation(clean_span) -> bool:
     if not use_rust:
         return False
 
-    return (
-        clean_span.proto_span_bytes is not None
-        or (
-        clean_span.input_value_proto_struct_bytes is not None
-        and clean_span.output_value_proto_struct_bytes is not None
-        )
+    return clean_span.proto_span_bytes is not None or (
+        clean_span.input_value_proto_struct_bytes is not None and clean_span.output_value_proto_struct_bytes is not None
     )
 
 
