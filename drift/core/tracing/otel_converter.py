@@ -455,16 +455,11 @@ def otel_span_to_clean_span_data(
         output_value_proto_struct_bytes=output_proto_bytes,
     )
 
-    # Avoid expensive schema object tree conversion when we already have prebuilt
-    # full Span bytes from Rust; those schema objects would not be used on hot path.
-    from ..json_schema_helper import JsonSchema
-
-    if span_proto_bytes is not None:
-        input_schema_obj = JsonSchema()
-        output_schema_obj = JsonSchema()
-    else:
-        input_schema_obj = dict_to_json_schema(input_schema)
-        output_schema_obj = dict_to_json_schema(output_schema)
+    # Keep schema objects populated for all export paths (API + filesystem).
+    # Even when Rust prebuilds Span bytes for API export, other sinks still
+    # serialize from `CleanSpanData` fields.
+    input_schema_obj = dict_to_json_schema(input_schema)
+    output_schema_obj = dict_to_json_schema(output_schema)
 
     # Build CleanSpanData (note: no input_schema_merges or output_schema_merges fields)
     return CleanSpanData(

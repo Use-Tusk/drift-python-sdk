@@ -160,13 +160,23 @@ class JsonSchemaHelper:
 
             decoded = JsonSchemaHelper._decode_with_merges(normalized, schema_merges)
             rust_decoded_hash = deterministic_hash_jsonable(decoded)
-            decoded_value_hash = rust_decoded_hash or JsonSchemaHelper.generate_deterministic_hash(decoded)
+            if rust_decoded_hash is not None:
+                decoded_value_hash = rust_decoded_hash
+            else:
+                sorted_decoded = JsonSchemaHelper._sort_object_keys(decoded)
+                payload = json.dumps(sorted_decoded, ensure_ascii=False, separators=(",", ":"))
+                decoded_value_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
         schema = JsonSchemaHelper.generate_schema(decoded, schema_merges)
 
         schema_primitive = schema.to_primitive()
         rust_schema_hash = deterministic_hash_jsonable(schema_primitive)
-        decoded_schema_hash = rust_schema_hash or JsonSchemaHelper.generate_deterministic_hash(schema_primitive)
+        if rust_schema_hash is not None:
+            decoded_schema_hash = rust_schema_hash
+        else:
+            sorted_schema = JsonSchemaHelper._sort_object_keys(schema_primitive)
+            payload = json.dumps(sorted_schema, ensure_ascii=False, separators=(",", ":"))
+            decoded_schema_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
         return SchemaComputationResult(
             schema=schema,
             decoded_value_hash=decoded_value_hash,

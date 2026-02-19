@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -177,5 +178,8 @@ def _map_decoded_type(decoded: DecodedType) -> ProtoDecodedType:
 def _metadata_to_dict(metadata: Any) -> dict[str, Any]:
     if metadata is None:
         return {}
+
+    if isinstance(metadata, Mapping):
+        return {str(key): value for key, value in metadata.items() if value is not None}
 
     return {key: value for key, value in metadata.__dict__.items() if value is not None}

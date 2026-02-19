@@ -29,6 +29,7 @@ services:
       - POSTGRES_PASSWORD=testpass
       - TUSK_ANALYTICS_DISABLED=1
       - PYTHONUNBUFFERED=1
+      - TUSK_USE_RUST_CORE=${TUSK_USE_RUST_CORE:-0}
     working_dir: /app
     volumes:
       - ../../..:/sdk
