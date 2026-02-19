@@ -129,8 +129,19 @@ class E2ETestRunnerBase:
         # Install Python dependencies
         self.log("Installing Python dependencies...", Colors.BLUE)
         self.run_command(["pip", "install", "-q", "-r", "requirements.txt"])
+        self._maybe_enable_rust_sdk_extra()
 
         self.log("Setup complete", Colors.GREEN)
+
+    def _maybe_enable_rust_sdk_extra(self):
+        """Optionally enable SDK Rust extra for benchmark/e2e runs."""
+        if os.environ.get("TUSK_USE_RUST_CORE", "0").lower() not in {"1", "true", "yes"}:
+            return
+
+        # requirements.txt installs editable SDK via `-e /sdk`; this adds the optional
+        # rust extra so pip resolves drift-core-python automatically.
+        self.log("Enabling SDK rust extra (`-e /sdk[rust]`)...", Colors.BLUE)
+        self.run_command(["pip", "install", "-q", "--upgrade", "-e", "/sdk[rust]"])
 
     def _start_app(self, mode: str) -> bool:
         """Start the application with the given TUSK_DRIFT_MODE and wait for it to be ready.

@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass, field, is_dataclass
 from enum import Enum
 from typing import Any
 
+from .rust_core_binding import deterministic_hash_jsonable, normalize_and_hash_jsonable, normalize_json_jsonable
+
 
 class JsonSchemaType(Enum):
     UNSPECIFIED = 0
@@ -132,11 +134,39 @@ class JsonSchemaHelper:
 
     @staticmethod
     def generate_schema_and_hash(data: Any, schema_merges: SchemaMerges | None = None) -> SchemaComputationResult:
-        normalized = JsonSchemaHelper._normalize_data(data)
-        decoded = JsonSchemaHelper._decode_with_merges(normalized, schema_merges)
+        # Convert non-JSON primitives once. Rust/Python paths consume this shared shape.
+        sanitized = JsonSchemaHelper._to_jsonable(data)
+
+        normalized: Any
+        decoded: Any
+        decoded_value_hash: str
+
+        # If there are no merges, use one coarse Rust call for normalize+hash.
+        if not schema_merges:
+            rust_normalized = normalize_and_hash_jsonable(sanitized)
+            if rust_normalized is not None:
+                normalized, decoded_value_hash = rust_normalized
+            else:
+                normalized = json.loads(json.dumps(sanitized))
+                decoded_value_hash = JsonSchemaHelper.generate_deterministic_hash(normalized)
+            decoded = normalized
+        else:
+            # Merges require decode before value-hash. Let Rust handle normalize only.
+            rust_normalized_only = normalize_json_jsonable(sanitized)
+            if rust_normalized_only is not None:
+                normalized = rust_normalized_only
+            else:
+                normalized = json.loads(json.dumps(sanitized))
+
+            decoded = JsonSchemaHelper._decode_with_merges(normalized, schema_merges)
+            rust_decoded_hash = deterministic_hash_jsonable(decoded)
+            decoded_value_hash = rust_decoded_hash or JsonSchemaHelper.generate_deterministic_hash(decoded)
+
         schema = JsonSchemaHelper.generate_schema(decoded, schema_merges)
-        decoded_value_hash = JsonSchemaHelper.generate_deterministic_hash(decoded)
-        decoded_schema_hash = JsonSchemaHelper.generate_deterministic_hash(schema.to_primitive())
+
+        schema_primitive = schema.to_primitive()
+        rust_schema_hash = deterministic_hash_jsonable(schema_primitive)
+        decoded_schema_hash = rust_schema_hash or JsonSchemaHelper.generate_deterministic_hash(schema_primitive)
         return SchemaComputationResult(
             schema=schema,
             decoded_value_hash=decoded_value_hash,
@@ -145,6 +175,9 @@ class JsonSchemaHelper:
 
     @staticmethod
     def generate_deterministic_hash(data: Any) -> str:
+        rust_hash = deterministic_hash_jsonable(data)
+        if rust_hash is not None:
+            return rust_hash
         sorted_data = JsonSchemaHelper._sort_object_keys(data)
         payload = json.dumps(sorted_data, ensure_ascii=False, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()

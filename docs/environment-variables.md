@@ -130,6 +130,33 @@ TUSK_SAMPLING_RATE=0.1 python app.py
 
 For more details on sampling rate configuration methods and precedence, see the [Initialization Guide](./initialization.md#configure-sampling-rate).
 
+## Rust Core Flags
+
+These variables control optional Rust-accelerated paths in the SDK.
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `TUSK_USE_RUST_CORE` | Enables Rust binding usage when available (`1`, `true`, `yes`) | `0` (disabled) |
+| `TUSK_SKIP_PROTO_VALIDATION` | Skips expensive protobuf validation in hot path (`1`, `true`, `yes`) | `0` (disabled) |
+
+**Notes:**
+
+- The SDK is fail-open: if Rust bindings are unavailable or a Rust call fails, it falls back to Python implementation.
+- `TUSK_USE_RUST_CORE` does not install Rust bindings automatically. The `drift-core-python` package still must be installed in your environment.
+- `TUSK_SKIP_PROTO_VALIDATION` is performance-focused and should be used with confidence in parity tests and serialization correctness.
+
+See [`rust-core-bindings.md`](./rust-core-bindings.md) for more details.
+
+**Example usage:**
+
+```bash
+# Enable Rust path (if drift-core-python is installed)
+TUSK_USE_RUST_CORE=1 python app.py
+
+# Enable Rust path and skip proto validation
+TUSK_USE_RUST_CORE=1 TUSK_SKIP_PROTO_VALIDATION=1 python app.py
+```
+
 ## Connection Variables
 
 These variables configure how the SDK connects to the Tusk CLI during replay:
@@ -142,9 +169,7 @@ These variables configure how the SDK connects to the Tusk CLI during replay:
 
 These are typically set automatically by the Tusk CLI and do not need to be configured manually.
 
----
-
-## Related Documentation
+## Related Docs
 
 - [Initialization Guide](./initialization.md) - SDK initialization parameters and config file settings
 - [Quick Start Guide](./quickstart.md) - Record and replay your first trace

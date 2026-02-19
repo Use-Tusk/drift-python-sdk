@@ -230,3 +230,5 @@ __marimo__/
 coverage.lcov
 coverage.xml
 .coverage
+
+experimental/

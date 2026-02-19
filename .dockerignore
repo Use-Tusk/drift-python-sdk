@@ -20,6 +20,8 @@ __pycache__/
 # Build artifacts
 build/
 dist/
+target/
+**/target/
 *.egg-info/
 .eggs/
 eggs/
