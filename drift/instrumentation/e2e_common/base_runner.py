@@ -285,7 +285,10 @@ class E2ETestRunnerBase:
         self.log("Phase 3: Running Tusk Tests", Colors.BLUE)
         self.log("=" * 50, Colors.BLUE)
 
-        env = {"TUSK_ANALYTICS_DISABLED": "1"}
+        env = {
+            "TUSK_ANALYTICS_DISABLED": "1",
+            "TUSK_REQUIRE_INBOUND_REPLAY_SPAN": "1",
+        }
 
         result = self.run_command(
             ["tusk", "run", "--print", "--output-format", "json", "--enable-service-logs"],

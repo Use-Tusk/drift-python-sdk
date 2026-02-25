@@ -171,6 +171,9 @@ class TdSpanProcessor(SpanProcessor):
                 replay_trace_id = replay_trace_id_context.get()
                 if replay_trace_id:
                     clean_span.trace_id = replay_trace_id
+                    # Rust path may have prebuilt bytes with the original OTel trace_id.
+                    # Force re-serialization so CLI receives the replay trace_id.
+                    clean_span.proto_span_bytes = None
                 else:
                     logger.error("No replay trace ID found, cannot send inbound span for replay")
                     return
