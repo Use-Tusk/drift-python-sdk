@@ -144,15 +144,19 @@ class DriftMiddleware:
         try:
             with SpanUtils.with_span(span_info):
                 response = self.get_response(request)
-                # REPLAY mode: don't capture the span (it's already recorded)
-                # But do normalize the response so comparison succeeds
                 response = self._normalize_html_response(response)
+
+                # Capture response data on the span so the inbound replay span
+                # sent to the CLI includes the actual OUTPUT_VALUE for UI display
+                self._capture_replay_output(request, response, span_info)
+
                 return response
         finally:
-            # Reset context
+            # End span BEFORE resetting context so that TdSpanProcessor.on_end()
+            # can still read replay_trace_id_context to send the inbound span
+            span_info.span.end()
             span_kind_context.reset(span_kind_token)
             replay_trace_id_context.reset(replay_token)
-            span_info.span.end()
 
     def _record_request(self, request: HttpRequest, sdk, is_pre_app_start: bool) -> HttpResponse:
         """Handle request in RECORD mode.
@@ -261,6 +265,48 @@ class DriftMiddleware:
             route = request.resolver_match.route
             if route:
                 request._drift_route_template = route  # type: ignore
+
+    def _capture_replay_output(self, request: HttpRequest, response: HttpResponse, span_info: SpanInfo) -> None:
+        """Capture response data on the span for REPLAY mode.
+
+        Sets OUTPUT_VALUE so the inbound replay span sent to the CLI includes
+        the actual response for UI comparison. Skips RECORD-mode concerns like
+        transforms, trace blocking, and schema merges.
+
+        Args:
+            request: Django HttpRequest object
+            response: Django HttpResponse object
+            span_info: SpanInfo containing trace/span IDs and span reference
+        """
+        if not span_info.span.is_recording():
+            return
+
+        status_code = response.status_code
+        status_message = response.reason_phrase if hasattr(response, "reason_phrase") else ""
+        response_headers = dict(response.items()) if hasattr(response, "items") else {}
+
+        response_body = None
+        if hasattr(response, "content"):
+            content = response.content
+            if isinstance(content, bytes) and len(content) > 0:
+                response_body = content
+
+        if response_body:
+            from .html_utils import normalize_html_body
+
+            content_type = response_headers.get("Content-Type", "")
+            content_encoding = response_headers.get("Content-Encoding", "")
+            response_body = normalize_html_body(response_body, content_type, content_encoding)
+
+        output_value = build_output_value(
+            status_code,
+            status_message,
+            response_headers,
+            response_body,
+            None,
+        )
+
+        span_info.span.set_attribute(TdSpanAttributes.OUTPUT_VALUE, json.dumps(output_value))
 
     def _normalize_html_response(self, response: HttpResponse) -> HttpResponse:
         """Normalize HTML response body for REPLAY mode comparison.
