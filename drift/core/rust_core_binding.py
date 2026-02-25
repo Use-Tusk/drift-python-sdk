@@ -20,6 +20,7 @@ _binding_load_error: str | None = None
 _RUST_TRUTHY = {"1", "true", "yes", "on"}
 _RUST_FALSY = {"0", "false", "no", "off"}
 
+
 def _rust_env_decision() -> tuple[bool, str, str | None]:
     raw = os.getenv("TUSK_USE_RUST_CORE")
     if raw is None:
