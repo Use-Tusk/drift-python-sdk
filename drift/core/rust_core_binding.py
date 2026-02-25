@@ -15,14 +15,31 @@ logger = logging.getLogger(__name__)
 
 _binding_module = None
 _binding_load_attempted = False
+_binding_load_error: str | None = None
+
+_RUST_TRUTHY = {"1", "true", "yes", "on"}
+_RUST_FALSY = {"0", "false", "no", "off"}
+
+
+def _rust_env_decision() -> tuple[bool, str, str | None]:
+    raw = os.getenv("TUSK_USE_RUST_CORE")
+    if raw is None:
+        return True, "default_on", None
+    normalized = raw.strip().lower()
+    if normalized in _RUST_TRUTHY:
+        return True, "env_enabled", raw
+    if normalized in _RUST_FALSY:
+        return False, "env_disabled", raw
+    return True, "invalid_env_value_defaulted", raw
 
 
 def _enabled() -> bool:
-    return os.getenv("TUSK_USE_RUST_CORE", "0").lower() in {"1", "true", "yes"}
+    enabled, _, _ = _rust_env_decision()
+    return enabled
 
 
 def _load_binding():
-    global _binding_module, _binding_load_attempted
+    global _binding_module, _binding_load_attempted, _binding_load_error
     if _binding_load_attempted:
         return _binding_module
     _binding_load_attempted = True
@@ -30,10 +47,24 @@ def _load_binding():
         import drift_core as binding
 
         _binding_module = binding
+        _binding_load_error = None
     except Exception as exc:  # pragma: no cover - depends on runtime env
         logger.debug("Rust core binding not available: %s", exc)
         _binding_module = None
+        _binding_load_error = f"{type(exc).__name__}: {exc}"
     return _binding_module
+
+
+def get_rust_core_startup_status() -> dict[str, Any]:
+    enabled, reason, raw_env = _rust_env_decision()
+    loaded = _load_binding() if enabled else None
+    return {
+        "enabled": enabled,
+        "reason": reason,
+        "raw_env": raw_env,
+        "binding_loaded": loaded is not None,
+        "binding_error": _binding_load_error,
+    }
 
 
 def normalize_and_hash_jsonable(value: Any) -> tuple[Any, str] | None:
