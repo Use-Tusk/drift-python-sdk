@@ -78,6 +78,34 @@ class TuskDrift:
         random_suffix = "".join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=9))
         return f"sdk-{timestamp_ms}-{random_suffix}"
 
+    @staticmethod
+    def _log_rust_core_startup_status() -> None:
+        from .rust_core_binding import get_rust_core_startup_status
+
+        status = get_rust_core_startup_status()
+        env_display = status["raw_env"] if status["raw_env"] is not None else "<unset>"
+
+        if status["reason"] == "invalid_env_value_defaulted":
+            logger.warning(
+                "Invalid TUSK_USE_RUST_CORE value '%s'; defaulting to enabled rust core path.",
+                env_display,
+            )
+
+        if not status["enabled"]:
+            logger.info("Rust core path disabled at startup (env=%s, reason=%s).", env_display, status["reason"])
+            return
+
+        if status["binding_loaded"]:
+            logger.info("Rust core path enabled at startup (env=%s, reason=%s).", env_display, status["reason"])
+            return
+
+        logger.warning(
+            "Rust core path requested but binding unavailable; falling back to Python path (env=%s, reason=%s, error=%s).",
+            env_display,
+            status["reason"],
+            status["binding_error"],
+        )
+
     @classmethod
     def initialize(
         cls,
@@ -156,6 +184,7 @@ class TuskDrift:
             logger.debug("SDK disabled via environment variable")
             return instance
 
+        instance._log_rust_core_startup_status()
         logger.debug(f"Initializing in {instance.mode} mode")
 
         effective_transforms = transforms

@@ -136,13 +136,15 @@ These variables control optional Rust-accelerated paths in the SDK.
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `TUSK_USE_RUST_CORE` | Enables Rust binding usage when available (`1`, `true`, `yes`) | `0` (disabled) |
+| `TUSK_USE_RUST_CORE` | Controls Rust binding usage. Truthy (`1`, `true`, `yes`, `on`) enables, falsy (`0`, `false`, `no`, `off`) disables. | Enabled when unset |
 | `TUSK_SKIP_PROTO_VALIDATION` | Skips expensive protobuf validation in hot path (`1`, `true`, `yes`) | `0` (disabled) |
 
 **Notes:**
 
 - The SDK is fail-open: if Rust bindings are unavailable or a Rust call fails, it falls back to Python implementation.
+- `TUSK_USE_RUST_CORE` defaults to enabled when unset.
 - `TUSK_USE_RUST_CORE` does not install Rust bindings automatically. The `drift-core-python` package still must be installed in your environment.
+- If Rust is enabled but bindings cannot be loaded, the SDK logs startup fallback and continues on Python paths.
 - `TUSK_SKIP_PROTO_VALIDATION` is performance-focused and should be used with confidence in parity tests and serialization correctness.
 
 See [`rust-core-bindings.md`](./rust-core-bindings.md) for more details.
@@ -150,8 +152,11 @@ See [`rust-core-bindings.md`](./rust-core-bindings.md) for more details.
 **Example usage:**
 
 ```bash
-# Enable Rust path (if drift-core-python is installed)
+# Explicitly enable Rust path (also the default when unset)
 TUSK_USE_RUST_CORE=1 python app.py
+
+# Explicitly disable Rust path
+TUSK_USE_RUST_CORE=0 python app.py
 
 # Enable Rust path and skip proto validation
 TUSK_USE_RUST_CORE=1 TUSK_SKIP_PROTO_VALIDATION=1 python app.py

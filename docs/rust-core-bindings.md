@@ -14,13 +14,22 @@ At a high level:
 
 ## Enablement
 
-Set:
+Rust is enabled by default when `TUSK_USE_RUST_CORE` is unset.
+
+Use `TUSK_USE_RUST_CORE` to explicitly override behavior:
+
+- Truthy: `1`, `true`, `yes`, `on`
+- Falsy: `0`, `false`, `no`, `off`
+
+Examples:
 
 ```bash
+# Explicitly enable (same as unset)
 TUSK_USE_RUST_CORE=1
-```
 
-Truthy values are `1`, `true`, and `yes` (case-insensitive). Any other value is treated as disabled.
+# Explicitly disable
+TUSK_USE_RUST_CORE=0
+```
 
 ## Installation Requirements
 
@@ -37,23 +46,13 @@ You can install the SDK with Rust bindings via extras:
 pip install "tusk-drift-python-sdk[rust]"
 ```
 
-## Wheel Platform Coverage
+## Platform Compatibility
 
-Based on the current `drift-core` publish workflow, prebuilt wheels are built for:
+`drift-core` publishes native artifacts across a defined support matrix. See:
 
-- Linux `x86_64-unknown-linux-gnu`
-- Linux `aarch64-unknown-linux-gnu`
-- macOS Apple Silicon `aarch64-apple-darwin`
-- Windows `x86_64-pc-windows-msvc`
+- [`drift-core` compatibility matrix](https://github.com/Use-Tusk/drift-core/blob/main/docs/compatibility-matrix.md)
 
-Likely missing prebuilt wheels (source build fallback required) include:
-
-- macOS Intel (`x86_64-apple-darwin`)
-- Linux musl targets (e.g. Alpine)
-- Windows ARM64
-- Other uncommon Python/platform combinations not covered by release artifacts
-
-If no wheel matches the environment, `pip` may attempt a source build of `drift-core-python`, which typically requires a Rust toolchain and native build prerequisites.
+If no compatible wheel exists for your environment, `pip` may attempt a source build of `drift-core-python`, which typically requires a Rust toolchain and native build prerequisites.
 
 ## Fallback Behavior
 
@@ -62,6 +61,7 @@ The bridge module is fail-open:
 - Rust calls are guarded.
 - On import failures or call exceptions, the corresponding helper returns `None`.
 - Calling code then uses the existing Python implementation.
+- On startup, the SDK logs whether Rust is enabled/disabled and whether it had to fall back to Python.
 
 This means users do not need Rust installed to run the SDK when Rust acceleration is disabled or unavailable.
 
@@ -80,7 +80,7 @@ Use with care:
 
 ## Practical Guidance
 
-- Default production-safe posture: leave Rust disabled unless you have tested your deployment matrix.
+- Default production-safe posture: keep Rust enabled (default) only on tested deployment matrices.
 - Performance posture: enable Rust + benchmark on your workloads before broad rollout.
 - Reliability posture: keep parity tests and smoke tests in CI to detect drift between Python and Rust paths.
 
