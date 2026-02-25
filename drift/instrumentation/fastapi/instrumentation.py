@@ -226,10 +226,11 @@ async def _handle_replay_request(
                 transform_engine,
             )
     finally:
-        # Reset context
+        # End span BEFORE resetting context so that TdSpanProcessor.on_end()
+        # can still read replay_trace_id_context to send the inbound span
+        span_info.span.end()
         span_kind_context.reset(span_kind_token)
         replay_trace_id_context.reset(replay_token)
-        span_info.span.end()
 
 
 async def _record_request(
