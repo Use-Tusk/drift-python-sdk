@@ -90,8 +90,14 @@ Alternatively, you can set up Tusk Drift manually:
 1. Install the SDK:
 
    ```bash
+   # Use Rust bindings for better performance
+   pip install tusk-drift-python-sdk[rust]
+
+   # Fallback if no platform-compatible wheel
    pip install tusk-drift-python-sdk
    ```
+
+   *For more information about Rust acceleration, refer to [this doc](docs/rust-core-bindings).*
 
 2. Create configuration: Run `tusk init` to create your `.tusk/config.yaml` config file interactively, or create it manually per the [configuration docs](https://github.com/Use-Tusk/tusk-drift-cli/blob/main/docs/configuration.md).
 
