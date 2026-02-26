@@ -1,4 +1,13 @@
 services:
+  mock-upstream:
+    image: python:3.12-slim
+    command: ["python", "/mock/mock_server.py"]
+    working_dir: /mock
+    volumes:
+      - ../../e2e_common/mock_upstream:/mock:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+
   app:
     build:
       context: ../../../..
@@ -14,7 +23,11 @@ services:
       - BENCHMARK_DURATION=${BENCHMARK_DURATION:-10}
       - BENCHMARK_WARMUP=${BENCHMARK_WARMUP:-3}
       - TUSK_SAMPLING_RATE=${TUSK_SAMPLING_RATE:-}
+      - USE_MOCK_EXTERNALS=${USE_MOCK_EXTERNALS:-1}
+      - MOCK_SERVER_BASE_URL=${MOCK_SERVER_BASE_URL:-http://mock-upstream:8081}
     working_dir: /app
+    depends_on:
+      - mock-upstream
     volumes:
       # Mount SDK source for hot reload (no rebuild needed for SDK changes)
       - ../../../..:/sdk

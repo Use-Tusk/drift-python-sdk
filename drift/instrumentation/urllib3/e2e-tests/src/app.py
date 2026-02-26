@@ -6,6 +6,11 @@ import urllib3
 from flask import Flask, jsonify, request
 
 from drift import TuskDrift
+from drift.instrumentation.e2e_common.external_http import (
+    external_http_timeout_seconds,
+    upstream_url,
+    upstream_url_parts,
+)
 
 # Initialize SDK
 sdk = TuskDrift.initialize(
@@ -14,6 +19,20 @@ sdk = TuskDrift.initialize(
 )
 
 app = Flask(__name__)
+EXTERNAL_HTTP_TIMEOUT_SECONDS = external_http_timeout_seconds()
+
+
+def _configure_urllib3_for_mock_and_timeouts():
+    original_poolmanager_request = urllib3.PoolManager.request
+
+    def patched_poolmanager_request(self, method, url, *args, **kwargs):
+        kwargs.setdefault("timeout", urllib3.Timeout(total=EXTERNAL_HTTP_TIMEOUT_SECONDS))
+        return original_poolmanager_request(self, method, upstream_url(str(url)), *args, **kwargs)
+
+    urllib3.PoolManager.request = patched_poolmanager_request
+
+
+_configure_urllib3_for_mock_and_timeouts()
 
 # Create a shared PoolManager for connection reuse
 http = urllib3.PoolManager()
@@ -225,8 +244,10 @@ def connectionpool_get_json():
     """Test GET request using HTTPConnectionPool directly."""
     pool = None
     try:
-        pool = urllib3.HTTPSConnectionPool("jsonplaceholder.typicode.com", port=443)
-        response = pool.request("GET", "/posts/2")
+        scheme, host, port, path = upstream_url_parts("https://jsonplaceholder.typicode.com/posts/2")
+        pool_cls = urllib3.HTTPSConnectionPool if scheme == "https" else urllib3.HTTPConnectionPool
+        pool = pool_cls(host, port=port)
+        response = pool.request("GET", path)
         data = json.loads(response.data.decode("utf-8"))
         return jsonify(data)
     except Exception as e:
@@ -249,10 +270,12 @@ def connectionpool_post_json():
                 "userId": req_data.get("userId", 2),
             }
         )
-        pool = urllib3.HTTPSConnectionPool("jsonplaceholder.typicode.com", port=443)
+        scheme, host, port, path = upstream_url_parts("https://jsonplaceholder.typicode.com/posts")
+        pool_cls = urllib3.HTTPSConnectionPool if scheme == "https" else urllib3.HTTPConnectionPool
+        pool = pool_cls(host, port=port)
         response = pool.request(
             "POST",
-            "/posts",
+            path,
             body=body.encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )
@@ -401,7 +424,10 @@ def test_requests_lib():
     import requests as requests_lib
 
     try:
-        response = requests_lib.get("https://jsonplaceholder.typicode.com/posts/10")
+        response = requests_lib.get(
+            upstream_url("https://jsonplaceholder.typicode.com/posts/10"),
+            timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS,
+        )
         return jsonify(response.json())
     except Exception as e:
         return jsonify({"error": str(e)}), 500

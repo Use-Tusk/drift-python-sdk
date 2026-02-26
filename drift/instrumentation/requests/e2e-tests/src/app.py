@@ -7,6 +7,10 @@ from flask import Flask, jsonify, request
 from opentelemetry import context as otel_context
 
 from drift import TuskDrift
+from drift.instrumentation.e2e_common.external_http import (
+    external_http_timeout_seconds,
+    upstream_url,
+)
 
 # Initialize SDK
 sdk = TuskDrift.initialize(
@@ -15,6 +19,27 @@ sdk = TuskDrift.initialize(
 )
 
 app = Flask(__name__)
+EXTERNAL_HTTP_TIMEOUT_SECONDS = external_http_timeout_seconds()
+
+
+def _configure_requests_for_mock_and_timeouts():
+    original_request = requests.sessions.Session.request
+    original_send = requests.sessions.Session.send
+
+    def patched_request(self, method, url, *args, **kwargs):
+        kwargs.setdefault("timeout", EXTERNAL_HTTP_TIMEOUT_SECONDS)
+        return original_request(self, method, upstream_url(str(url)), *args, **kwargs)
+
+    def patched_send(self, request, *args, **kwargs):
+        kwargs.setdefault("timeout", EXTERNAL_HTTP_TIMEOUT_SECONDS)
+        request.url = upstream_url(request.url)
+        return original_send(self, request, *args, **kwargs)
+
+    requests.sessions.Session.request = patched_request
+    requests.sessions.Session.send = patched_send
+
+
+_configure_requests_for_mock_and_timeouts()
 
 
 def _run_with_context(ctx, fn, *args, **kwargs):

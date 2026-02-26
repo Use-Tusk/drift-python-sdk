@@ -10,6 +10,13 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 from opentelemetry import context as otel_context
 
+from drift.instrumentation.e2e_common.external_http import (
+    external_http_timeout_seconds,
+    upstream_url,
+)
+
+EXTERNAL_HTTP_TIMEOUT_SECONDS = external_http_timeout_seconds()
+
 
 def _run_with_context(ctx, fn, *args, **kwargs):
     """Helper to run a function with OpenTelemetry context in a thread pool."""
@@ -31,12 +38,13 @@ def get_weather(request):
     """Fetch weather data from external API."""
     try:
         response = requests.get(
-            "https://api.open-meteo.com/v1/forecast",
+            upstream_url("https://api.open-meteo.com/v1/forecast"),
             params={
                 "latitude": 40.7128,
                 "longitude": -74.0060,
                 "current_weather": "true",
             },
+            timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS,
         )
         weather = response.json()
 
@@ -47,17 +55,28 @@ def get_weather(request):
             }
         )
     except Exception as e:
-        return JsonResponse({"error": f"Failed to fetch weather: {str(e)}"}, status=500)
+        return JsonResponse(
+            {
+                "location": "New York",
+                "weather": {},
+                "fallback": True,
+                "error": f"Failed to fetch weather: {str(e)}",
+            }
+        )
 
 
 @require_GET
 def get_user(request, user_id: str):
     """Fetch user data from external API with seed."""
     try:
-        response = requests.get(f"https://randomuser.me/api/?seed={user_id}")
+        response = requests.get(
+            upstream_url("https://randomuser.me/api/"),
+            params={"seed": user_id},
+            timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS,
+        )
         return JsonResponse(response.json())
     except Exception as e:
-        return JsonResponse({"error": f"Failed to fetch user: {str(e)}"}, status=500)
+        return JsonResponse({"results": [], "fallback": True, "error": f"Failed to fetch user: {str(e)}"})
 
 
 @csrf_exempt
@@ -67,46 +86,69 @@ def create_post(request):
     try:
         data = json.loads(request.body)
         response = requests.post(
-            "https://jsonplaceholder.typicode.com/posts",
+            upstream_url("https://jsonplaceholder.typicode.com/posts"),
             json={
                 "title": data.get("title"),
                 "body": data.get("body"),
                 "userId": data.get("userId", 1),
             },
+            timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS,
         )
         return JsonResponse(response.json(), status=201)
     except Exception as e:
-        return JsonResponse({"error": f"Failed to create post: {str(e)}"}, status=500)
+        return JsonResponse(
+            {
+                "id": -1,
+                "title": data.get("title", ""),
+                "body": data.get("body", ""),
+                "userId": data.get("userId", 1),
+                "fallback": True,
+                "error": f"Failed to create post: {str(e)}",
+            },
+            status=201,
+        )
 
 
 @require_GET
 def get_post(request, post_id: int):
     """Fetch post and comments in parallel using ThreadPoolExecutor."""
-    ctx = otel_context.get_current()
+    try:
+        ctx = otel_context.get_current()
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        post_future = executor.submit(
-            _run_with_context,
-            ctx,
-            requests.get,
-            f"https://jsonplaceholder.typicode.com/posts/{post_id}",
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            post_future = executor.submit(
+                _run_with_context,
+                ctx,
+                requests.get,
+                upstream_url(f"https://jsonplaceholder.typicode.com/posts/{post_id}"),
+                timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS,
+            )
+            comments_future = executor.submit(
+                _run_with_context,
+                ctx,
+                requests.get,
+                upstream_url(f"https://jsonplaceholder.typicode.com/posts/{post_id}/comments"),
+                timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS,
+            )
+
+            post_response = post_future.result()
+            comments_response = comments_future.result()
+
+        return JsonResponse(
+            {
+                "post": post_response.json(),
+                "comments": comments_response.json(),
+            }
         )
-        comments_future = executor.submit(
-            _run_with_context,
-            ctx,
-            requests.get,
-            f"https://jsonplaceholder.typicode.com/posts/{post_id}/comments",
+    except Exception as e:
+        return JsonResponse(
+            {
+                "post": {},
+                "comments": [],
+                "fallback": True,
+                "error": f"Failed to fetch post: {str(e)}",
+            }
         )
-
-        post_response = post_future.result()
-        comments_response = comments_future.result()
-
-    return JsonResponse(
-        {
-            "post": post_response.json(),
-            "comments": comments_response.json(),
-        }
-    )
 
 
 @csrf_exempt
@@ -114,20 +156,40 @@ def get_post(request, post_id: int):
 def delete_post(request, post_id: int):
     """Delete a post via external API."""
     try:
-        requests.delete(f"https://jsonplaceholder.typicode.com/posts/{post_id}")
+        requests.delete(
+            upstream_url(f"https://jsonplaceholder.typicode.com/posts/{post_id}"),
+            timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS,
+        )
         return JsonResponse({"message": f"Post {post_id} deleted successfully"})
     except Exception as e:
-        return JsonResponse({"error": f"Failed to delete post: {str(e)}"}, status=500)
+        return JsonResponse(
+            {
+                "message": f"Post {post_id} delete fallback",
+                "fallback": True,
+                "error": f"Failed to delete post: {str(e)}",
+            }
+        )
 
 
 @require_GET
 def get_activity(request):
     """Fetch a random activity suggestion."""
     try:
-        response = requests.get("https://bored-api.appbrewery.com/random")
+        response = requests.get(
+            upstream_url("https://bored-api.appbrewery.com/random"),
+            timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS,
+        )
         return JsonResponse(response.json())
     except Exception as e:
-        return JsonResponse({"error": f"Failed to fetch activity: {str(e)}"}, status=500)
+        return JsonResponse(
+            {
+                "activity": "Take a short walk",
+                "type": "relaxation",
+                "participants": 1,
+                "fallback": True,
+                "error": f"Failed to fetch activity: {str(e)}",
+            }
+        )
 
 
 @require_GET

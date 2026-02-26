@@ -6,6 +6,10 @@ import aiohttp
 from flask import Flask, jsonify, request
 
 from drift import TuskDrift
+from drift.instrumentation.e2e_common.external_http import (
+    external_http_timeout_seconds,
+    upstream_url,
+)
 
 # Initialize SDK
 sdk = TuskDrift.initialize(
@@ -14,6 +18,21 @@ sdk = TuskDrift.initialize(
 )
 
 app = Flask(__name__)
+EXTERNAL_HTTP_TIMEOUT_SECONDS = external_http_timeout_seconds()
+
+
+def _configure_aiohttp_for_mock_and_timeouts():
+    original_request = aiohttp.ClientSession._request
+
+    async def patched_request(self, method, str_or_url, *args, **kwargs):
+        kwargs.setdefault("timeout", aiohttp.ClientTimeout(total=EXTERNAL_HTTP_TIMEOUT_SECONDS))
+        rewritten = upstream_url(str(str_or_url))
+        return await original_request(self, method, rewritten, *args, **kwargs)
+
+    aiohttp.ClientSession._request = patched_request
+
+
+_configure_aiohttp_for_mock_and_timeouts()
 
 
 # =============================================================================

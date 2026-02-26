@@ -6,6 +6,10 @@ import httpx
 from flask import Flask, jsonify, request
 
 from drift import TuskDrift
+from drift.instrumentation.e2e_common.external_http import (
+    external_http_timeout_seconds,
+    upstream_url,
+)
 
 # Initialize SDK
 sdk = TuskDrift.initialize(
@@ -14,6 +18,42 @@ sdk = TuskDrift.initialize(
 )
 
 app = Flask(__name__)
+EXTERNAL_HTTP_TIMEOUT_SECONDS = external_http_timeout_seconds()
+
+
+def _configure_httpx_for_mock_and_timeouts():
+    original_client_request = httpx.Client.request
+    original_async_client_request = httpx.AsyncClient.request
+    original_client_build_request = httpx.Client.build_request
+    original_async_client_build_request = httpx.AsyncClient.build_request
+    original_stream = httpx.stream
+
+    def patched_client_request(self, method, url, *args, **kwargs):
+        kwargs.setdefault("timeout", EXTERNAL_HTTP_TIMEOUT_SECONDS)
+        return original_client_request(self, method, upstream_url(str(url)), *args, **kwargs)
+
+    async def patched_async_client_request(self, method, url, *args, **kwargs):
+        kwargs.setdefault("timeout", EXTERNAL_HTTP_TIMEOUT_SECONDS)
+        return await original_async_client_request(self, method, upstream_url(str(url)), *args, **kwargs)
+
+    def patched_client_build_request(self, method, url, *args, **kwargs):
+        return original_client_build_request(self, method, upstream_url(str(url)), *args, **kwargs)
+
+    def patched_async_client_build_request(self, method, url, *args, **kwargs):
+        return original_async_client_build_request(self, method, upstream_url(str(url)), *args, **kwargs)
+
+    def patched_stream(method, url, *args, **kwargs):
+        kwargs.setdefault("timeout", EXTERNAL_HTTP_TIMEOUT_SECONDS)
+        return original_stream(method, upstream_url(str(url)), *args, **kwargs)
+
+    httpx.Client.request = patched_client_request
+    httpx.AsyncClient.request = patched_async_client_request
+    httpx.Client.build_request = patched_client_build_request
+    httpx.AsyncClient.build_request = patched_async_client_build_request
+    httpx.stream = patched_stream
+
+
+_configure_httpx_for_mock_and_timeouts()
 
 
 # =============================================================================

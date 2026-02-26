@@ -7,6 +7,10 @@ from flask import Flask, jsonify, request
 from opentelemetry import context as otel_context
 
 from drift import TuskDrift
+from drift.instrumentation.e2e_common.external_http import (
+    external_http_timeout_seconds,
+    upstream_url,
+)
 
 # Initialize SDK
 sdk = TuskDrift.initialize(
@@ -15,6 +19,7 @@ sdk = TuskDrift.initialize(
 )
 
 app = Flask(__name__)
+EXTERNAL_HTTP_TIMEOUT_SECONDS = external_http_timeout_seconds()
 
 
 def _run_with_context(ctx, fn, *args, **kwargs):
@@ -38,7 +43,10 @@ def health():
 def weather_activity():
     try:
         # First API call: Get user's location from IP
-        location_response = requests.get("http://ip-api.com/json/")
+        location_response = requests.get(
+            upstream_url("http://ip-api.com/json/"),
+            timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS,
+        )
         location_data = location_response.json()
         city = location_data["city"]
         lat = location_data["lat"]
@@ -50,7 +58,13 @@ def weather_activity():
 
         # Second API call: Get weather for the location
         weather_response = requests.get(
-            f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
+            upstream_url("https://api.open-meteo.com/v1/forecast"),
+            params={
+                "latitude": lat,
+                "longitude": lon,
+                "current_weather": "true",
+            },
+            timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS,
         )
         weather = weather_response.json()["current_weather"]
 
@@ -70,7 +84,10 @@ def weather_activity():
             recommended_activity = "Nice day for a walk"
 
         # Third API call: Get a random activity suggestion
-        activity_response = requests.get("https://bored-api.appbrewery.com/random")
+        activity_response = requests.get(
+            upstream_url("https://bored-api.appbrewery.com/random"),
+            timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS,
+        )
         alternative_activity = activity_response.json()
 
         return jsonify(
@@ -105,7 +122,11 @@ def weather_activity():
 @app.route("/api/user/<user_id>", methods=["GET"])
 def get_user(user_id):
     try:
-        response = requests.get(f"https://randomuser.me/api/?seed={user_id}")
+        response = requests.get(
+            upstream_url("https://randomuser.me/api/"),
+            params={"seed": user_id},
+            timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS,
+        )
         return jsonify(response.json())
     except Exception as e:
         return jsonify({"error": f"Failed to fetch user data: {str(e)}"}), 500
@@ -115,7 +136,10 @@ def get_user(user_id):
 @app.route("/api/user", methods=["POST"])
 def create_user():
     try:
-        response = requests.get("https://randomuser.me/api/")
+        response = requests.get(
+            upstream_url("https://randomuser.me/api/"),
+            timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS,
+        )
         return jsonify(response.json())
     except Exception as e:
         return jsonify({"error": f"Failed to create user: {str(e)}"}), 500
@@ -134,13 +158,15 @@ def get_post(post_id):
             _run_with_context,
             ctx,
             requests.get,
-            f"https://jsonplaceholder.typicode.com/posts/{post_id}",
+            upstream_url(f"https://jsonplaceholder.typicode.com/posts/{post_id}"),
+            timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS,
         )
         comments_future = executor.submit(
             _run_with_context,
             ctx,
             requests.get,
-            f"https://jsonplaceholder.typicode.com/posts/{post_id}/comments",
+            upstream_url(f"https://jsonplaceholder.typicode.com/posts/{post_id}/comments"),
+            timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS,
         )
 
         post_response = post_future.result()
@@ -156,12 +182,13 @@ def create_post():
         data = request.get_json()
 
         response = requests.post(
-            "https://jsonplaceholder.typicode.com/posts",
+            upstream_url("https://jsonplaceholder.typicode.com/posts"),
             json={
                 "title": data.get("title"),
                 "body": data.get("body"),
                 "userId": data.get("userId"),
             },
+            timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS,
         )
 
         return jsonify(response.json()), 201
@@ -173,7 +200,10 @@ def create_post():
 @app.route("/api/post/<post_id>", methods=["DELETE"])
 def delete_post(post_id):
     try:
-        requests.delete(f"https://jsonplaceholder.typicode.com/posts/{post_id}")
+        requests.delete(
+            upstream_url(f"https://jsonplaceholder.typicode.com/posts/{post_id}"),
+            timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS,
+        )
         return jsonify({"message": f"Post {post_id} deleted successfully"})
     except Exception as e:
         return jsonify({"error": f"Failed to delete post: {str(e)}"}), 500

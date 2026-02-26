@@ -9,6 +9,10 @@ from flask import request as flask_request
 from opentelemetry import context as otel_context
 
 from drift import TuskDrift
+from drift.instrumentation.e2e_common.external_http import (
+    external_http_timeout_seconds,
+    upstream_url,
+)
 
 # Initialize SDK
 sdk = TuskDrift.initialize(
@@ -17,6 +21,25 @@ sdk = TuskDrift.initialize(
 )
 
 app = Flask(__name__)
+EXTERNAL_HTTP_TIMEOUT_SECONDS = external_http_timeout_seconds()
+_ORIGINAL_URLOPEN = urlopen
+
+
+def _rewrite_request_url(request_obj: Request) -> Request:
+    return Request(
+        upstream_url(request_obj.full_url),
+        data=request_obj.data,
+        headers=dict(request_obj.header_items()),
+        origin_req_host=getattr(request_obj, "origin_req_host", None),
+        unverifiable=getattr(request_obj, "unverifiable", False),
+        method=request_obj.get_method(),
+    )
+
+
+def urlopen(url, data=None, timeout=None, *args, **kwargs):
+    rewritten = _rewrite_request_url(url) if isinstance(url, Request) else upstream_url(str(url))
+    effective_timeout = EXTERNAL_HTTP_TIMEOUT_SECONDS if timeout is None else timeout
+    return _ORIGINAL_URLOPEN(rewritten, data, effective_timeout, *args, **kwargs)
 
 
 def _run_with_context(ctx, fn, *args, **kwargs):
@@ -285,7 +308,7 @@ def custom_opener():
         from urllib.request import HTTPHandler
 
         opener = build_opener(HTTPHandler())
-        with opener.open("https://jsonplaceholder.typicode.com/posts/1", timeout=10) as response:
+        with opener.open(upstream_url("https://jsonplaceholder.typicode.com/posts/1"), timeout=10) as response:
             data = json.loads(response.read().decode("utf-8"))
             return jsonify(data)
     except Exception as e:
@@ -595,7 +618,7 @@ def test_urlretrieve():
 
         # Download to temp file
         filepath, headers = urlretrieve(
-            "https://jsonplaceholder.typicode.com/posts/1",
+            upstream_url("https://jsonplaceholder.typicode.com/posts/1"),
             tmp_path,
         )
 
