@@ -1,7 +1,6 @@
 """FastAPI test app for e2e tests - HTTP instrumentation."""
 
 import asyncio
-import os
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 
@@ -13,6 +12,10 @@ from opentelemetry import trace
 from pydantic import BaseModel
 
 from drift import TuskDrift
+from drift.instrumentation.e2e_common.external_http import (
+    external_http_timeout_seconds,
+    upstream_url,
+)
 
 # Initialize SDK
 sdk = TuskDrift.initialize(
@@ -21,6 +24,7 @@ sdk = TuskDrift.initialize(
 )
 
 app = FastAPI(title="FastAPI E2E Test App")
+EXTERNAL_HTTP_TIMEOUT_SECONDS = external_http_timeout_seconds()
 
 
 def _run_with_context(ctx, fn, *args, **kwargs):
@@ -46,12 +50,13 @@ async def get_weather():
         # Using httpx for async HTTP client
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                "https://api.open-meteo.com/v1/forecast",
+                upstream_url("https://api.open-meteo.com/v1/forecast"),
                 params={
                     "latitude": 40.7128,
                     "longitude": -74.0060,
                     "current_weather": "true",
                 },
+                timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS,
             )
             weather = response.json()
 
@@ -68,7 +73,11 @@ async def get_weather():
 async def get_user(user_id: str):
     """Fetch user data from external API with seed."""
     try:
-        response = requests.get(f"https://randomuser.me/api/?seed={user_id}")
+        response = requests.get(
+            upstream_url("https://randomuser.me/api/"),
+            params={"seed": user_id},
+            timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS,
+        )
         return response.json()
     except Exception as e:
         return {"error": f"Failed to fetch user: {str(e)}"}
@@ -86,8 +95,9 @@ async def create_post(post: CreatePostRequest):
     """Create a new post via external API."""
     try:
         response = requests.post(
-            "https://jsonplaceholder.typicode.com/posts",
+            upstream_url("https://jsonplaceholder.typicode.com/posts"),
             json=post.model_dump(),
+            timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS,
         )
         return response.json()
     except Exception as e:
@@ -105,13 +115,15 @@ async def get_post(post_id: int):
             _run_with_context,
             ctx,
             requests.get,
-            f"https://jsonplaceholder.typicode.com/posts/{post_id}",
+            upstream_url(f"https://jsonplaceholder.typicode.com/posts/{post_id}"),
+            timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS,
         )
         comments_future = executor.submit(
             _run_with_context,
             ctx,
             requests.get,
-            f"https://jsonplaceholder.typicode.com/posts/{post_id}/comments",
+            upstream_url(f"https://jsonplaceholder.typicode.com/posts/{post_id}/comments"),
+            timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS,
         )
 
         post_response = post_future.result()
@@ -128,7 +140,10 @@ async def get_post(post_id: int):
 async def delete_post(post_id: int):
     """Delete a post via external API."""
     try:
-        requests.delete(f"https://jsonplaceholder.typicode.com/posts/{post_id}")
+        requests.delete(
+            upstream_url(f"https://jsonplaceholder.typicode.com/posts/{post_id}"),
+            timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS,
+        )
         return {"message": f"Post {post_id} deleted successfully"}
     except Exception as e:
         return {"error": f"Failed to delete post: {str(e)}"}
@@ -139,7 +154,10 @@ async def delete_post(post_id: int):
 async def get_activity():
     """Fetch a random activity suggestion."""
     try:
-        response = requests.get("https://bored-api.appbrewery.com/random")
+        response = requests.get(
+            upstream_url("https://bored-api.appbrewery.com/random"),
+            timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS,
+        )
         return response.json()
     except Exception as e:
         return {"error": f"Failed to fetch activity: {str(e)}"}
@@ -181,7 +199,7 @@ async def test_async_context():
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(
-                    "https://httpbin.org/get",
+                    upstream_url("https://httpbin.org/get"),
                     params={"call_id": call_id},
                     timeout=10.0,
                 )
@@ -231,7 +249,7 @@ async def test_thread_context():
 
         # Make HTTP call in thread
         response = requests.get(
-            "https://httpbin.org/get",
+            upstream_url("https://httpbin.org/get"),
             params={"task_id": task_id},
             timeout=10,
         )
@@ -262,5 +280,7 @@ if __name__ == "__main__":
     import uvicorn
 
     sdk.mark_app_as_ready()
-    port = int(os.getenv("PORT", "8000"))
+    from os import getenv
+
+    port = int(getenv("PORT", "8000"))
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
