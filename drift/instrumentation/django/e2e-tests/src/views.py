@@ -83,6 +83,7 @@ def get_user(request, user_id: str):
 @require_POST
 def create_post(request):
     """Create a new post via external API."""
+    data = {}
     try:
         data = json.loads(request.body)
         response = requests.post(

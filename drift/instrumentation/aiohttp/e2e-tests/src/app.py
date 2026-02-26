@@ -25,7 +25,11 @@ def _configure_aiohttp_for_mock_and_timeouts():
     original_request = aiohttp.ClientSession._request
 
     async def patched_request(self, method, str_or_url, *args, **kwargs):
-        kwargs.setdefault("timeout", aiohttp.ClientTimeout(total=EXTERNAL_HTTP_TIMEOUT_SECONDS))
+        session_timeout = getattr(self, "_timeout", None)
+        default_timeout = getattr(aiohttp.client, "DEFAULT_TIMEOUT", None)
+        using_default_session_timeout = session_timeout is default_timeout or session_timeout == default_timeout
+        if "timeout" not in kwargs and using_default_session_timeout:
+            kwargs["timeout"] = aiohttp.ClientTimeout(total=EXTERNAL_HTTP_TIMEOUT_SECONDS)
         rewritten = upstream_url(str(str_or_url))
         return await original_request(self, method, rewritten, *args, **kwargs)
 
