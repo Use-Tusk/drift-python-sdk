@@ -4,8 +4,8 @@
 
 <p align="center">
   <a href="https://pypi.org/project/tusk-drift-python-sdk/"><img src="https://img.shields.io/pypi/v/tusk-drift-python-sdk" alt="PyPI version"></a>
+  <a href="https://pypi.org/project/tusk-drift-python-sdk/"><img alt="PyPI - Python Version" src="https://img.shields.io/pypi/pyversions/tusk-drift-python-sdk"></a>
   <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
-  <a href="https://github.com/Use-Tusk/drift-python-sdk/commits/main/"><img src="https://img.shields.io/github/last-commit/Use-Tusk/drift-python-sdk" alt="GitHub last commit"></a>
   <a href="https://x.com/usetusk"><img src="https://img.shields.io/twitter/url?url=https%3A%2F%2Fx.com%2Fusetusk&style=flat&logo=x&label=Tusk&color=BF40BF" alt="Tusk X account"></a>
   <a href="https://join.slack.com/t/tusk-community/shared_invite/zt-3fve1s7ie-NAAUn~UpHsf1m_2tdoGjsQ"><img src="https://img.shields.io/badge/slack-badge?style=flat&logo=slack&label=Tusk&color=BF40BF" alt="Tusk Community Slack"></a>
 </p>
