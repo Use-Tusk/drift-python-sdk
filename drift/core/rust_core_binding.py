@@ -9,7 +9,10 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .types import PackageType, SpanKind, StatusCode
 
 logger = logging.getLogger(__name__)
 
@@ -161,16 +164,16 @@ def build_span_proto_bytes(
     package_name: str,
     instrumentation_name: str,
     submodule_name: str,
-    package_type: int,
+    package_type: PackageType,
     environment: str | None,
-    kind: int,
+    kind: SpanKind,
     input_schema: dict[str, Any],
     output_schema: dict[str, Any],
     input_schema_hash: str,
     output_schema_hash: str,
     input_value_hash: str,
     output_value_hash: str,
-    status_code: int,
+    status_code: StatusCode,
     status_message: str,
     is_pre_app_start: bool,
     is_root_span: bool,
@@ -190,6 +193,14 @@ def build_span_proto_bytes(
     if binding is None:
         return None
     try:
+        from .types import PackageType, SpanKind, StatusCode
+
+        if not isinstance(package_type, PackageType):
+            raise TypeError(f"package_type must be PackageType, got {type(package_type).__name__}")
+        if not isinstance(kind, SpanKind):
+            raise TypeError(f"kind must be SpanKind, got {type(kind).__name__}")
+        if not isinstance(status_code, StatusCode):
+            raise TypeError(f"status_code must be StatusCode, got {type(status_code).__name__}")
         return binding.build_span_proto_bytes_pyobject(
             trace_id,
             span_id,
@@ -198,16 +209,16 @@ def build_span_proto_bytes(
             package_name,
             instrumentation_name,
             submodule_name,
-            package_type,
+            package_type.value,
             environment,
-            kind,
+            kind.value,
             input_schema,
             output_schema,
             input_schema_hash,
             output_schema_hash,
             input_value_hash,
             output_value_hash,
-            status_code,
+            status_code.value,
             status_message,
             is_pre_app_start,
             is_root_span,
