@@ -420,9 +420,6 @@ def otel_span_to_clean_span_data(
     # Convert kind
     kind = otel_span_kind_to_drift(otel_span.kind)
 
-    kind_value = kind.value if hasattr(kind, "value") else kind
-    status_code_value = status.code.value if hasattr(status.code, "value") else status.code
-    package_type_value = package_type.value if hasattr(package_type, "value") else package_type
     span_proto_bytes = build_span_proto_bytes(
         trace_id=trace_id,
         span_id=span_id,
@@ -431,16 +428,16 @@ def otel_span_to_clean_span_data(
         package_name=package_name,
         instrumentation_name=instrumentation_name,
         submodule_name=submodule_name,
-        package_type=package_type_value,
+        package_type=package_type,
         environment=environment,
-        kind=kind_value,
+        kind=kind,
         input_schema=input_schema,
         output_schema=output_schema,
         input_schema_hash=input_schema_hash,
         output_schema_hash=output_schema_hash,
         input_value_hash=input_value_hash,
         output_value_hash=output_value_hash,
-        status_code=status_code_value,
+        status_code=status.code,
         status_message=status.message,
         is_pre_app_start=is_pre_app_start,
         is_root_span=is_root_span,
