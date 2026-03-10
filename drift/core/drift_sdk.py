@@ -5,6 +5,7 @@ import atexit
 import json
 import logging
 import os
+import platform
 import random
 import stat
 import time
@@ -17,10 +18,11 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import SpanKind as OTelSpanKind
 
 from ..instrumentation.registry import install_hooks
+from ..version import SDK_VERSION
 from .communication.communicator import CommunicatorConfig, ProtobufCommunicator
 from .communication.types import MockRequestInput, MockResponseOutput
 from .config import TuskConfig, TuskFileConfig, load_tusk_config
-from .logger import LogLevel, configure_logger
+from .logger import LogLevel, configure_logger, get_log_level
 from .sampling import should_sample, validate_sampling_rate
 from .trace_blocking_manager import TraceBlockingManager, should_block_span
 from .tracing import TdSpanAttributes, TdSpanExporter, TdSpanExporterConfig
@@ -99,11 +101,38 @@ class TuskDrift:
             logger.info("Rust core path enabled at startup (env=%s, reason=%s).", env_display, status["reason"])
             return
 
-        logger.warning(
-            "Rust core path requested but binding unavailable; falling back to Python path (env=%s, reason=%s, error=%s).",
+        logger.info(
+            "Rust core path unavailable at startup; using Python path instead (env=%s, reason=%s, error=%s).",
             env_display,
             status["reason"],
             status["binding_error"],
+        )
+
+    def _log_startup_summary(self, env: str, use_remote_export: bool) -> None:
+        service_name = (
+            self.file_config.service.name
+            if self.file_config and self.file_config.service and self.file_config.service.name
+            else "unknown"
+        )
+        service_id = (
+            self.file_config.service.id
+            if self.file_config and self.file_config.service and self.file_config.service.id
+            else "<unset>"
+        )
+
+        logger.info(
+            "SDK initialized successfully (version=%s, mode=%s, env=%s, service=%s, serviceId=%s, exportSpans=%s, samplingRate=%s, logLevel=%s, runtime=python %s, platform=%s/%s).",
+            SDK_VERSION,
+            self.mode,
+            env,
+            service_name,
+            service_id,
+            use_remote_export,
+            self._sampling_rate,
+            get_log_level(),
+            platform.python_version(),
+            platform.system().lower(),
+            platform.machine().lower(),
         )
 
     @classmethod
@@ -216,8 +245,6 @@ class TuskDrift:
             export_spans_enabled and effective_api_key is not None and effective_observable_service_id is not None
         )
 
-        from ..version import SDK_VERSION as sdk_version
-
         exporter_config = TdSpanExporterConfig(
             base_directory=base_dir,
             mode=instance.mode,
@@ -226,7 +253,7 @@ class TuskDrift:
             api_key=effective_api_key,
             tusk_backend_base_url=effective_backend_url,
             environment=env,
-            sdk_version=sdk_version,
+            sdk_version=SDK_VERSION,
             sdk_instance_id=instance._sdk_instance_id,
         )
         instance.span_exporter = TdSpanExporter(exporter_config)
@@ -236,7 +263,7 @@ class TuskDrift:
         resource = Resource.create(
             {
                 "service.name": service_name,
-                "service.version": sdk_version,
+                "service.version": SDK_VERSION,
                 "deployment.environment": env,
             }
         )
@@ -281,7 +308,7 @@ class TuskDrift:
         atexit.register(instance.shutdown)
 
         cls._initialized = True
-        logger.info("SDK initialized in %s mode", instance.mode)
+        instance._log_startup_summary(env=env, use_remote_export=use_remote_export)
 
         return instance
 
