@@ -813,17 +813,17 @@ wheels = [
 
 [[package]]
 name = "drift-core-python"
-version = "0.1.7"
+version = "0.1.9"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/19/89/57ab05ec81807ab2f646f35a30604fc6115f709d5849c7e63ac931fd1eb8/drift_core_python-0.1.7.tar.gz", hash = "sha256:d2a93142ffc81939fd7d41f6b2c3ab1cdaf6db985ac5cb5235c2a090af2d7793", size = 13510 }
+sdist = { url = "https://files.pythonhosted.org/packages/ff/55/ceebc540d17347e6b646154acbd1ec0374ccfde5a81e657274c0372e020d/drift_core_python-0.1.9.tar.gz", hash = "sha256:c1888569edad37770a64dadd2955ee5eec56147e36a17b97eb1f415fb92fd2cf", size = 13511 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fb/61/65899e3f7a978bbe0438181bbd932c41614498b2164f443586568d18586e/drift_core_python-0.1.7-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:f68e221c810974ab4125e97df1b04b6c98049835fd82a9f67e9f78d9facc9275", size = 379149 },
-    { url = "https://files.pythonhosted.org/packages/92/56/01f394c72dc4d8a2b227520e56685bc3139fb1b5fb9eec70143530215066/drift_core_python-0.1.7-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:8c81c0a7b4b478e9527de9e1b92ee7c33ebd1e5e927da1504266c445311a3fba", size = 365822 },
-    { url = "https://files.pythonhosted.org/packages/21/65/c4406a8c78dfbe4a3d75a8569fb3abcd7027ffb54ae405911b538cc5015c/drift_core_python-0.1.7-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:89faea31af9446cbee1dea20d18dac51dc377ca9a0e92f258bd3b2f0798db699", size = 404792 },
-    { url = "https://files.pythonhosted.org/packages/19/43/bcf487715e872807b5b52dbec41309a248eb9917dd0d321a34e877af90e7/drift_core_python-0.1.7-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:9beae827e3bbe09044e316f08b511dae5c76578c67392f6b476bea950f5e02b1", size = 425982 },
-    { url = "https://files.pythonhosted.org/packages/2a/77/11f80a638fc2af26ee8b60779ac29e5b10ff2e8984aac64fd0e984a1c976/drift_core_python-0.1.7-cp39-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:b4acdbacb99ef03c7aa6d4e94e51793c7423985566d9741305699adcad99564d", size = 582006 },
-    { url = "https://files.pythonhosted.org/packages/b3/8a/2804b5027cdff9c9c6d845595a798596410016086ea0e8e2997f06e4b1e0/drift_core_python-0.1.7-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:2a40d2d87a86ff9fad8df48358badb6a8f15a4717b377a3915bc5db5439f4f17", size = 626965 },
-    { url = "https://files.pythonhosted.org/packages/8a/0e/08ed5090239e1bf22693b6630b794828c5997899830e1762ed94a0d31816/drift_core_python-0.1.7-cp39-abi3-win_amd64.whl", hash = "sha256:6ac4b100bb7cfdcd3931b87ccca987e44ffa4b8798e14ccbc65c8c3a39492749", size = 256904 },
+    { url = "https://files.pythonhosted.org/packages/79/50/bb63fdecf9105cc0486183dfda438dd599de17e5af8a6189f9f602055521/drift_core_python-0.1.9-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:8abd8a343124402f031c059e1a8ee1c94cbf9e6c3e9a690fa205494cef8c1389", size = 379105 },
+    { url = "https://files.pythonhosted.org/packages/8b/36/59a9e90a0bdcff8833de9439d983d78105b73786f8141501320cd644fe63/drift_core_python-0.1.9-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:5abf2b8aae342099ef7f91034d9caa3fd2e10dc5046cf8f6ed8dc4eb6243deaa", size = 366089 },
+    { url = "https://files.pythonhosted.org/packages/43/ed/8e87a4a2892f85abefc113c94d845d38dfe3968c13ac4ba47ea01b45e445/drift_core_python-0.1.9-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:bd499a0edbbfa891e7104094740ec0883944319f31497fb5596201f31a9de781", size = 404638 },
+    { url = "https://files.pythonhosted.org/packages/22/72/d4ad02a3e7cd4b45c8bde8e4016c9b760383d51c403043ab6422f26e7735/drift_core_python-0.1.9-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:f5b64f76d1bda183e227433f179b9cd43a84bf04da1068453ab4a91a243faff6", size = 426038 },
+    { url = "https://files.pythonhosted.org/packages/c8/a6/c8b642483272bbc0de0af102f3278ac1507d76fca09a28681e343c328441/drift_core_python-0.1.9-cp39-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:cba714a2fd4500e5c93812c78c37d53deb1166c4082ef4b9aca368c6707ff904", size = 582015 },
+    { url = "https://files.pythonhosted.org/packages/16/3a/06a271b263e01747aeb3ede154c6890431f99eb445240cea837af0e3c710/drift_core_python-0.1.9-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:6c3bdc4d82a5acee15cbd8ebbf62ac68ecfecafab89c0bcdca272c0c96cf9816", size = 627067 },
+    { url = "https://files.pythonhosted.org/packages/1f/3a/4ce9e6132046754f666d83d182be9c886a1eeac6b2aa586a72cbadf3be83/drift_core_python-0.1.9-cp39-abi3-win_amd64.whl", hash = "sha256:4fb9298441fd96c5ad38584b04e31d529c88fdca429554dff22fc449a5fee88f", size = 256938 },
 ]
 
 [[package]]
@@ -2353,7 +2353,7 @@ wheels = [
 
 [[package]]
 name = "tusk-drift-python-sdk"
-version = "0.1.19"
+version = "0.1.22"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
@@ -2408,7 +2408,7 @@ requires-dist = [
     { name = "aiofiles", specifier = ">=23.0.0" },
     { name = "aiohttp", specifier = ">=3.9.0" },
     { name = "django", marker = "extra == 'django'", specifier = ">=4.2" },
-    { name = "drift-core-python", marker = "extra == 'rust'", specifier = ">=0.1.7" },
+    { name = "drift-core-python", marker = "extra == 'rust'", specifier = ">=0.1.9" },
     { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.115.6" },
     { name = "fastapi", marker = "extra == 'fastapi'", specifier = ">=0.115.6" },
     { name = "flask", marker = "extra == 'dev'", specifier = ">=3.1.2" },
