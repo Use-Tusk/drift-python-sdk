@@ -113,7 +113,9 @@ def handle_replay_mode(
 
     # Background request: App is ready + not within a trace (no parent span) + not a server request
     if is_app_ready and not current_span_info and not is_server_request:
-        logger.debug("[ModeUtils] Handling no-op request")
+        logger.warning(
+            "[ModeUtils] Background request detected during replay (no active trace context). This typically means a background job, scheduled task, or middleware (e.g., rate limiters, message consumers) is running outside of a test trace. To avoid errors, disable these services when TUSK_DRIFT_MODE=REPLAY."
+        )
         return no_op_request_handler()
 
     return replay_mode_handler()
