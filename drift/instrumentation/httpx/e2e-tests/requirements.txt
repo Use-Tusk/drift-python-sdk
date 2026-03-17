@@ -1,4 +1,5 @@
 -e /sdk
 Flask>=3.1.2
-httpx>=0.28.1
+# Strict replay sandbox routes outbound HTTP through a SOCKS proxy.
+httpx[socks]>=0.28.1
 requests>=2.32.5
