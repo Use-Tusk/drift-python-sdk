@@ -398,6 +398,9 @@ async def _handle_request(
     if sdk.mode == TuskDriftMode.DISABLED:
         return await original_call(app, scope, receive, send)
 
+    if not sdk.app_ready:
+        sdk.mark_app_as_ready()
+
     # REPLAY mode - handle trace ID extraction and context setup
     if sdk.mode == TuskDriftMode.REPLAY:
         return await _handle_replay_request(

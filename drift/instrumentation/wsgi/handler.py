@@ -92,6 +92,9 @@ def handle_wsgi_request(
     if sdk.mode == TuskDriftMode.DISABLED:
         return original_call()
 
+    if not sdk.app_ready:
+        sdk.mark_app_as_ready()
+
     # REPLAY mode: requires trace ID header
     if sdk.mode == TuskDriftMode.REPLAY:
         return _handle_replay_request(

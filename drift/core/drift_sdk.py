@@ -646,8 +646,6 @@ class TuskDrift:
         if self._td_span_processor:
             self._td_span_processor.update_app_ready(True)
 
-        logger.debug("Application marked as ready")
-
         if self.mode == TuskDriftMode.REPLAY:
             logger.debug("Replay mode active - ready to serve mocked responses")
         elif self.mode == TuskDriftMode.RECORD:
