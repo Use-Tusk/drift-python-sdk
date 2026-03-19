@@ -350,6 +350,7 @@ class UrllibInstrumentation(InstrumentationBase):
                 return original_open(opener_self, fullurl, data, timeout)
 
             try:
+
                 def original_call():
                     return original_open(opener_self, fullurl, data, timeout)
 

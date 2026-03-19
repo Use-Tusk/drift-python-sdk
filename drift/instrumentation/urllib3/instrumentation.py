@@ -676,8 +676,7 @@ class Urllib3Instrumentation(InstrumentationBase):
             return raw_data if isinstance(raw_data, bytes) else b""
         except Exception:
             logger.debug(
-                "Failed to buffer response body for instrumentation, "
-                "response body will not be captured for replay",
+                "Failed to buffer response body for instrumentation, response body will not be captured for replay",
                 exc_info=True,
             )
             return None
