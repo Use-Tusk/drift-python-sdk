@@ -479,6 +479,7 @@ class Urllib3Instrumentation(InstrumentationBase):
                 headers = kw.get("headers") or {}
                 if isinstance(headers, (list, tuple)):
                     headers = dict(headers)
+                headers = _normalize_headers(headers) if headers else {}
                 if self._transform_engine and self._transform_engine.should_drop_outbound_request(
                     method.upper(), url, headers
                 ):
@@ -540,7 +541,7 @@ class Urllib3Instrumentation(InstrumentationBase):
         try:
             with SpanUtils.with_span(span_info):
                 # Check drop transforms before making the request
-                headers_dict = dict(headers) if headers else {}
+                headers_dict = _normalize_headers(dict(headers)) if headers else {}
                 if self._transform_engine and self._transform_engine.should_drop_outbound_request(
                     method.upper(), full_url, headers_dict
                 ):
@@ -773,7 +774,7 @@ class Urllib3Instrumentation(InstrumentationBase):
                 encoded_fields = urlencode(fields)
                 body_base64, body_size = self._encode_body_to_base64(encoded_fields)
 
-            headers_dict = dict(headers) if headers else {}
+            headers_dict = _normalize_headers(dict(headers)) if headers else {}
 
             raw_input_value = {
                 "method": method.upper(),
