@@ -123,13 +123,12 @@ class DjangoInstrumentation(InstrumentationBase):
         original_setup = django.setup
 
         def patched_setup(*args, **kwargs):
-            # Restore original setup first to avoid re-entrance
-            django.setup = original_setup
-            # Run the original django.setup()
-            result = original_setup(*args, **kwargs)
-            # Now settings are configured — inject middleware
-            self._try_inject_middleware()
-            return result
+            try:
+                result = original_setup(*args, **kwargs)
+                self._try_inject_middleware()
+                return result
+            finally:
+                django.setup = original_setup
 
         django.setup = patched_setup
         logger.debug("Deferred middleware injection to django.setup()")
