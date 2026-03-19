@@ -111,8 +111,17 @@ jobs:
       - name: Print replay logs for ${{ matrix.library }}
         if: always()
         run: |
+          log_dir=./drift/instrumentation/${{ matrix.library }}/e2e-tests/.tusk/logs
+          if ! sudo test -d "$log_dir"; then
+            echo "No replay log directory found"
+            exit 0
+          fi
+
+          sudo chmod -R a+rX "$log_dir" || true
+          sudo chown -R "$(id -u):$(id -g)" "$log_dir" || true
+
           shopt -s nullglob
-          logs=(./drift/instrumentation/${{ matrix.library }}/e2e-tests/.tusk/logs/*)
+          logs=("$log_dir"/*)
           if [ ${#logs[@]} -eq 0 ]; then
             echo "No replay logs found"
             exit 0
@@ -128,7 +137,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: e2e-${{ matrix.library }}-replay-logs
-          path: ./drift/instrumentation/${{ matrix.library }}/e2e-tests/.tusk/logs/*
+          path: ./drift/instrumentation/${{ matrix.library }}/e2e-tests/.tusk/logs
           if-no-files-found: ignore
 
       - name: Cleanup Docker resources
@@ -212,8 +221,17 @@ jobs:
       - name: Print replay logs for ${{ matrix.test }}
         if: always()
         run: |
+          log_dir=./drift/stack-tests/${{ matrix.test }}/.tusk/logs
+          if ! sudo test -d "$log_dir"; then
+            echo "No replay log directory found"
+            exit 0
+          fi
+
+          sudo chmod -R a+rX "$log_dir" || true
+          sudo chown -R "$(id -u):$(id -g)" "$log_dir" || true
+
           shopt -s nullglob
-          logs=(./drift/stack-tests/${{ matrix.test }}/.tusk/logs/*)
+          logs=("$log_dir"/*)
           if [ ${#logs[@]} -eq 0 ]; then
             echo "No replay logs found"
             exit 0
@@ -229,7 +247,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: stack-${{ matrix.test }}-replay-logs
-          path: ./drift/stack-tests/${{ matrix.test }}/.tusk/logs/*
+          path: ./drift/stack-tests/${{ matrix.test }}/.tusk/logs
           if-no-files-found: ignore
 
       - name: Cleanup Docker resources
@@ -306,8 +324,17 @@ jobs:
       - name: Print replay logs for requests smoke test
         if: always()
         run: |
+          log_dir=./drift/instrumentation/requests/e2e-tests/.tusk/logs
+          if ! sudo test -d "$log_dir"; then
+            echo "No replay log directory found"
+            exit 0
+          fi
+
+          sudo chmod -R a+rX "$log_dir" || true
+          sudo chown -R "$(id -u):$(id -g)" "$log_dir" || true
+
           shopt -s nullglob
-          logs=(./drift/instrumentation/requests/e2e-tests/.tusk/logs/*)
+          logs=("$log_dir"/*)
           if [ ${#logs[@]} -eq 0 ]; then
             echo "No replay logs found"
             exit 0
@@ -323,7 +350,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: requests-smoke-replay-logs
-          path: ./drift/instrumentation/requests/e2e-tests/.tusk/logs/*
+          path: ./drift/instrumentation/requests/e2e-tests/.tusk/logs
           if-no-files-found: ignore
 
       - name: Cleanup Docker resources
