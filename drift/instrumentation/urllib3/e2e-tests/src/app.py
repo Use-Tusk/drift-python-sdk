@@ -1,6 +1,7 @@
 """Flask test app for e2e tests - urllib3 instrumentation testing."""
 
 import json
+import zlib
 
 import urllib3
 from flask import Flask, jsonify, request
@@ -438,15 +439,14 @@ def test_requests_lib():
 # =============================================================================
 
 
-@app.route("/test/bug/preload-content-false", methods=["GET"])
-def test_bug_preload_content_false():
-    """CONFIRMED BUG: preload_content=False parameter breaks response reading.
+@app.route("/test/preload-content-false-read", methods=["GET"])
+def test_preload_content_false_read():
+    """Test preload_content=False with manual read().
 
-    When preload_content=False, the response body is not preloaded into memory.
-    The instrumentation reads .data in _finalize_span which consumes the body
-    before the application can read it.
-
-    Root cause: instrumentation.py line 839 accesses response.data unconditionally
+    This is the pattern botocore/boto3 uses: request with preload_content=False,
+    then call response.read() to get the body. The instrumentation must buffer
+    the body in _fp (BytesIO) during recording so both the span capture and the
+    caller's read() work correctly.
     """
     try:
         response = http.request(
@@ -454,7 +454,6 @@ def test_bug_preload_content_false():
             "https://jsonplaceholder.typicode.com/posts/21",
             preload_content=False,
         )
-        # Manually read the data after the response
         data_bytes = response.read()
         response.release_conn()
         data = json.loads(data_bytes.decode("utf-8"))
@@ -463,14 +462,40 @@ def test_bug_preload_content_false():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/test/bug/streaming-response", methods=["GET"])
-def test_bug_streaming_response():
-    """CONFIRMED BUG: Streaming response body is consumed before iteration.
+@app.route("/test/preload-content-false-crc32", methods=["GET"])
+def test_preload_content_false_crc32():
+    """Test preload_content=False with CRC32 checksum validation.
 
-    When using response.stream() to iterate over chunks, the instrumentation
-    has already consumed the body by accessing response.data in _finalize_span.
+    Mimics botocore's DynamoDB flow: read the body via read(), then validate
+    the CRC32 checksum against a header value. This failed before the fix
+    because the mock response's BytesIO was exhausted by preload_content=True,
+    causing read() to return b"" and CRC32 to be 0.
+    """
+    try:
+        response = http.request(
+            "GET",
+            "https://jsonplaceholder.typicode.com/posts/22",
+            preload_content=False,
+        )
+        body = response.read()
+        response.release_conn()
 
-    Root cause: Same as preload-content-false - instrumentation.py line 839
+        if not body:
+            return jsonify({"error": "Empty body from read()"}), 500
+
+        actual_crc32 = zlib.crc32(body) & 0xFFFFFFFF
+        data = json.loads(body.decode("utf-8"))
+        return jsonify({**data, "crc32": actual_crc32, "body_length": len(body)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/preload-content-false-stream", methods=["GET"])
+def test_preload_content_false_stream():
+    """Test preload_content=False with chunked stream() reading.
+
+    The instrumentation buffers the body into a BytesIO, so subsequent
+    stream() calls read from that BytesIO in chunks as normal.
     """
     try:
         response = http.request(
@@ -479,9 +504,8 @@ def test_bug_streaming_response():
             preload_content=False,
         )
 
-        # Try to read response in chunks using stream()
         chunks = []
-        for chunk in response.stream(32):  # Read 32 bytes at a time
+        for chunk in response.stream(32):
             chunks.append(chunk)
 
         response.release_conn()
