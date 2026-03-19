@@ -516,6 +516,36 @@ def test_preload_content_false_stream():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/test/preload-content-false-gzip", methods=["GET"])
+def test_preload_content_false_gzip():
+    """Test preload_content=False with gzip-compressed response.
+
+    Requests a gzip-encoded response and reads it via read().  During
+    recording, _get_response_body_safely captures the raw (compressed) bytes
+    from the socket.  During replay, _create_mock_response must decompress
+    them before serving so the caller gets plain JSON — otherwise the mock
+    would return compressed bytes with no Content-Encoding header and the
+    caller would get garbled data.
+    """
+    try:
+        response = http.request(
+            "GET",
+            "https://httpbin.org/gzip",
+            preload_content=False,
+            headers={"Accept-Encoding": "gzip"},
+        )
+        data_bytes = response.read()
+        response.release_conn()
+
+        if not data_bytes:
+            return jsonify({"error": "Empty body from read()"}), 500
+
+        data = json.loads(data_bytes.decode("utf-8"))
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     sdk.mark_app_as_ready()
     app.run(host="0.0.0.0", port=8000, debug=False)

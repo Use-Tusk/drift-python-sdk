@@ -834,6 +834,33 @@ class Urllib3Instrumentation(InstrumentationBase):
             logger.error(f"Error getting mock for {method} {url}: {e}")
             return None
 
+    @staticmethod
+    def _decompress(data: bytes, encoding: str) -> bytes:
+        """Decompress response body bytes.  Returns original data on failure."""
+        import gzip
+        import zlib
+
+        if encoding == "gzip" or encoding == "x-gzip":
+            return gzip.decompress(data)
+        if encoding == "deflate":
+            try:
+                return zlib.decompress(data)
+            except zlib.error:
+                return zlib.decompress(data, -zlib.MAX_WBITS)
+        if encoding == "br":
+            try:
+                import brotli
+                return brotli.decompress(data)
+            except ImportError:
+                pass
+        if encoding == "zstd":
+            try:
+                import zstandard
+                return zstandard.ZstdDecompressor().decompress(data)
+            except ImportError:
+                pass
+        return data
+
     def _create_mock_response(self, urllib3_module: Any, mock_data: dict[str, Any], url: str) -> Any:
         """Create a mocked urllib3.HTTPResponse object.
 
@@ -849,15 +876,6 @@ class Urllib3Instrumentation(InstrumentationBase):
 
         status_code = mock_data.get("statusCode", 200)
         headers = dict(mock_data.get("headers", {}))
-
-        # Remove content-encoding and transfer-encoding headers since the body
-        # was already decompressed when recorded
-        headers_to_remove = []
-        for key in headers:
-            if key.lower() in ("content-encoding", "transfer-encoding"):
-                headers_to_remove.append(key)
-        for key in headers_to_remove:
-            del headers[key]
 
         # Get body - decode from base64 if needed
         body = mock_data.get("body", "")
@@ -875,6 +893,30 @@ class Urllib3Instrumentation(InstrumentationBase):
             content = body
         else:
             content = json.dumps(body).encode("utf-8")
+
+        # The recorded body may be compressed (preload_content=False records
+        # raw bytes from the socket) or already decompressed (preload_content=True
+        # records _body which urllib3 already decoded).  We try to decompress
+        # so the mock always serves plain content.  Then we strip the encoding
+        # headers so urllib3's decoder is a no-op.
+        content_encoding = None
+        for key in headers:
+            if key.lower() == "content-encoding":
+                content_encoding = headers[key].lower()
+                break
+
+        if content_encoding and content_encoding != "identity":
+            try:
+                content = self._decompress(content, content_encoding)
+            except Exception:
+                pass
+
+        headers_to_remove = []
+        for key in headers:
+            if key.lower() in ("content-encoding", "transfer-encoding"):
+                headers_to_remove.append(key)
+        for key in headers_to_remove:
+            del headers[key]
 
         final_url = mock_data.get("finalUrl") or url
 

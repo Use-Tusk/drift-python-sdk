@@ -109,4 +109,7 @@ if __name__ == "__main__":
     # stream() after preload_content=False
     make_request("GET", "/test/preload-content-false-stream")
 
+    # read() after preload_content=False with gzip-compressed response
+    make_request("GET", "/test/preload-content-false-gzip")
+
     print_request_summary()

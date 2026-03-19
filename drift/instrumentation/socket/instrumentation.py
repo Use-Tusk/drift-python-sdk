@@ -87,6 +87,10 @@ class SocketInstrumentation(InstrumentationBase):
             logger.warning("[SocketInstrumentation] socket.socket class not found")
             return
 
+        import socket as _socket_module
+
+        SOCK_STREAM = _socket_module.SOCK_STREAM
+
         # Store original methods exactly like the working test pattern
         original_connect = socket_class.connect
         original_send = socket_class.send
@@ -94,12 +98,23 @@ class SocketInstrumentation(InstrumentationBase):
 
         instrumentation = self
 
+        def _is_tcp(sock: Any) -> bool:
+            """Only TCP (SOCK_STREAM) sockets carry HTTP traffic.
+
+            UDP sockets (StatsD, DNS, etc.) are fire-and-forget side-effects
+            that don't need record/replay instrumentation.
+            """
+            try:
+                return sock.type & SOCK_STREAM != 0
+            except Exception:
+                return False
+
         # Patch connect - always track and detect
         def patched_connect(self: Any, *args: Any, **kwargs: Any) -> Any:
             """Patched socket.connect method."""
-            # Track this socket as an outbound socket
-            instrumentation._outbound_sockets.add(self)
-            instrumentation._handle_socket_call("connect", self)
+            if _is_tcp(self):
+                instrumentation._outbound_sockets.add(self)
+                instrumentation._handle_socket_call("connect", self)
             return original_connect(self, *args, **kwargs)
 
         # Patch send - only detect if socket is tracked (outbound)
