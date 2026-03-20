@@ -91,6 +91,12 @@ def serialize_value(val: Any) -> Any:
         # Serialize ipaddress types to string for inet/cidr PostgreSQL columns
         # These are returned by psycopg when querying inet and cidr columns
         return str(val)
+    elif hasattr(val, "getquoted"):
+        if hasattr(val, "adapted"):
+            return serialize_value(val.adapted)
+        elif hasattr(val, "addr"):
+            return serialize_value(val.addr)
+        return str(val)
     elif isinstance(val, memoryview):
         # Convert memoryview to bytes first, then serialize
         return _serialize_bytes(bytes(val))
