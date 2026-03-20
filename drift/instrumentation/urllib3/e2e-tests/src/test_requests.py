@@ -112,4 +112,12 @@ if __name__ == "__main__":
     # read() after preload_content=False with gzip-compressed response
     make_request("GET", "/test/preload-content-false-gzip")
 
+    # ==========================================================================
+    # preload_content=False Edge Case Tests (bug detection)
+    # ==========================================================================
+    print("\n--- preload_content=False Edge Case Tests ---\n")
+
+    # decode_content=False + gzip (caller wants raw compressed bytes)
+    make_request("GET", "/test/preload-false-decode-content-false-gzip")
+
     print_request_summary()

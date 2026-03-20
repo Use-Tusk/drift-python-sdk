@@ -143,7 +143,7 @@ pkill -f "python src/app.py"
 Run the Tusk CLI to replay the recorded traces:
 
 ```bash
-TUSK_ANALYTICS_DISABLED=1 tusk run --print --output-format "json" --enable-service-logs
+TUSK_ANALYTICS_DISABLED=1 tusk drift run --print --output-format "json" --enable-service-logs
 ```
 
 **Flags explained:**
@@ -155,7 +155,7 @@ TUSK_ANALYTICS_DISABLED=1 tusk run --print --output-format "json" --enable-servi
 To see all available flags, run:
 
 ```bash
-tusk run --help
+tusk drift run --help
 ```
 
 **Interpreting Results:**
@@ -235,7 +235,7 @@ The actual test orchestration happens inside the container via `entrypoint.py`, 
 2. Starts app in RECORD mode
 3. Executes test requests
 4. Stops app, verifies traces
-5. Runs `tusk run` CLI
+5. Runs `tusk drift run` CLI
 6. Checks for socket instrumentation warnings
 7. Returns exit code
 
@@ -334,7 +334,7 @@ TUSK_DRIFT_MODE=RECORD python src/app.py
 python src/test_requests.py
 
 # Inside container: Run Tusk CLI tests
-TUSK_ANALYTICS_DISABLED=1 tusk run --print --output-format "json" --enable-service-logs
+TUSK_ANALYTICS_DISABLED=1 tusk drift run --print --output-format "json" --enable-service-logs
 
 # View traces
 cat .tusk/traces/*.jsonl | python -m json.tool

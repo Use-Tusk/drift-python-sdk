@@ -896,14 +896,19 @@ class Urllib3Instrumentation(InstrumentationBase):
         else:
             content = json.dumps(body).encode("utf-8")
 
-        # Strip encoding headers — the body was already decompressed at
-        # recording time (in _finalize_span), so the decoder should be a no-op.
-        headers_to_remove = []
-        for key in headers:
-            if key.lower() in ("content-encoding", "transfer-encoding"):
-                headers_to_remove.append(key)
-        for key in headers_to_remove:
-            del headers[key]
+        # When bodyIsRawEncoded is true, the stored bytes are still compressed
+        # (preload_content=False during recording) — keep encoding headers so
+        # urllib3's read pipeline can decompress on demand.  Otherwise the body
+        # was already decompressed at recording time (preload_content=True), so
+        # strip encoding headers to avoid double-decompression.
+        body_is_raw_encoded = mock_data.get("bodyIsRawEncoded", False)
+        if not body_is_raw_encoded:
+            headers_to_remove = []
+            for key in headers:
+                if key.lower() in ("content-encoding", "transfer-encoding"):
+                    headers_to_remove.append(key)
+            for key in headers_to_remove:
+                del headers[key]
 
         final_url = mock_data.get("finalUrl") or url
 
@@ -1003,21 +1008,25 @@ class Urllib3Instrumentation(InstrumentationBase):
                 try:
                     response_bytes = self._get_response_body_safely(response)
                     if response_bytes is not None:
-                        # For preload_content=False, response_bytes are raw from
-                        # the socket and may still be gzip/deflate compressed.
-                        # Decompress so the span always stores plain content
-                        # (matches preload_content=True where _body is already
-                        # decompressed by urllib3).
-                        resp_encoding = ""
-                        for hdr_key, hdr_val in response_headers.items():
-                            if hdr_key.lower() == "content-encoding":
-                                resp_encoding = hdr_val.lower()
-                                break
-                        if resp_encoding and resp_encoding != "identity":
-                            try:
-                                response_bytes = self._decompress(response_bytes, resp_encoding)
-                            except Exception:
-                                pass
+                        # Determine if the stored bytes are still raw-encoded
+                        # (compressed).  When preload_content=True, urllib3
+                        # already decompressed into _body so the bytes are
+                        # plain.  When preload_content=False, _body is None
+                        # and the bytes came straight from _fp — still
+                        # compressed.  We store a flag so replay can decide
+                        # whether to preserve Content-Encoding headers.
+                        body_is_raw_encoded = False
+                        _sentinel = object()
+                        _body_val = getattr(response, "_body", _sentinel)
+                        if _body_val is None:
+                            # preload_content=False — bytes from _fp, possibly compressed
+                            resp_encoding = ""
+                            for hdr_key, hdr_val in response_headers.items():
+                                if hdr_key.lower() == "content-encoding":
+                                    resp_encoding = hdr_val.lower()
+                                    break
+                            if resp_encoding and resp_encoding != "identity":
+                                body_is_raw_encoded = True
                         response_body_base64, response_body_size = self._encode_body_to_base64(response_bytes)
                     else:
                         response_body_base64 = None
@@ -1039,6 +1048,8 @@ class Urllib3Instrumentation(InstrumentationBase):
                 if response_body_base64 is not None:
                     output_value["body"] = response_body_base64
                     output_value["bodySize"] = response_body_size
+                    if body_is_raw_encoded:
+                        output_value["bodyIsRawEncoded"] = True
 
                 if status_code >= 400:
                     status = SpanStatus(
