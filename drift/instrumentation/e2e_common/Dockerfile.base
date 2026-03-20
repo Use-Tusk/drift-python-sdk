@@ -24,7 +24,7 @@ ARG TUSK_CLI_VERSION=latest
 RUN set -ex && \
   if [ "$TUSK_CLI_VERSION" = "latest" ]; then \
   # Get the latest version tag
-  VERSION=$(curl -s https://api.github.com/repos/Use-Tusk/tusk-drift-cli/releases/latest | grep '"tag_name"' | cut -d '"' -f 4); \
+  VERSION=$(curl -s https://api.github.com/repos/Use-Tusk/tusk-cli/releases/latest | grep '"tag_name"' | cut -d '"' -f 4); \
   else \
   VERSION="${TUSK_CLI_VERSION}"; \
   fi && \
@@ -37,8 +37,8 @@ RUN set -ex && \
   aarch64|arm64) ARCH_NAME="arm64" ;; \
   *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
   esac && \
-  # Construct download URL (archives are named like tusk-drift-cli_0.1.35_Linux_x86_64.tar.gz)
-  DOWNLOAD_URL="https://github.com/Use-Tusk/tusk-drift-cli/releases/download/${VERSION}/tusk-drift-cli_${VERSION_NUM}_Linux_${ARCH_NAME}.tar.gz" && \
+  # Construct download URL (archives are named like tusk-cli_0.1.35_Linux_x86_64.tar.gz)
+  DOWNLOAD_URL="https://github.com/Use-Tusk/tusk-cli/releases/download/${VERSION}/tusk-cli_${VERSION_NUM}_Linux_${ARCH_NAME}.tar.gz" && \
   echo "Downloading Tusk CLI from: $DOWNLOAD_URL" && \
   curl -fsSL "$DOWNLOAD_URL" -o /tmp/tusk.tar.gz && \
   tar -xzf /tmp/tusk.tar.gz -C /tmp && \

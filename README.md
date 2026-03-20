@@ -10,7 +10,7 @@
   <a href="https://join.slack.com/t/tusk-community/shared_invite/zt-3fve1s7ie-NAAUn~UpHsf1m_2tdoGjsQ"><img src="https://img.shields.io/badge/slack-badge?style=flat&logo=slack&label=Tusk&color=BF40BF" alt="Tusk Community Slack"></a>
 </p>
 
-The Python Tusk Drift SDK enables fast and deterministic API testing by capturing and replaying API calls made to/from your service. Automatically record real-world API calls, then replay them as tests using the [Tusk CLI](https://github.com/Use-Tusk/tusk-drift-cli) to find regressions. During replay, all outbound requests are intercepted with recorded data to ensure consistent behavior without side-effects.
+The Python Tusk Drift SDK enables fast and deterministic API testing by capturing and replaying API calls made to/from your service. Automatically record real-world API calls, then replay them as tests using the [Tusk CLI](https://github.com/Use-Tusk/tusk-cli) to find regressions. During replay, all outbound requests are intercepted with recorded data to ensure consistent behavior without side-effects.
 
 <div align="center">
 
@@ -67,7 +67,7 @@ If you're using packages or versions not listed above, please create an issue wi
 
 ### Step 1: Install the CLI
 
-First, install the Tusk Drift CLI by following our [CLI installation guide](https://github.com/Use-Tusk/tusk-drift-cli?tab=readme-ov-file#install).
+First, install the Tusk Drift CLI by following our [CLI installation guide](https://github.com/Use-Tusk/tusk-cli?tab=readme-ov-file#install).
 
 ### Step 2: Set up Tusk Drift
 
@@ -78,7 +78,7 @@ Use our AI agent to automatically set up Tusk Drift for your service:
 ```bash
 cd path/to/your/service
 export ANTHROPIC_API_KEY=your-api-key
-tusk setup
+tusk drift setup
 ```
 
 The agent will analyze your codebase, install the SDK, instrument it into your application, create configuration files, and test the setup with recording and replay.
@@ -99,7 +99,7 @@ Alternatively, you can set up Tusk Drift manually:
 
    *For more information about Rust acceleration, refer to [this doc](docs/rust-core-bindings).*
 
-2. Create configuration: Run `tusk init` to create your `.tusk/config.yaml` config file interactively, or create it manually per the [configuration docs](https://github.com/Use-Tusk/tusk-drift-cli/blob/main/docs/configuration.md).
+2. Create configuration: Run `tusk init` to create your `.tusk/config.yaml` config file interactively, or create it manually per the [configuration docs](https://github.com/Use-Tusk/tusk-cli/blob/main/docs/drift/configuration.md).
 
 3. Initialize the SDK: Refer to the [initialization guide](docs/initialization.md) to instrument the SDK in your service.
 
