@@ -51,8 +51,12 @@ def serialize_value(val: Any) -> Any:
     Returns:
         A JSON-serializable version of the value.
     """
-    if isinstance(val, (datetime.datetime, datetime.date, datetime.time)):
+    if isinstance(val, datetime.datetime):
         return val.isoformat()
+    elif isinstance(val, datetime.date):
+        return {"__date__": val.isoformat()}
+    elif isinstance(val, datetime.time):
+        return {"__time__": val.isoformat()}
     elif isinstance(val, datetime.timedelta):
         # Serialize timedelta as total seconds for consistent hashing
         return {"__timedelta__": val.total_seconds()}
