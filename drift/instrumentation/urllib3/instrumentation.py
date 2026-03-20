@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from contextvars import ContextVar
+from functools import partial
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 
@@ -54,6 +56,10 @@ logger = logging.getLogger(__name__)
 # Higher-level instrumentations that use urllib3 under the hood
 # When these are active, urllib3 should skip creating duplicate spans
 HIGHER_LEVEL_HTTP_INSTRUMENTATIONS = {"RequestsInstrumentation"}
+
+# Set to True inside the PoolManager patch so that the HTTPConnectionPool patch
+# can detect the call originated from PoolManager and skip duplicate span creation.
+_inside_poolmanager = ContextVar("_inside_poolmanager", default=False)
 
 HEADER_SCHEMA_MERGES = {
     "headers": SchemaMerge(match_importance=0.0),
@@ -167,6 +173,9 @@ class Urllib3Instrumentation(InstrumentationBase):
             # Set calling_library_context to suppress socket instrumentation warnings
             # for internal socket calls made by urllib3
             context_token = calling_library_context.set("urllib3")
+            # Signal to the HTTPConnectionPool patch that this call originated
+            # from PoolManager so it should skip creating a duplicate span.
+            pm_token = _inside_poolmanager.set(True)
             try:
 
                 def original_call():
@@ -189,6 +198,7 @@ class Urllib3Instrumentation(InstrumentationBase):
                     span_kind=OTelSpanKind.CLIENT,
                 )
             finally:
+                _inside_poolmanager.reset(pm_token)
                 calling_library_context.reset(context_token)
 
         module.PoolManager.urlopen = patched_urlopen
@@ -231,46 +241,36 @@ class Urllib3Instrumentation(InstrumentationBase):
                 port_str = f":{port}" if port and port not in (80, 443) else ""
                 full_url = f"{scheme}://{host}{port_str}{url}"
 
-            # Pass through if SDK is disabled
+            _passthrough = partial(
+                original_urlopen,
+                pool_self,
+                method,
+                url,
+                body=body,
+                headers=headers,
+                retries=retries,
+                redirect=redirect,
+                assert_same_host=assert_same_host,
+                timeout=timeout,
+                pool_timeout=pool_timeout,
+                release_conn=release_conn,
+                chunked=chunked,
+                body_pos=body_pos,
+                preload_content=preload_content,
+                decode_content=decode_content,
+                **response_kw,
+            )
+
             if sdk.mode == TuskDriftMode.DISABLED:
-                return original_urlopen(
-                    pool_self,
-                    method,
-                    url,
-                    body=body,
-                    headers=headers,
-                    retries=retries,
-                    redirect=redirect,
-                    assert_same_host=assert_same_host,
-                    timeout=timeout,
-                    pool_timeout=pool_timeout,
-                    release_conn=release_conn,
-                    chunked=chunked,
-                    body_pos=body_pos,
-                    preload_content=preload_content,
-                    decode_content=decode_content,
-                    **response_kw,
-                )
+                return _passthrough()
+
+            # PoolManager.urlopen already created the span for this request;
+            # skip to avoid a duplicate child span.
+            if _inside_poolmanager.get():
+                return _passthrough()
 
             if instrumentation_self._is_already_instrumented_by_higher_level():
-                return original_urlopen(
-                    pool_self,
-                    method,
-                    url,
-                    body=body,
-                    headers=headers,
-                    retries=retries,
-                    redirect=redirect,
-                    assert_same_host=assert_same_host,
-                    timeout=timeout,
-                    pool_timeout=pool_timeout,
-                    release_conn=release_conn,
-                    chunked=chunked,
-                    body_pos=body_pos,
-                    preload_content=preload_content,
-                    decode_content=decode_content,
-                    **response_kw,
-                )
+                return _passthrough()
 
             # Set calling_library_context to suppress socket instrumentation warnings
             # for internal socket calls made by urllib3
