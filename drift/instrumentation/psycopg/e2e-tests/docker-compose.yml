@@ -17,6 +17,11 @@ services:
       dockerfile: drift/instrumentation/psycopg/e2e-tests/Dockerfile
       args:
         - TUSK_CLI_VERSION=${TUSK_CLI_VERSION:-latest}
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
     depends_on:
       postgres:
         condition: service_healthy

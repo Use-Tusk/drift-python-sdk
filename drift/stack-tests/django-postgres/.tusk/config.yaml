@@ -19,3 +19,7 @@ recording:
   sampling_rate: 1.0
   export_spans: false
   exclude_paths: []
+
+replay:
+  sandbox:
+    mode: strict

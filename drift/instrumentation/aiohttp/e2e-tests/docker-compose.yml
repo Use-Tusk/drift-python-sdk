@@ -14,6 +14,11 @@ services:
       dockerfile: drift/instrumentation/aiohttp/e2e-tests/Dockerfile
       args:
         - TUSK_CLI_VERSION=${TUSK_CLI_VERSION:-latest}
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
     environment:
       - PORT=8000
       - TUSK_ANALYTICS_DISABLED=1
