@@ -850,12 +850,14 @@ class Urllib3Instrumentation(InstrumentationBase):
         if encoding == "br":
             try:
                 import brotli
+
                 return brotli.decompress(data)
             except ImportError:
                 pass
         if encoding == "zstd":
             try:
                 import zstandard
+
                 return zstandard.ZstdDecompressor().decompress(data)
             except ImportError:
                 pass
@@ -1006,7 +1008,11 @@ class Urllib3Instrumentation(InstrumentationBase):
                         # Decompress so the span always stores plain content
                         # (matches preload_content=True where _body is already
                         # decompressed by urllib3).
-                        resp_encoding = response_headers.get("Content-Encoding", "").lower()
+                        resp_encoding = ""
+                        for hdr_key, hdr_val in response_headers.items():
+                            if hdr_key.lower() == "content-encoding":
+                                resp_encoding = hdr_val.lower()
+                                break
                         if resp_encoding and resp_encoding != "identity":
                             try:
                                 response_bytes = self._decompress(response_bytes, resp_encoding)
