@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,6 +15,17 @@ def _json(handler: BaseHTTPRequestHandler, payload: Any, status: int = 200):
     body = json.dumps(payload).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def _json_gzip(handler: BaseHTTPRequestHandler, payload: Any, status: int = 200):
+    """Serve JSON compressed with gzip, setting Content-Encoding: gzip."""
+    body = gzip.compress(json.dumps(payload).encode("utf-8"))
+    handler.send_response(status)
+    handler.send_header("Content-Type", "application/json")
+    handler.send_header("Content-Encoding", "gzip")
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
@@ -145,6 +157,12 @@ class MockHandler(BaseHTTPRequestHandler):
                     "type": "relaxation",
                     "participants": 1,
                 },
+            )
+
+        if path == "/gzip":
+            return _json_gzip(
+                self,
+                {"gzipped": True, "method": "GET", "origin": "mock"},
             )
 
         if path in {"/json", "/json/"}:

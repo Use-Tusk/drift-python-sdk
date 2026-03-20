@@ -54,4 +54,7 @@ if __name__ == "__main__":
         if user_id:
             make_request("DELETE", f"/db/delete/{user_id}")
 
+    # Date/time type preservation test
+    make_request("GET", "/test/date-time-types")
+
     print_request_summary()

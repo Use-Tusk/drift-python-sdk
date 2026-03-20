@@ -25,7 +25,7 @@ from ...core.types import (
 )
 from ..base import InstrumentationBase
 from ..sqlalchemy.context import sqlalchemy_execution_active_context, sqlalchemy_replay_mock_context
-from ..utils.psycopg_utils import deserialize_db_value, restore_row_integer_types
+from ..utils.psycopg_utils import deserialize_db_value, restore_row_date_types, restore_row_integer_types
 from ..utils.serialization import serialize_value
 from .mocks import MockConnection, MockCopy
 from .wrappers import TracedCopyWrapper
@@ -1829,6 +1829,7 @@ class PsycopgInstrumentation(InstrumentationBase):
         # Deserialize datetime strings back to datetime objects for consistent Flask serialization
         mock_rows = [deserialize_db_value(row) for row in mock_rows]
         mock_rows = [restore_row_integer_types(row, description_data) for row in mock_rows]
+        mock_rows = [restore_row_date_types(row, description_data) for row in mock_rows]
         cursor._mock_rows = mock_rows  # pyright: ignore[reportAttributeAccessIssue]
         cursor._mock_index = 0  # pyright: ignore[reportAttributeAccessIssue]
 
@@ -1898,6 +1899,7 @@ class PsycopgInstrumentation(InstrumentationBase):
             mock_rows = result_set.get("rows", [])
             mock_rows = [deserialize_db_value(row) for row in mock_rows]
             mock_rows = [restore_row_integer_types(row, description_data) for row in mock_rows]
+            mock_rows = [restore_row_date_types(row, description_data) for row in mock_rows]
 
             cursor._mock_result_sets.append(  # pyright: ignore[reportAttributeAccessIssue]
                 {

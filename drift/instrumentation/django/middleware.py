@@ -66,6 +66,9 @@ class DriftMiddleware:
         if sdk.mode == TuskDriftMode.DISABLED:
             return self.get_response(request)
 
+        if not sdk.app_ready:
+            sdk.mark_app_as_ready()
+
         # REPLAY mode - handle trace ID extraction and context setup
         if sdk.mode == TuskDriftMode.REPLAY:
             return self._handle_replay_request(request, sdk)

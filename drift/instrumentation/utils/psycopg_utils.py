@@ -19,6 +19,14 @@ POSTGRES_INTEGER_TYPE_CODES = {
     28,  # XID
 }
 
+# PostgreSQL date/time type OIDs for backward-compatible deserialization
+# of recordings that stored date/time values as plain ISO strings
+POSTGRES_DATE_TYPE_CODE = 1082  # DATE
+POSTGRES_TIME_TYPE_CODES = {
+    1083,  # TIME WITHOUT TIME ZONE
+    1266,  # TIME WITH TIME ZONE
+}
+
 # Try to import psycopg Range type for deserialization support
 try:
     from psycopg.types.range import Range as PsycopgRange  # type: ignore[import-untyped]
@@ -60,6 +68,12 @@ def deserialize_db_value(val: Any) -> Any:
         # Check for timedelta tagged structure
         if "__timedelta__" in val and len(val) == 1:
             return dt.timedelta(seconds=val["__timedelta__"])
+        # Check for date tagged structure
+        if "__date__" in val and len(val) == 1:
+            return dt.date.fromisoformat(val["__date__"])
+        # Check for time tagged structure
+        if "__time__" in val and len(val) == 1:
+            return dt.time.fromisoformat(val["__time__"])
         # Check for Range tagged structure (psycopg Range types)
         if "__range__" in val and len(val) == 1:
             range_data = val["__range__"]
@@ -154,3 +168,52 @@ def restore_row_integer_types(
         else:
             result.append(value)
     return result
+
+
+def restore_row_date_types(
+    row: list[Any] | dict[str, Any], description: list[dict[str, Any]] | None
+) -> list[Any] | dict[str, Any]:
+    """Restore date/time types for database row values using column metadata.
+
+    Backward compatibility for recordings made before tagged serialization was added.
+    Older recordings stored datetime.date as "YYYY-MM-DD" and datetime.time as "HH:MM:SS"
+    plain strings. This function uses column type_code from the cursor description to
+    convert those strings back to proper datetime.date / datetime.time objects.
+
+    New recordings use tagged format ({"__date__": ...}, {"__time__": ...}) which are
+    handled by deserialize_db_value, so this function is a no-op for those values.
+    """
+    if not description or not row:
+        return row
+
+    def _convert(value: Any, type_code: int | None) -> Any:
+        if not isinstance(value, str):
+            return value
+        if type_code == POSTGRES_DATE_TYPE_CODE:
+            try:
+                return dt.date.fromisoformat(value)
+            except ValueError:
+                return value
+        if type_code in POSTGRES_TIME_TYPE_CODES:
+            try:
+                return dt.time.fromisoformat(value)
+            except ValueError:
+                return value
+        return value
+
+    if isinstance(row, dict):
+        type_code_by_name: dict[str, int | None] = {}
+        for col in description:
+            if isinstance(col, dict):
+                col_name = col.get("name")
+                if col_name:
+                    type_code_by_name[col_name] = col.get("type_code")
+        return {key: _convert(value, type_code_by_name.get(key)) for key, value in row.items()}
+
+    return [
+        _convert(
+            value,
+            description[i].get("type_code") if i < len(description) and isinstance(description[i], dict) else None,
+        )
+        for i, value in enumerate(row)
+    ]

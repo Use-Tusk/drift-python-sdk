@@ -96,17 +96,28 @@ if __name__ == "__main__":
     make_request("GET", "/test/requests-lib")
 
     # ==========================================================================
-    # Note: Bug detection tests for preload_content=False and streaming responses
-    # are NOT included in e2e tests because these patterns are incompatible with
-    # replay mode - we can't capture the response body without consuming the stream.
-    #
-    # The instrumentation now correctly handles these patterns by NOT capturing
-    # the response body, which allows the application to read/stream normally.
-    # However, this means there's no body to replay in REPLAY mode.
-    #
-    # To verify the fix works, run the manual test script in RECORD mode:
-    #   curl http://localhost:8000/test/bug/preload-content-false
-    #   curl http://localhost:8000/test/bug/streaming-response
+    # preload_content=False Tests (botocore/boto3 pattern)
     # ==========================================================================
+    print("\n--- preload_content=False Tests ---\n")
+
+    # read() after preload_content=False (core botocore pattern)
+    make_request("GET", "/test/preload-content-false-read")
+
+    # read() + CRC32 checksum validation (DynamoDB pattern)
+    make_request("GET", "/test/preload-content-false-crc32")
+
+    # stream() after preload_content=False
+    make_request("GET", "/test/preload-content-false-stream")
+
+    # read() after preload_content=False with gzip-compressed response
+    make_request("GET", "/test/preload-content-false-gzip")
+
+    # ==========================================================================
+    # preload_content=False Edge Case Tests (bug detection)
+    # ==========================================================================
+    print("\n--- preload_content=False Edge Case Tests ---\n")
+
+    # decode_content=False + gzip (caller wants raw compressed bytes)
+    make_request("GET", "/test/preload-false-decode-content-false-gzip")
 
     print_request_summary()

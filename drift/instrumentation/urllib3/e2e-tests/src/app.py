@@ -1,6 +1,7 @@
 """Flask test app for e2e tests - urllib3 instrumentation testing."""
 
 import json
+import zlib
 
 import urllib3
 from flask import Flask, jsonify, request
@@ -438,15 +439,14 @@ def test_requests_lib():
 # =============================================================================
 
 
-@app.route("/test/bug/preload-content-false", methods=["GET"])
-def test_bug_preload_content_false():
-    """CONFIRMED BUG: preload_content=False parameter breaks response reading.
+@app.route("/test/preload-content-false-read", methods=["GET"])
+def test_preload_content_false_read():
+    """Test preload_content=False with manual read().
 
-    When preload_content=False, the response body is not preloaded into memory.
-    The instrumentation reads .data in _finalize_span which consumes the body
-    before the application can read it.
-
-    Root cause: instrumentation.py line 839 accesses response.data unconditionally
+    This is the pattern botocore/boto3 uses: request with preload_content=False,
+    then call response.read() to get the body. The instrumentation must buffer
+    the body in _fp (BytesIO) during recording so both the span capture and the
+    caller's read() work correctly.
     """
     try:
         response = http.request(
@@ -454,7 +454,6 @@ def test_bug_preload_content_false():
             "https://jsonplaceholder.typicode.com/posts/21",
             preload_content=False,
         )
-        # Manually read the data after the response
         data_bytes = response.read()
         response.release_conn()
         data = json.loads(data_bytes.decode("utf-8"))
@@ -463,14 +462,40 @@ def test_bug_preload_content_false():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/test/bug/streaming-response", methods=["GET"])
-def test_bug_streaming_response():
-    """CONFIRMED BUG: Streaming response body is consumed before iteration.
+@app.route("/test/preload-content-false-crc32", methods=["GET"])
+def test_preload_content_false_crc32():
+    """Test preload_content=False with CRC32 checksum validation.
 
-    When using response.stream() to iterate over chunks, the instrumentation
-    has already consumed the body by accessing response.data in _finalize_span.
+    Mimics botocore's DynamoDB flow: read the body via read(), then validate
+    the CRC32 checksum against a header value. This failed before the fix
+    because the mock response's BytesIO was exhausted by preload_content=True,
+    causing read() to return b"" and CRC32 to be 0.
+    """
+    try:
+        response = http.request(
+            "GET",
+            "https://jsonplaceholder.typicode.com/posts/22",
+            preload_content=False,
+        )
+        body = response.read()
+        response.release_conn()
 
-    Root cause: Same as preload-content-false - instrumentation.py line 839
+        if not body:
+            return jsonify({"error": "Empty body from read()"}), 500
+
+        actual_crc32 = zlib.crc32(body) & 0xFFFFFFFF
+        data = json.loads(body.decode("utf-8"))
+        return jsonify({**data, "crc32": actual_crc32, "body_length": len(body)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/preload-content-false-stream", methods=["GET"])
+def test_preload_content_false_stream():
+    """Test preload_content=False with chunked stream() reading.
+
+    The instrumentation buffers the body into a BytesIO, so subsequent
+    stream() calls read from that BytesIO in chunks as normal.
     """
     try:
         response = http.request(
@@ -479,15 +504,89 @@ def test_bug_streaming_response():
             preload_content=False,
         )
 
-        # Try to read response in chunks using stream()
         chunks = []
-        for chunk in response.stream(32):  # Read 32 bytes at a time
+        for chunk in response.stream(32):
             chunks.append(chunk)
 
         response.release_conn()
         full_data = b"".join(chunks)
         data = json.loads(full_data.decode("utf-8"))
         return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/preload-content-false-gzip", methods=["GET"])
+def test_preload_content_false_gzip():
+    """Test preload_content=False with gzip-compressed response.
+
+    Requests a gzip-encoded response and reads it via read().  During
+    recording, _get_response_body_safely captures the raw (compressed) bytes
+    from the socket.  During replay, _create_mock_response must decompress
+    them before serving so the caller gets plain JSON — otherwise the mock
+    would return compressed bytes with no Content-Encoding header and the
+    caller would get garbled data.
+    """
+    try:
+        response = http.request(
+            "GET",
+            "https://httpbin.org/gzip",
+            preload_content=False,
+            headers={"Accept-Encoding": "gzip"},
+        )
+        data_bytes = response.read()
+        response.release_conn()
+
+        if not data_bytes:
+            return jsonify({"error": "Empty body from read()"}), 500
+
+        data = json.loads(data_bytes.decode("utf-8"))
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/preload-false-decode-content-false-gzip", methods=["GET"])
+def test_preload_false_decode_content_false_gzip():
+    """Test preload_content=False + decode_content=False with gzip response."""
+    import gzip as gzip_mod
+
+    try:
+        response = http.request(
+            "GET",
+            "https://httpbin.org/gzip",
+            preload_content=False,
+            decode_content=False,
+            headers={"Accept-Encoding": "gzip"},
+        )
+        raw_bytes = response.read(decode_content=False)
+        response.release_conn()
+
+        if not raw_bytes:
+            return jsonify({"error": "Empty body from read()"}), 500
+
+        # The caller expects compressed bytes and decompresses manually
+        try:
+            decompressed = gzip_mod.decompress(raw_bytes)
+            data = json.loads(decompressed.decode("utf-8"))
+            return jsonify(
+                {
+                    "raw_bytes_length": len(raw_bytes),
+                    "decompressed_length": len(decompressed),
+                    "was_compressed": len(raw_bytes) != len(decompressed),
+                    "data": data,
+                }
+            )
+        except gzip_mod.BadGzipFile:
+            # If we get here during replay, it means the bytes were already
+            # decompressed - this is the bug
+            return jsonify(
+                {
+                    "error": "BadGzipFile - bytes were not compressed as expected",
+                    "raw_bytes_length": len(raw_bytes),
+                    "raw_bytes_preview": raw_bytes[:100].decode("utf-8", errors="replace"),
+                }
+            ), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

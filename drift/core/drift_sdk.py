@@ -443,7 +443,7 @@ class TuskDrift:
             pass
 
         try:
-            import httpx  # type: ignore[unresolved-import]
+            import httpx
 
             from ..instrumentation.httpx import HttpxInstrumentation
 
@@ -473,7 +473,7 @@ class TuskDrift:
             pass
 
         try:
-            import sqlalchemy  # type: ignore[unresolved-import]
+            import sqlalchemy
 
             from ..instrumentation.sqlalchemy import SqlAlchemyInstrumentation
 
@@ -490,7 +490,7 @@ class TuskDrift:
 
         # Try psycopg2 first
         try:
-            import psycopg2  # type: ignore[unresolved-import]
+            import psycopg2
 
             from ..instrumentation.psycopg2 import Psycopg2Instrumentation
 
@@ -502,7 +502,7 @@ class TuskDrift:
 
         # Try psycopg (v3)
         try:
-            import psycopg  # type: ignore[unresolved-import]
+            import psycopg
 
             from ..instrumentation.psycopg import PsycopgInstrumentation
 
@@ -518,7 +518,7 @@ class TuskDrift:
             logger.debug("Both psycopg2 and psycopg available - instrumented both")
 
         try:
-            import redis  # type: ignore[unresolved-import]
+            import redis
 
             from ..instrumentation.redis import RedisInstrumentation
 
@@ -528,7 +528,7 @@ class TuskDrift:
             pass
 
         try:
-            import grpc  # type: ignore[unresolved-import]
+            import grpc
 
             from ..instrumentation.grpc import GrpcInstrumentation
 
@@ -645,8 +645,6 @@ class TuskDrift:
         # Update span processor with app_ready flag
         if self._td_span_processor:
             self._td_span_processor.update_app_ready(True)
-
-        logger.debug("Application marked as ready")
 
         if self.mode == TuskDriftMode.REPLAY:
             logger.debug("Replay mode active - ready to serve mocked responses")

@@ -242,6 +242,70 @@ def db_register_jsonb():
         return jsonify({"error": str(e), "error_type": type(e).__name__}), 500
 
 
+@app.route("/test/date-time-types")
+def test_date_time_types():
+    """Test date/time types are preserved as proper Python objects during replay.
+
+    Verifies that DATE columns come back as datetime.date, TIME columns as
+    datetime.time, and INTERVAL columns as datetime.timedelta — not plain strings.
+    Also exercises datetime.combine() which fails if date/time are strings.
+    """
+    try:
+        from datetime import date, datetime, time, timedelta
+
+        conn = psycopg2.connect(get_conn_string())
+        cur = conn.cursor()
+
+        cur.execute("""
+            CREATE TEMP TABLE datetime_test (
+                id INT,
+                birth_date DATE,
+                wake_time TIME,
+                duration INTERVAL
+            )
+        """)
+
+        cur.execute(
+            "INSERT INTO datetime_test VALUES (%s, %s, %s, %s)",
+            (1, date(1990, 5, 15), time(8, 30, 0), timedelta(hours=2, minutes=30)),
+        )
+
+        cur.execute("SELECT * FROM datetime_test WHERE id = 1")
+        row = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        birth_date = row[1]
+        wake_time = row[2]
+        duration = row[3]
+
+        type_checks = {
+            "birth_date_is_date": isinstance(birth_date, date) and not isinstance(birth_date, datetime),
+            "wake_time_is_time": isinstance(wake_time, time),
+            "duration_is_timedelta": isinstance(duration, timedelta),
+        }
+
+        combined = datetime.combine(birth_date, wake_time)
+        type_checks["combine_works"] = isinstance(combined, datetime)
+        type_checks["combine_value"] = combined.isoformat()
+
+        all_types_correct = all(v for k, v in type_checks.items() if k != "combine_value")
+
+        return jsonify(
+            {
+                "id": row[0],
+                "birth_date": str(birth_date),
+                "wake_time": str(wake_time),
+                "duration": str(duration),
+                "type_checks": type_checks,
+                "all_types_correct": all_types_correct,
+            }
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     sdk.mark_app_as_ready()
     app.run(host="0.0.0.0", port=8000, debug=False)

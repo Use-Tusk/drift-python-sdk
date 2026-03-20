@@ -957,12 +957,16 @@ def test_decimal_types():
 
 @app.route("/test/date-time-types")
 def test_date_time_types():
-    """Test date/time types."""
+    """Test date/time types are preserved as proper Python objects during replay.
+
+    Verifies that DATE columns come back as datetime.date, TIME columns as
+    datetime.time, and INTERVAL columns as datetime.timedelta — not plain strings.
+    Also exercises datetime.combine() which fails if date/time are strings.
+    """
     try:
-        from datetime import date, time, timedelta
+        from datetime import date, datetime, time, timedelta
 
         with psycopg.connect(get_conn_string()) as conn, conn.cursor() as cur:
-            # Create temp table with date/time columns
             cur.execute("""
                 CREATE TEMP TABLE datetime_test (
                     id INT,
@@ -972,23 +976,41 @@ def test_date_time_types():
                 )
             """)
 
-            # Insert date/time data
             cur.execute(
                 "INSERT INTO datetime_test VALUES (%s, %s, %s, %s)",
                 (1, date(1990, 5, 15), time(8, 30, 0), timedelta(hours=2, minutes=30)),
             )
 
-            # Query back
             cur.execute("SELECT * FROM datetime_test WHERE id = 1")
             row = cur.fetchone()
             conn.commit()
 
+        birth_date = row[1]
+        wake_time = row[2]
+        duration = row[3]
+
+        type_checks = {
+            "birth_date_is_date": isinstance(birth_date, date) and not isinstance(birth_date, datetime),
+            "wake_time_is_time": isinstance(wake_time, time),
+            "duration_is_timedelta": isinstance(duration, timedelta),
+        }
+
+        # Exercise datetime.combine() — this is the exact operation that fails
+        # when date/time values are returned as strings during replay
+        combined = datetime.combine(birth_date, wake_time)
+        type_checks["combine_works"] = isinstance(combined, datetime)
+        type_checks["combine_value"] = combined.isoformat()
+
+        all_types_correct = all(v for k, v in type_checks.items() if k != "combine_value")
+
         return jsonify(
             {
                 "id": row[0],
-                "birth_date": str(row[1]) if row[1] else None,
-                "wake_time": str(row[2]) if row[2] else None,
-                "duration": str(row[3]) if row[3] else None,
+                "birth_date": str(birth_date),
+                "wake_time": str(wake_time),
+                "duration": str(duration),
+                "type_checks": type_checks,
+                "all_types_correct": all_types_correct,
             }
         )
     except Exception as e:

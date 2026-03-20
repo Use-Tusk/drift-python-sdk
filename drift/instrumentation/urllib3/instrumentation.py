@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import logging
 from contextvars import ContextVar
@@ -64,6 +65,21 @@ _inside_poolmanager = ContextVar("_inside_poolmanager", default=False)
 HEADER_SCHEMA_MERGES = {
     "headers": SchemaMerge(match_importance=0.0),
 }
+
+
+def _normalize_headers(headers: dict) -> dict[str, str]:
+    """Ensure all header keys and values are str, not bytes.
+
+    Some HTTP libraries (e.g. botocore/urllib3 combinations) may produce
+    headers with bytes keys or values. This normalizes them for JSON
+    serialization.
+    """
+    result = {}
+    for k, v in headers.items():
+        key = k.decode("utf-8", errors="replace") if isinstance(k, bytes) else str(k)
+        val = v.decode("utf-8", errors="replace") if isinstance(v, bytes) else str(v)
+        result[key] = val
+    return result
 
 
 class Urllib3Instrumentation(InstrumentationBase):
@@ -463,6 +479,7 @@ class Urllib3Instrumentation(InstrumentationBase):
                 headers = kw.get("headers") or {}
                 if isinstance(headers, (list, tuple)):
                     headers = dict(headers)
+                headers = _normalize_headers(headers) if headers else {}
                 if self._transform_engine and self._transform_engine.should_drop_outbound_request(
                     method.upper(), url, headers
                 ):
@@ -524,7 +541,7 @@ class Urllib3Instrumentation(InstrumentationBase):
         try:
             with SpanUtils.with_span(span_info):
                 # Check drop transforms before making the request
-                headers_dict = dict(headers) if headers else {}
+                headers_dict = _normalize_headers(dict(headers)) if headers else {}
                 if self._transform_engine and self._transform_engine.should_drop_outbound_request(
                     method.upper(), full_url, headers_dict
                 ):
@@ -587,21 +604,29 @@ class Urllib3Instrumentation(InstrumentationBase):
 
         return base64_body, len(body_bytes)
 
+    # Spans exceeding 1 MB are blocked at export time (MAX_SPAN_SIZE_BYTES),
+    # so there's no value in reading more than that from the socket.
+    _MAX_CAPTURE_BYTES = 1 * 1024 * 1024
+
     def _get_response_body_safely(self, response: Any) -> bytes | None:
-        """Get response body without consuming the stream for non-preloaded responses.
+        """Get response body, buffering it in-place when preload_content=False.
 
-        urllib3's .data property will read from the underlying stream if the response
-        was created with preload_content=False. This breaks applications that:
-        - Use preload_content=False and call response.read() manually
-        - Use response.stream() to iterate over chunks
-        - Use any streaming pattern to process large responses
+        When preload_content=True (the default), urllib3 already read the body
+        into ``_body`` during construction — we just return it.
 
-        This method checks whether it's safe to access the body without consuming
-        the stream, and returns None if the body cannot be safely captured.
+        When preload_content=False (used by botocore/boto3), the body is still
+        on the socket.  We read the raw bytes from ``_fp``, swap ``_fp`` with a
+        BytesIO so the caller's subsequent ``read()`` pipeline (content
+        decoding, connection release, CRC32 validation, etc.) processes the
+        exact same bytes as if we were never here.
 
-        IMPORTANT: We must NOT use hasattr(response, "data") because in Python,
-        hasattr() calls getattr() internally, which would trigger the .data
-        property getter and consume the stream!
+        We must NOT call ``response.read()`` because urllib3's ``read()``
+        consumes ``_fp`` and does **not** fall back to ``_body`` on subsequent
+        calls — only the ``.data`` property does.  Botocore uses ``read()``,
+        so a second call would return ``b""`` and break checksum validation.
+
+        A size guard (``_MAX_CAPTURE_BYTES``) prevents us from pulling a
+        multi-GB streaming download into memory.
 
         Args:
             response: urllib3 HTTPResponse object
@@ -609,37 +634,69 @@ class Urllib3Instrumentation(InstrumentationBase):
         Returns:
             Response body as bytes, or None if body cannot be safely captured
         """
-        # Check if this is a urllib3 HTTPResponse by checking for _body attribute
-        # Note: We use getattr with a sentinel to avoid triggering any property getters
         _sentinel = object()
         body = getattr(response, "_body", _sentinel)
 
         if body is _sentinel:
-            # Not a urllib3 HTTPResponse or doesn't have _body
             return b""
 
-        # Check if body was already preloaded/cached
+        # preload_content=True path — body was already read during construction
         if body is not None:
-            # Body was already read and cached, safe to return
-            # Ensure it's bytes (urllib3's _body should always be bytes when set)
             return body if isinstance(body, bytes) else b""
 
-        # Check if the stream was already fully consumed (fp is None or closed)
         fp = getattr(response, "_fp", None)
         if fp is None:
-            # Stream was consumed, body should be in _body (but it might be None)
             return b""
 
-        # Check if the file pointer is closed
         if hasattr(fp, "closed") and fp.closed:
             return b""
 
-        # At this point, the stream is still open and body hasn't been read
-        # This means preload_content=False was used (otherwise the body would
-        # have been read during __init__)
-        #
-        # We skip capturing the body to avoid breaking the application
-        return None
+        # preload_content=False — stream is open, body hasn't been read yet.
+        # Check Content-Length to avoid buffering very large responses.
+        content_length = self._get_content_length(response)
+        if content_length is not None and content_length > self._MAX_CAPTURE_BYTES:
+            logger.debug(
+                "Skipping response body capture (Content-Length %d exceeds %d)",
+                content_length,
+                self._MAX_CAPTURE_BYTES,
+            )
+            return None
+
+        try:
+            # fp.read() consumes the original socket stream — it can't be read
+            # again.  We replace _fp with a new BytesIO (position at byte 0)
+            # so the caller's subsequent read() gets the full body.
+            raw_data = fp.read()
+            if isinstance(raw_data, bytes) and len(raw_data) > self._MAX_CAPTURE_BYTES:
+                # Streamed response without Content-Length that turned out large.
+                # Too late to un-read, but we already have the data in memory —
+                # put it back for the caller but don't record it.
+                response._fp = io.BytesIO(raw_data)
+                return None
+            response._fp = io.BytesIO(raw_data)
+            return raw_data if isinstance(raw_data, bytes) else b""
+        except Exception:
+            logger.debug(
+                "Failed to buffer response body for instrumentation, response body will not be captured for replay",
+                exc_info=True,
+            )
+            return None
+
+    @staticmethod
+    def _get_content_length(response: Any) -> int | None:
+        """Extract Content-Length from response headers, if present."""
+        headers = getattr(response, "headers", None)
+        if not headers:
+            return None
+        val = None
+        if hasattr(headers, "get"):
+            val = headers.get("content-length") or headers.get("Content-Length")
+        if val is None:
+            return None
+        try:
+            return int(val)
+        except (ValueError, TypeError):
+            return None
 
     def _get_decoded_type_from_content_type(self, content_type: str | None) -> DecodedType | None:
         """Determine decoded type from Content-Type header. Extracts
@@ -654,6 +711,9 @@ class Urllib3Instrumentation(InstrumentationBase):
         """
         if not content_type:
             return None
+
+        if isinstance(content_type, bytes):
+            content_type = content_type.decode("utf-8", errors="replace")
 
         main_type = content_type.lower().split(";")[0].strip()
 
@@ -674,7 +734,10 @@ class Urllib3Instrumentation(InstrumentationBase):
         if not headers:
             return None
         for key, value in headers.items():
-            if key.lower() == "content-type":
+            k = key.decode("utf-8", errors="replace") if isinstance(key, bytes) else key
+            if k.lower() == "content-type":
+                if isinstance(value, bytes):
+                    return value.decode("utf-8", errors="replace")
                 return value
         return None
 
@@ -711,7 +774,7 @@ class Urllib3Instrumentation(InstrumentationBase):
                 encoded_fields = urlencode(fields)
                 body_base64, body_size = self._encode_body_to_base64(encoded_fields)
 
-            headers_dict = dict(headers) if headers else {}
+            headers_dict = _normalize_headers(dict(headers)) if headers else {}
 
             raw_input_value = {
                 "method": method.upper(),
@@ -771,6 +834,35 @@ class Urllib3Instrumentation(InstrumentationBase):
             logger.error(f"Error getting mock for {method} {url}: {e}")
             return None
 
+    @staticmethod
+    def _decompress(data: bytes, encoding: str) -> bytes:
+        """Decompress response body bytes.  Returns original data on failure."""
+        import gzip
+        import zlib
+
+        if encoding == "gzip" or encoding == "x-gzip":
+            return gzip.decompress(data)
+        if encoding == "deflate":
+            try:
+                return zlib.decompress(data)
+            except zlib.error:
+                return zlib.decompress(data, -zlib.MAX_WBITS)
+        if encoding == "br":
+            try:
+                import brotli
+
+                return brotli.decompress(data)
+            except ImportError:
+                pass
+        if encoding == "zstd":
+            try:
+                import zstandard
+
+                return zstandard.ZstdDecompressor().decompress(data)
+            except ImportError:
+                pass
+        return data
+
     def _create_mock_response(self, urllib3_module: Any, mock_data: dict[str, Any], url: str) -> Any:
         """Create a mocked urllib3.HTTPResponse object.
 
@@ -786,15 +878,6 @@ class Urllib3Instrumentation(InstrumentationBase):
 
         status_code = mock_data.get("statusCode", 200)
         headers = dict(mock_data.get("headers", {}))
-
-        # Remove content-encoding and transfer-encoding headers since the body
-        # was already decompressed when recorded
-        headers_to_remove = []
-        for key in headers:
-            if key.lower() in ("content-encoding", "transfer-encoding"):
-                headers_to_remove.append(key)
-        for key in headers_to_remove:
-            del headers[key]
 
         # Get body - decode from base64 if needed
         body = mock_data.get("body", "")
@@ -813,18 +896,39 @@ class Urllib3Instrumentation(InstrumentationBase):
         else:
             content = json.dumps(body).encode("utf-8")
 
+        # When bodyIsRawEncoded is true, the stored bytes are still compressed
+        # (preload_content=False during recording) — keep encoding headers so
+        # urllib3's read pipeline can decompress on demand.  Otherwise the body
+        # was already decompressed at recording time (preload_content=True), so
+        # strip encoding headers to avoid double-decompression.
+        body_is_raw_encoded = mock_data.get("bodyIsRawEncoded", False)
+        if not body_is_raw_encoded:
+            headers_to_remove = []
+            for key in headers:
+                if key.lower() in ("content-encoding", "transfer-encoding"):
+                    headers_to_remove.append(key)
+            for key in headers_to_remove:
+                del headers[key]
+
         final_url = mock_data.get("finalUrl") or url
 
+        headers["Content-Length"] = str(len(content))
+
+        # preload_content must be False so the BytesIO stays unread in _fp.
+        # urllib3's read() always reads from _fp — it does NOT check _body.
+        # With preload_content=True the constructor would exhaust the BytesIO,
+        # and callers like botocore that use read() would get b"".
+
+        # Callers that use .data instead (e.g. requests library) are also fine:
+        # .data calls read(cache_content=True) when _body is None, which reads
+        # from the fresh BytesIO and caches the result in _body.
         response = urllib3_module.HTTPResponse(
             body=BytesIO(content),
             headers=headers,
             status=status_code,
-            preload_content=True,
+            preload_content=False,
             request_url=final_url,
         )
-
-        # Read the content to make it available via response.data
-        response.read()
 
         logger.debug(f"Created mock urllib3 response: {status_code} for {url}")
         return response
@@ -860,7 +964,7 @@ class Urllib3Instrumentation(InstrumentationBase):
             if parsed_url.query:
                 params = {k: v[0] if len(v) == 1 else v for k, v in parse_qs(parsed_url.query).items()}
 
-            headers_dict = dict(headers) if headers else {}
+            headers_dict = _normalize_headers(dict(headers)) if headers else {}
 
             body_base64 = None
             body_size = 0
@@ -898,24 +1002,35 @@ class Urllib3Instrumentation(InstrumentationBase):
                 }
                 status = SpanStatus(code=StatusCode.ERROR, message=str(error))
             elif response:
-                response_headers = dict(response.headers) if hasattr(response, "headers") else {}
+                response_headers = _normalize_headers(dict(response.headers)) if hasattr(response, "headers") else {}
                 response_body_size = 0
 
                 try:
-                    # Get response content safely without consuming the stream
-                    # urllib3's .data property will read from the stream if not preloaded,
-                    # which would break applications using preload_content=False or response.stream()
                     response_bytes = self._get_response_body_safely(response)
                     if response_bytes is not None:
+                        # Determine if the stored bytes are still raw-encoded
+                        # (compressed).  When preload_content=True, urllib3
+                        # already decompressed into _body so the bytes are
+                        # plain.  When preload_content=False, _body is None
+                        # and the bytes came straight from _fp — still
+                        # compressed.  We store a flag so replay can decide
+                        # whether to preserve Content-Encoding headers.
+                        body_is_raw_encoded = False
+                        _sentinel = object()
+                        _body_val = getattr(response, "_body", _sentinel)
+                        if _body_val is None:
+                            # preload_content=False — bytes from _fp, possibly compressed
+                            resp_encoding = ""
+                            for hdr_key, hdr_val in response_headers.items():
+                                if hdr_key.lower() == "content-encoding":
+                                    resp_encoding = hdr_val.lower()
+                                    break
+                            if resp_encoding and resp_encoding != "identity":
+                                body_is_raw_encoded = True
                         response_body_base64, response_body_size = self._encode_body_to_base64(response_bytes)
                     else:
-                        # Response body not captured (likely preload_content=False or streaming)
                         response_body_base64 = None
                         response_body_size = 0
-                        logger.warning(
-                            f"Response body not captured for {method} {url} - request used "
-                            f"preload_content=False or streaming. Replay may return an empty body."
-                        )
                 except Exception:
                     response_body_base64 = None
                     response_body_size = 0
@@ -933,6 +1048,8 @@ class Urllib3Instrumentation(InstrumentationBase):
                 if response_body_base64 is not None:
                     output_value["body"] = response_body_base64
                     output_value["bodySize"] = response_body_size
+                    if body_is_raw_encoded:
+                        output_value["bodyIsRawEncoded"] = True
 
                 if status_code >= 400:
                     status = SpanStatus(
@@ -1023,5 +1140,5 @@ class Urllib3Instrumentation(InstrumentationBase):
                 span.set_status(Status(OTelStatusCode.OK))
 
         except Exception as e:
-            logger.error(f"Error finalizing span for {method} {url}: {e}")
+            logger.error(f"Error finalizing span for {method} {url}: {e}", exc_info=True)
             span.set_status(Status(OTelStatusCode.ERROR, str(e)))

@@ -338,14 +338,18 @@ class UrllibInstrumentation(InstrumentationBase):
             if sdk.mode == TuskDriftMode.DISABLED:
                 return original_open(opener_self, fullurl, data, timeout)
 
-            # Set calling_library_context to suppress socket instrumentation warnings
-            # context_token = calling_library_context.set("urllib")
+            # Extract URL early so we can check the scheme
+            if isinstance(fullurl, str):
+                url = fullurl
+            else:
+                url = fullurl.full_url
+
+            # Only instrument HTTP/HTTPS requests; pass through file://, data://, ftp://, etc.
+            parsed = urlparse(url)
+            if parsed.scheme not in ("http", "https"):
+                return original_open(opener_self, fullurl, data, timeout)
+
             try:
-                # Extract URL for default response handler
-                if isinstance(fullurl, str):
-                    url = fullurl
-                else:
-                    url = fullurl.full_url
 
                 def original_call():
                     return original_open(opener_self, fullurl, data, timeout)
