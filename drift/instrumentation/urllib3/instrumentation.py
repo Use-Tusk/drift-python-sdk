@@ -894,23 +894,8 @@ class Urllib3Instrumentation(InstrumentationBase):
         else:
             content = json.dumps(body).encode("utf-8")
 
-        # The recorded body may be compressed (preload_content=False records
-        # raw bytes from the socket) or already decompressed (preload_content=True
-        # records _body which urllib3 already decoded).  We try to decompress
-        # so the mock always serves plain content.  Then we strip the encoding
-        # headers so urllib3's decoder is a no-op.
-        content_encoding = None
-        for key in headers:
-            if key.lower() == "content-encoding":
-                content_encoding = headers[key].lower()
-                break
-
-        if content_encoding and content_encoding != "identity":
-            try:
-                content = self._decompress(content, content_encoding)
-            except Exception:
-                pass
-
+        # Strip encoding headers — the body was already decompressed at
+        # recording time (in _finalize_span), so the decoder should be a no-op.
         headers_to_remove = []
         for key in headers:
             if key.lower() in ("content-encoding", "transfer-encoding"):
@@ -1014,11 +999,19 @@ class Urllib3Instrumentation(InstrumentationBase):
                 response_body_size = 0
 
                 try:
-                    # Get response content safely without consuming the stream
-                    # urllib3's .data property will read from the stream if not preloaded,
-                    # which would break applications using preload_content=False or response.stream()
                     response_bytes = self._get_response_body_safely(response)
                     if response_bytes is not None:
+                        # For preload_content=False, response_bytes are raw from
+                        # the socket and may still be gzip/deflate compressed.
+                        # Decompress so the span always stores plain content
+                        # (matches preload_content=True where _body is already
+                        # decompressed by urllib3).
+                        resp_encoding = response_headers.get("Content-Encoding", "").lower()
+                        if resp_encoding and resp_encoding != "identity":
+                            try:
+                                response_bytes = self._decompress(response_bytes, resp_encoding)
+                            except Exception:
+                                pass
                         response_body_base64, response_body_size = self._encode_body_to_base64(response_bytes)
                     else:
                         response_body_base64 = None
