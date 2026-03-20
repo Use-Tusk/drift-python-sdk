@@ -25,4 +25,6 @@ recording:
 
 replay:
   enable_telemetry: false
+  sandbox:
+    mode: strict
 
