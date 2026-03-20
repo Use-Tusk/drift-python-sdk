@@ -1,0 +1,7 @@
+services:
+  app:
+    volumes:
+      - type: bind
+        source: ${TUSK_CLI_BIND_PATH}
+        target: /usr/local/bin/tusk
+        read_only: true

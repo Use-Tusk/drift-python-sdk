@@ -11,6 +11,48 @@ import greeter_pb2_grpc
 import grpc
 
 
+def _log_selected_env():
+    """Print relevant environment variables for sandbox debugging."""
+    interesting_prefixes = ("TUSK_", "PYTHON", "LD_")
+    interesting = {
+        key: value
+        for key, value in os.environ.items()
+        if key.startswith(interesting_prefixes)
+    }
+    if not interesting:
+        print("[grpc probe] interesting env: <none>", flush=True)
+        return
+
+    for key in sorted(interesting):
+        print(f"[grpc probe] env {key}={interesting[key]}", flush=True)
+
+
+def _log_mountinfo(prefix: str):
+    """Print mountinfo entries rooted at a given mount prefix."""
+    try:
+        with open("/proc/self/mountinfo", encoding="utf-8") as handle:
+            found = False
+            for raw_line in handle:
+                line = raw_line.rstrip("\n")
+                left, separator, _right = line.partition(" - ")
+                if not separator:
+                    continue
+                fields = left.split()
+                if len(fields) < 5:
+                    continue
+                mount_point = fields[4]
+                if mount_point == prefix or mount_point.startswith(f"{prefix}/"):
+                    print(f"[grpc probe] mountinfo {mount_point}: {line}", flush=True)
+                    found = True
+            if not found:
+                print(f"[grpc probe] mountinfo: no entries found for {prefix}", flush=True)
+    except OSError as exc:
+        print(
+            f"[grpc probe] read(/proc/self/mountinfo) failed: errno={exc.errno} strerror={exc.strerror}",
+            flush=True,
+        )
+
+
 def _log_device_probe(path: str):
     """Print detailed device diagnostics for sandbox debugging."""
     try:
@@ -52,6 +94,8 @@ def _log_startup_probe():
         f"[grpc probe] pid={os.getpid()} uid={os.getuid()} euid={os.geteuid()} cwd={os.getcwd()}",
         flush=True,
     )
+    _log_selected_env()
+    _log_mountinfo("/dev")
     try:
         dev_entries = ", ".join(sorted(os.listdir("/dev")))
         print(f"[grpc probe] /dev entries: {dev_entries}", flush=True)
