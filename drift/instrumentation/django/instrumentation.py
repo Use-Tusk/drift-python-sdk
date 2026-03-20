@@ -130,7 +130,7 @@ class DjangoInstrumentation(InstrumentationBase):
             finally:
                 django.setup = original_setup
 
-        django.setup = patched_setup
+        django.setup = patched_setup  # ty: ignore[invalid-assignment]
         logger.debug("Deferred middleware injection to django.setup()")
 
     def _force_database_reconnect(self) -> None:

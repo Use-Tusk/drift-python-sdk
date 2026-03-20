@@ -133,6 +133,7 @@ exclude = ["**/e2e-tests/**", "**/stack-tests/**"]
 [[tool.ty.overrides]]
 # Disable unresolved-import errors for instrumentation files with optional dependencies
 include = [
+    "drift/core/**",
     "drift/instrumentation/django/**",
     "drift/instrumentation/grpc/**",
     "drift/instrumentation/psycopg/**",
@@ -141,6 +142,7 @@ include = [
     "drift/instrumentation/pyjwt/**",
     "drift/instrumentation/redis/**",
     "drift/instrumentation/kinde/**",
+    "drift/instrumentation/urllib3/**",
     "drift/instrumentation/http/transform_engine.py",
 ]
 

@@ -548,8 +548,7 @@ def test_preload_content_false_gzip():
 
 @app.route("/test/preload-false-decode-content-false-gzip", methods=["GET"])
 def test_preload_false_decode_content_false_gzip():
-    """Test preload_content=False + decode_content=False with gzip response.
-    """
+    """Test preload_content=False + decode_content=False with gzip response."""
     import gzip as gzip_mod
 
     try:
@@ -570,20 +569,24 @@ def test_preload_false_decode_content_false_gzip():
         try:
             decompressed = gzip_mod.decompress(raw_bytes)
             data = json.loads(decompressed.decode("utf-8"))
-            return jsonify({
-                "raw_bytes_length": len(raw_bytes),
-                "decompressed_length": len(decompressed),
-                "was_compressed": len(raw_bytes) != len(decompressed),
-                "data": data,
-            })
+            return jsonify(
+                {
+                    "raw_bytes_length": len(raw_bytes),
+                    "decompressed_length": len(decompressed),
+                    "was_compressed": len(raw_bytes) != len(decompressed),
+                    "data": data,
+                }
+            )
         except gzip_mod.BadGzipFile:
             # If we get here during replay, it means the bytes were already
             # decompressed - this is the bug
-            return jsonify({
-                "error": "BadGzipFile - bytes were not compressed as expected",
-                "raw_bytes_length": len(raw_bytes),
-                "raw_bytes_preview": raw_bytes[:100].decode("utf-8", errors="replace"),
-            }), 500
+            return jsonify(
+                {
+                    "error": "BadGzipFile - bytes were not compressed as expected",
+                    "raw_bytes_length": len(raw_bytes),
+                    "raw_bytes_preview": raw_bytes[:100].decode("utf-8", errors="replace"),
+                }
+            ), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
