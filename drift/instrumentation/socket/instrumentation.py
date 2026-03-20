@@ -105,7 +105,7 @@ class SocketInstrumentation(InstrumentationBase):
             that don't need record/replay instrumentation.
             """
             try:
-                return sock.type & SOCK_STREAM != 0
+                return (sock.type & SOCK_STREAM) != 0
             except Exception:
                 return False
 
