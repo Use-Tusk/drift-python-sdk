@@ -13,9 +13,6 @@ on:
       - ".github/workflows/e2e.yml"
   workflow_dispatch: {}
 
-env:
-  TUSK_CLI_UNDER_TEST_REF: socket-location
-
 jobs:
   discover:
     name: Discover Tests
@@ -45,45 +42,9 @@ jobs:
           echo "e2e_matrix=$E2E_TESTS" >> $GITHUB_OUTPUT
           echo "stack_matrix=$STACK_TESTS" >> $GITHUB_OUTPUT
 
-  build-cli-under-test:
-    name: Build Tusk CLI Under Test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Tusk CLI under test
-        uses: actions/checkout@v6
-        with:
-          repository: Use-Tusk/tusk-drift-cli
-          ref: ${{ env.TUSK_CLI_UNDER_TEST_REF }}
-          path: tusk-drift-cli-src
-          fetch-depth: 1
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: tusk-drift-cli-src/go.mod
-          cache-dependency-path: tusk-drift-cli-src/go.sum
-
-      - name: Build Tusk CLI under test
-        working-directory: tusk-drift-cli-src
-        env:
-          CGO_ENABLED: "0"
-          GOOS: linux
-          GOARCH: amd64
-        run: |
-          mkdir -p "$RUNNER_TEMP/tusk-cli-under-test"
-          go build -trimpath -o "$RUNNER_TEMP/tusk-cli-under-test/tusk" .
-
-      - name: Upload Tusk CLI under test
-        uses: actions/upload-artifact@v4
-        with:
-          name: tusk-cli-under-test-linux-amd64
-          path: ${{ runner.temp }}/tusk-cli-under-test/tusk
-          if-no-files-found: error
-          retention-days: 1
-
   e2e:
     name: E2E - ${{ matrix.library }}
-    needs: [discover, build-cli-under-test]
+    needs: discover
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -107,15 +68,6 @@ jobs:
         uses: docker/setup-buildx-action@v3
         with:
           driver: docker
-
-      - name: Download Tusk CLI under test
-        uses: actions/download-artifact@v4
-        with:
-          name: tusk-cli-under-test-linux-amd64
-          path: ./.tmp/tusk-cli-under-test
-
-      - name: Make Tusk CLI under test executable
-        run: chmod +x ./.tmp/tusk-cli-under-test/tusk
 
       - name: Install SDK dependencies
         run: uv sync --all-extras
@@ -149,9 +101,7 @@ jobs:
 
       - name: Run E2E tests for ${{ matrix.library }}
         env:
-          COMPOSE_FILE: docker-compose.yml:${{ github.workspace }}/drift/instrumentation/e2e_common/docker-compose.cli-override.yml
           DOCKER_DEFAULT_PLATFORM: linux/amd64
-          TUSK_CLI_BIND_PATH: ${{ github.workspace }}/.tmp/tusk-cli-under-test/tusk
           TUSK_CLI_VERSION: ${{ steps.tusk-version.outputs.version }}
           TUSK_USE_RUST_CORE: "1"
         run: |
@@ -189,6 +139,7 @@ jobs:
           name: e2e-${{ matrix.library }}-replay-logs
           path: ./drift/instrumentation/${{ matrix.library }}/e2e-tests/.tusk/logs
           if-no-files-found: ignore
+          include-hidden-files: true
 
       - name: Cleanup Docker resources
         if: always()
@@ -203,7 +154,7 @@ jobs:
 
   stack:
     name: Stack - ${{ matrix.test }}
-    needs: [discover, build-cli-under-test]
+    needs: discover
     if: ${{ needs.discover.outputs.stack_matrix != '[]' && needs.discover.outputs.stack_matrix != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -228,15 +179,6 @@ jobs:
         uses: docker/setup-buildx-action@v3
         with:
           driver: docker
-
-      - name: Download Tusk CLI under test
-        uses: actions/download-artifact@v4
-        with:
-          name: tusk-cli-under-test-linux-amd64
-          path: ./.tmp/tusk-cli-under-test
-
-      - name: Make Tusk CLI under test executable
-        run: chmod +x ./.tmp/tusk-cli-under-test/tusk
 
       - name: Install SDK dependencies
         run: uv sync --all-extras
@@ -270,9 +212,7 @@ jobs:
 
       - name: Run stack tests for ${{ matrix.test }}
         env:
-          COMPOSE_FILE: docker-compose.yml:${{ github.workspace }}/drift/instrumentation/e2e_common/docker-compose.cli-override.yml
           DOCKER_DEFAULT_PLATFORM: linux/amd64
-          TUSK_CLI_BIND_PATH: ${{ github.workspace }}/.tmp/tusk-cli-under-test/tusk
           TUSK_CLI_VERSION: ${{ steps.tusk-version.outputs.version }}
           TUSK_USE_RUST_CORE: "1"
         run: |
@@ -310,6 +250,7 @@ jobs:
           name: stack-${{ matrix.test }}-replay-logs
           path: ./drift/stack-tests/${{ matrix.test }}/.tusk/logs
           if-no-files-found: ignore
+          include-hidden-files: true
 
       - name: Cleanup Docker resources
         if: always()
@@ -324,7 +265,6 @@ jobs:
 
   non-rust-smoke:
     name: E2E Non-Rust Smoke - requests
-    needs: build-cli-under-test
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -343,15 +283,6 @@ jobs:
         uses: docker/setup-buildx-action@v3
         with:
           driver: docker
-
-      - name: Download Tusk CLI under test
-        uses: actions/download-artifact@v4
-        with:
-          name: tusk-cli-under-test-linux-amd64
-          path: ./.tmp/tusk-cli-under-test
-
-      - name: Make Tusk CLI under test executable
-        run: chmod +x ./.tmp/tusk-cli-under-test/tusk
 
       - name: Install SDK dependencies
         run: uv sync --all-extras
@@ -385,9 +316,7 @@ jobs:
 
       - name: Run non-rust smoke test
         env:
-          COMPOSE_FILE: docker-compose.yml:${{ github.workspace }}/drift/instrumentation/e2e_common/docker-compose.cli-override.yml
           DOCKER_DEFAULT_PLATFORM: linux/amd64
-          TUSK_CLI_BIND_PATH: ${{ github.workspace }}/.tmp/tusk-cli-under-test/tusk
           TUSK_CLI_VERSION: ${{ steps.tusk-version.outputs.version }}
           TUSK_USE_RUST_CORE: "0"
         run: |
@@ -425,6 +354,7 @@ jobs:
           name: requests-smoke-replay-logs
           path: ./drift/instrumentation/requests/e2e-tests/.tusk/logs
           if-no-files-found: ignore
+          include-hidden-files: true
 
       - name: Cleanup Docker resources
         if: always()
