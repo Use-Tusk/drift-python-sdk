@@ -211,6 +211,9 @@ def restore_row_date_types(
         return {key: _convert(value, type_code_by_name.get(key)) for key, value in row.items()}
 
     return [
-        _convert(value, description[i].get("type_code") if i < len(description) and isinstance(description[i], dict) else None)
+        _convert(
+            value,
+            description[i].get("type_code") if i < len(description) and isinstance(description[i], dict) else None,
+        )
         for i, value in enumerate(row)
     ]
