@@ -5,11 +5,11 @@
 Before setting up the SDK, ensure you have:
 
 - Python 3.9 or later installed
-- Installed the [Tusk Drift CLI](https://github.com/Use-Tusk/tusk-drift-cli?tab=readme-ov-file#install)
+- Installed the [Tusk Drift CLI](https://github.com/Use-Tusk/tusk-cli?tab=readme-ov-file#install)
 - Obtained an API key from the [Tusk Drift dashboard](https://usetusk.ai/app/settings/api-keys) (only required if using Tusk Cloud)
 
 > [!TIP]
-> For automated setup, use `tusk setup` which handles SDK installation and initialization for you.
+> For automated setup, use `tusk drift setup` which handles SDK installation and initialization for you.
 > The steps below are for manual setup.
 
 ## Step 1: Install the SDK

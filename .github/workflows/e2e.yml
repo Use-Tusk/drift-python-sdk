@@ -84,7 +84,7 @@ jobs:
         id: tusk-version
         run: |
           VERSION=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/Use-Tusk/tusk-drift-cli/releases/latest" \
+            "https://api.github.com/repos/Use-Tusk/tusk-cli/releases/latest" \
             | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Latest Tusk CLI version: $VERSION"
@@ -195,7 +195,7 @@ jobs:
         id: tusk-version
         run: |
           VERSION=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/Use-Tusk/tusk-drift-cli/releases/latest" \
+            "https://api.github.com/repos/Use-Tusk/tusk-cli/releases/latest" \
             | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Latest Tusk CLI version: $VERSION"
@@ -299,7 +299,7 @@ jobs:
         id: tusk-version
         run: |
           VERSION=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/Use-Tusk/tusk-drift-cli/releases/latest" \
+            "https://api.github.com/repos/Use-Tusk/tusk-cli/releases/latest" \
             | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Latest Tusk CLI version: $VERSION"
