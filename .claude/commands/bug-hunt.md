@@ -2,7 +2,17 @@
 
 ## Arguments
 
-$ARGUMENTS - The library name to test (e.g., aiohttp, django, fastapi, flask, grpc, httpx, psycopg, psycopg2, redis, requests, sqlalchemy, urllib, urllib3)
+$ARGUMENTS - The library name, optionally followed by focus context.
+
+**Format**: `<library> [focus on <area>]`
+
+**Examples**:
+
+- `/bug-hunt redis` — broad bug hunting across all redis functionality
+- `/bug-hunt redis focus on pub sub interactions` — prioritize pub/sub patterns
+- `/bug-hunt psycopg2 focus on async cursors and connection pooling` — prioritize those areas
+
+**Parsing**: The first word is always the library name. Everything after it is the optional focus context.
 
 ## Library-to-GitHub-Repo Mapping
 
@@ -48,11 +58,15 @@ Each library has a single e2e-tests directory (no ESM/CJS variants):
 
 ## Phase 0: Environment Setup
 
-### 0.1 Validate the library argument
+### 0.1 Parse and validate the arguments
+
+Extract the library name (first word) and optional focus context (remaining words) from the arguments.
 
 The library must be one of: aiohttp, django, fastapi, flask, grpc, httpx, psycopg, psycopg2, redis, requests, sqlalchemy, urllib, urllib3.
 
-If the argument is invalid, list the valid options and stop.
+If the library is invalid, list the valid options and stop.
+
+If focus context is provided, it will guide Phases 1 and 2 to prioritize that area of the library's functionality.
 
 ### 0.2 Docker Setup (Claude Code Web only)
 
@@ -101,18 +115,20 @@ git checkout -b bug-hunt/<library>-$(date +%Y-%m-%d)
 
 ## Phase 1: Develop Understanding
 
+**If focus context was provided**, prioritize your analysis around that area. For example, if the focus is "pub sub interactions", concentrate on pub/sub-related code paths in the instrumentation, tests, and package source.
+
 ### 1.1 Analyze the Instrumentation Code
 
 Read the instrumentation code at:
 
 ```
-drift/instrumentation/$ARGUMENTS/instrumentation.py
+drift/instrumentation/<library>/instrumentation.py
 ```
 
 Also check for any additional files in the same directory:
 
 ```
-drift/instrumentation/$ARGUMENTS/
+drift/instrumentation/<library>/
 ```
 
 Identify:
@@ -120,16 +136,19 @@ Identify:
 - Which functions from the package are patched/instrumented
 - The patching strategy (what gets wrapped, when, and how)
 - Any helper modules or utilities used
+- **If focus context provided**: Which patches relate to the focus area, and what's missing?
 
 ### 1.2 Analyze Existing E2E Tests
 
 Review the test files:
 
-- `drift/instrumentation/$ARGUMENTS/e2e-tests/src/app.py` — all test endpoints (Flask/FastAPI/Django app)
-- `drift/instrumentation/$ARGUMENTS/e2e-tests/src/test_requests.py` — which endpoints are called
-- `drift/instrumentation/$ARGUMENTS/e2e-tests/entrypoint.py` — test orchestration and setup
+- `drift/instrumentation/<library>/e2e-tests/src/app.py` — all test endpoints (Flask/FastAPI/Django app)
+- `drift/instrumentation/<library>/e2e-tests/src/test_requests.py` — which endpoints are called
+- `drift/instrumentation/<library>/e2e-tests/entrypoint.py` — test orchestration and setup
 
 Understand what functionality is already tested and identify coverage gaps.
+
+- **If focus context provided**: What tests already exist for the focus area? What's missing?
 
 ### 1.3 Analyze the Package Source Code
 
@@ -138,10 +157,13 @@ If you cloned the package source, read it to understand:
 - The package's entry points and full API surface
 - Functions that are currently patched vs functions that exist but aren't patched
 - Alternative call patterns, overloads, and edge cases
+- **If focus context provided**: Deep-dive into the focus area's API surface and usage patterns
 
 ---
 
 ## Phase 2: Identify Potential Gaps
+
+**If focus context was provided**, prioritize bugs related to that area. You may still note other potential issues, but test the focus area first.
 
 Reason about potential issues in the instrumentation. Consider:
 
@@ -405,10 +427,7 @@ Commit the changes:
 
 ```bash
 git add drift/instrumentation/$ARGUMENTS/e2e-tests/
-git commit -m "bug-hunt($ARGUMENTS): add e2e tests exposing instrumentation bugs
-
-Found N confirmed bugs in $ARGUMENTS instrumentation.
-See BUG_TRACKING.md for details"
+git commit -m "bug-hunt($ARGUMENTS): add e2e tests exposing instrumentation bugs"
 ```
 
 Push the branch (skip if in Claude Code Web where the session handles this):
