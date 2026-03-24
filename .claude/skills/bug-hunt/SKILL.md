@@ -337,7 +337,7 @@ sleep 2
 Run the Tusk CLI to replay:
 
 ```bash
-docker exec -e TUSK_ANALYTICS_DISABLED=1 bug-hunt-app tusk drift run --print --output-format "json" --enable-service-logs
+docker exec -e TUSK_ANALYTICS_DISABLED=1 -e TUSK_REQUIRE_INBOUND_REPLAY_SPAN=1 bug-hunt-app tusk drift run --print --output-format "json" --enable-service-logs
 ```
 
 **Check for issues:**

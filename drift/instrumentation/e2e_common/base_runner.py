@@ -291,7 +291,7 @@ class E2ETestRunnerBase:
         }
 
         result = self.run_command(
-            ["tusk", "run", "--print", "--output-format", "json", "--enable-service-logs"],
+            ["tusk", "drift", "run", "--print", "--output-format", "json", "--enable-service-logs"],
             env=env,
             check=False,
         )
