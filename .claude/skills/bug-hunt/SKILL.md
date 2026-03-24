@@ -1,3 +1,9 @@
+---
+name: bug-hunt
+description: Hunt for instrumentation bugs by analyzing code gaps and running e2e tests through DISABLED/RECORD/REPLAY cycle
+disable-model-invocation: true
+---
+
 # Instrumentation Bug Hunting
 
 ## Arguments
