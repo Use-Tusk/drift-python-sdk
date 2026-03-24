@@ -184,7 +184,7 @@ The e2e tests follow a **Docker entrypoint-driven architecture** where the Pytho
 │   - Stop app, verify traces created     │
 │                                         │
 │  Phase 3: Run Tests                     │
-│   - Execute `tusk run` CLI              │
+│   - Execute `tusk drift run` CLI        │
 │   - Parse JSON test results             │
 │                                         │
 │  Phase 4: Check Instrumentation Warnings│
