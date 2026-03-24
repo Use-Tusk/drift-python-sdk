@@ -12,7 +12,7 @@ $ARGUMENTS - The library name, optionally followed by focus context.
 - `/bug-hunt redis focus on pub sub interactions` — prioritize pub/sub patterns
 - `/bug-hunt psycopg2 focus on async cursors and connection pooling` — prioritize those areas
 
-**Parsing**: The first word is always the library name. Everything after it is the optional focus context.
+**Parsing**: The first word of `$ARGUMENTS` is always the library name. Everything after it is the optional focus context. All references to `<library>` below mean this parsed first word — NOT the raw `$ARGUMENTS` string.
 
 ## Library-to-GitHub-Repo Mapping
 
@@ -185,11 +185,11 @@ Produce a prioritized list of potential bugs to investigate.
 Create `BUG_TRACKING.md` in the e2e test directory:
 
 ```bash
-# Path: drift/instrumentation/$ARGUMENTS/e2e-tests/BUG_TRACKING.md
+# Path: drift/instrumentation/<library>/e2e-tests/BUG_TRACKING.md
 ```
 
 ```markdown
-# $ARGUMENTS Instrumentation Bug Tracking
+# <library> Instrumentation Bug Tracking
 
 Generated: <current date and time>
 
@@ -218,7 +218,7 @@ For each potential bug, follow this workflow:
 Navigate to the e2e test directory:
 
 ```bash
-cd drift/instrumentation/$ARGUMENTS/e2e-tests/
+cd drift/instrumentation/<library>/e2e-tests/
 ```
 
 Build and start Docker containers:
@@ -426,14 +426,14 @@ rm -rf /tmp/*-source
 Commit the changes:
 
 ```bash
-git add drift/instrumentation/$ARGUMENTS/e2e-tests/
-git commit -m "bug-hunt($ARGUMENTS): add e2e tests exposing instrumentation bugs"
+git add drift/instrumentation/<library>/e2e-tests/
+git commit -m "bug-hunt(<library>): add e2e tests exposing instrumentation bugs"
 ```
 
 Push the branch (skip if in Claude Code Web where the session handles this):
 
 ```bash
-git push origin bug-hunt/$ARGUMENTS-$(date +%Y-%m-%d)
+git push origin bug-hunt/<library>-$(date +%Y-%m-%d)
 ```
 
 ---

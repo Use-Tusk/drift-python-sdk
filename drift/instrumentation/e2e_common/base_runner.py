@@ -296,12 +296,12 @@ class E2ETestRunnerBase:
             check=False,
         )
 
-        # Debug: show what tusk run returned
-        self.log(f"tusk run exit code: {result.returncode}", Colors.YELLOW)
+        # Debug: show what tusk drift run returned
+        self.log(f"tusk drift run exit code: {result.returncode}", Colors.YELLOW)
         if result.stdout:
-            self.log(f"tusk run stdout:\n{result.stdout}", Colors.YELLOW)
+            self.log(f"tusk drift run stdout:\n{result.stdout}", Colors.YELLOW)
         if result.stderr:
-            self.log(f"tusk run stderr:\n{result.stderr}", Colors.YELLOW)
+            self.log(f"tusk drift run stderr:\n{result.stderr}", Colors.YELLOW)
 
         # Parse JSON results
         self.parse_test_results(result.stdout)
@@ -429,7 +429,7 @@ class E2ETestRunnerBase:
         else:
             self.log("✓ No socket instrumentation warnings found.", Colors.GREEN)
 
-        # Verify trace files exist (double-check after tusk run)
+        # Verify trace files exist (double-check after tusk drift run)
         trace_files = list(traces_dir.glob("*.jsonl")) if traces_dir.exists() else []
         if trace_files:
             self.log(f"✓ Found {len(trace_files)} trace file(s).", Colors.GREEN)
