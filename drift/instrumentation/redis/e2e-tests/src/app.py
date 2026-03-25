@@ -245,6 +245,63 @@ def test_transaction_watch():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/test/pubsub-publish", methods=["GET"])
+def test_pubsub_publish():
+    """Test Pub/Sub publish (outbound command) and subscribe via PubSub object.
+
+    BUG: PubSub.execute_command() is a separate method from Redis.execute_command()
+    and is not patched by the instrumentation. During replay, PubSub operations
+    (subscribe, get_message) try to make real network connections, which fail
+    because there is no real Redis server in replay mode. The publish commands
+    (which go through Redis.execute_command) are correctly mocked, but the
+    subscriber cannot receive messages.
+    """
+    try:
+        import threading
+        import time
+
+        received_messages = []
+
+        def subscriber_thread():
+            """Subscribe in a separate thread to receive messages."""
+            sub_client = redis.Redis(
+                host=os.getenv("REDIS_HOST", "localhost"),
+                port=int(os.getenv("REDIS_PORT", "6379")),
+                db=0,
+                decode_responses=True,
+            )
+            pubsub = sub_client.pubsub()
+            pubsub.subscribe("test:pubsub:channel")
+            # Wait for subscribe confirmation
+            msg = pubsub.get_message(timeout=2)
+            for _ in range(3):
+                msg = pubsub.get_message(timeout=2)
+                if msg and msg["type"] == "message":
+                    received_messages.append(msg["data"])
+            pubsub.unsubscribe("test:pubsub:channel")
+            pubsub.close()
+
+        # Start subscriber in background
+        t = threading.Thread(target=subscriber_thread, daemon=True)
+        t.start()
+        time.sleep(0.5)  # Let subscriber connect
+
+        # Publish messages (these go through execute_command)
+        n1 = redis_client.publish("test:pubsub:channel", "message1")
+        n2 = redis_client.publish("test:pubsub:channel", "message2")
+        n3 = redis_client.publish("test:pubsub:channel", "message3")
+
+        t.join(timeout=5)
+
+        return jsonify({
+            "success": True,
+            "subscribers_notified": [n1, n2, n3],
+            "received": received_messages,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     sdk.mark_app_as_ready()
     app.run(host="0.0.0.0", port=8000, debug=False)

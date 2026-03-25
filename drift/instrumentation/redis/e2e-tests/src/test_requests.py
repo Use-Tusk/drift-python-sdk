@@ -44,4 +44,7 @@ if __name__ == "__main__":
 
     make_request("GET", "/test/transaction-watch")
 
+    # Pub/Sub test (exposes bug: PubSub.execute_command is not patched)
+    make_request("GET", "/test/pubsub-publish")
+
     print_request_summary()
