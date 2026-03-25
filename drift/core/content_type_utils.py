@@ -111,7 +111,7 @@ CONTENT_TYPE_MAPPING: dict[str, DecodedType] = {
     "application/binary": DecodedType.BINARY,
 }
 
-ACCEPTABLE_DECODED_TYPES = {DecodedType.JSON, DecodedType.PLAIN_TEXT, DecodedType.HTML}
+ACCEPTABLE_DECODED_TYPES = {DecodedType.JSON, DecodedType.PLAIN_TEXT}
 
 
 def get_decoded_type(content_type: str | None) -> DecodedType | None:
