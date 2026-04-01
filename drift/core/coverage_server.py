@@ -30,13 +30,17 @@ class CoverageSnapshotHandler(BaseHTTPRequestHandler):
     source_root = None
 
     def do_GET(self):
-        if self.path == "/snapshot":
-            self._handle_snapshot()
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(self.path)
+        if parsed.path == "/snapshot":
+            params = parse_qs(parsed.query)
+            is_baseline = params.get("baseline", ["false"])[0] == "true"
+            self._handle_snapshot(is_baseline)
         else:
             self.send_response(404)
             self.end_headers()
 
-    def _handle_snapshot(self):
+    def _handle_snapshot(self, is_baseline: bool = False):
         try:
             cov = self.__class__.cov_instance
             source_root = self.__class__.source_root
@@ -48,23 +52,42 @@ class CoverageSnapshotHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"ok": False, "error": "coverage not initialized"}).encode())
                 return
 
-            # Stop coverage, get data, erase (reset), restart
+            # Stop coverage to read data
             cov.stop()
-            data = cov.get_data()
 
-            # Extract per-file line counts
             coverage = {}
-            for filename in data.measured_files():
-                # Filter to user source files
-                if "site-packages" in filename or "lib/python" in filename:
-                    continue
-                if source_root and not filename.startswith(source_root):
-                    continue
 
-                lines = data.lines(filename)
-                if lines:
-                    # Convert to { "lineNumber": 1 } format (1 = covered)
-                    coverage[filename] = {str(line): 1 for line in lines}
+            if is_baseline:
+                # Baseline: return ALL coverable lines (including uncovered at count=0)
+                # This provides the denominator for coverage percentage.
+                # analysis2() returns (filename, statements, excluded, missing, formatted)
+                data = cov.get_data()
+                for filename in data.measured_files():
+                    if "site-packages" in filename or "lib/python" in filename:
+                        continue
+                    if source_root and not filename.startswith(source_root):
+                        continue
+                    try:
+                        _, statements, _, missing, _ = cov.analysis2(filename)
+                        missing_set = set(missing)
+                        lines_map = {}
+                        for line in statements:
+                            lines_map[str(line)] = 0 if line in missing_set else 1
+                        if lines_map:
+                            coverage[filename] = lines_map
+                    except Exception:
+                        continue
+            else:
+                # Regular snapshot: only executed lines since last reset
+                data = cov.get_data()
+                for filename in data.measured_files():
+                    if "site-packages" in filename or "lib/python" in filename:
+                        continue
+                    if source_root and not filename.startswith(source_root):
+                        continue
+                    lines = data.lines(filename)
+                    if lines:
+                        coverage[filename] = {str(line): 1 for line in lines}
 
             # Erase data and restart for next test
             cov.erase()
