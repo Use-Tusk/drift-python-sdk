@@ -28,6 +28,7 @@ class CoverageSnapshotHandler(BaseHTTPRequestHandler):
     # Shared state set by start_coverage_server
     cov_instance = None
     source_root = None
+    _lock = threading.Lock()
 
     def do_GET(self):
         from urllib.parse import urlparse, parse_qs
@@ -42,56 +43,57 @@ class CoverageSnapshotHandler(BaseHTTPRequestHandler):
 
     def _handle_snapshot(self, is_baseline: bool = False):
         try:
-            cov = self.__class__.cov_instance
-            source_root = self.__class__.source_root
+            with self.__class__._lock:
+                cov = self.__class__.cov_instance
+                source_root = self.__class__.source_root
 
-            if cov is None:
-                self.send_response(500)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps({"ok": False, "error": "coverage not initialized"}).encode())
-                return
+                if cov is None:
+                    self.send_response(500)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"ok": False, "error": "coverage not initialized"}).encode())
+                    return
 
-            # Stop coverage to read data
-            cov.stop()
+                # Stop coverage to read data
+                cov.stop()
 
-            coverage = {}
+                coverage = {}
 
-            if is_baseline:
-                # Baseline: return ALL coverable lines (including uncovered at count=0)
-                # This provides the denominator for coverage percentage.
-                # analysis2() returns (filename, statements, excluded, missing, formatted)
-                data = cov.get_data()
-                for filename in data.measured_files():
-                    if "site-packages" in filename or "lib/python" in filename:
-                        continue
-                    if source_root and not filename.startswith(source_root):
-                        continue
-                    try:
-                        _, statements, _, missing, _ = cov.analysis2(filename)
-                        missing_set = set(missing)
-                        lines_map = {}
-                        for line in statements:
-                            lines_map[str(line)] = 0 if line in missing_set else 1
-                        if lines_map:
-                            coverage[filename] = lines_map
-                    except Exception:
-                        continue
-            else:
-                # Regular snapshot: only executed lines since last reset
-                data = cov.get_data()
-                for filename in data.measured_files():
-                    if "site-packages" in filename or "lib/python" in filename:
-                        continue
-                    if source_root and not filename.startswith(source_root):
-                        continue
-                    lines = data.lines(filename)
-                    if lines:
-                        coverage[filename] = {str(line): 1 for line in lines}
+                if is_baseline:
+                    # Baseline: return ALL coverable lines (including uncovered at count=0)
+                    # This provides the denominator for coverage percentage.
+                    # analysis2() returns (filename, statements, excluded, missing, formatted)
+                    data = cov.get_data()
+                    for filename in data.measured_files():
+                        if "site-packages" in filename or "lib/python" in filename:
+                            continue
+                        if source_root and not filename.startswith(source_root):
+                            continue
+                        try:
+                            _, statements, _, missing, _ = cov.analysis2(filename)
+                            missing_set = set(missing)
+                            lines_map = {}
+                            for line in statements:
+                                lines_map[str(line)] = 0 if line in missing_set else 1
+                            if lines_map:
+                                coverage[filename] = lines_map
+                        except Exception:
+                            continue
+                else:
+                    # Regular snapshot: only executed lines since last reset
+                    data = cov.get_data()
+                    for filename in data.measured_files():
+                        if "site-packages" in filename or "lib/python" in filename:
+                            continue
+                        if source_root and not filename.startswith(source_root):
+                            continue
+                        lines = data.lines(filename)
+                        if lines:
+                            coverage[filename] = {str(line): 1 for line in lines}
 
-            # Erase data and restart for next test
-            cov.erase()
-            cov.start()
+                # Erase data and restart for next test
+                cov.erase()
+                cov.start()
 
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -109,11 +111,16 @@ class CoverageSnapshotHandler(BaseHTTPRequestHandler):
         pass
 
 
+_coverage_server: HTTPServer | None = None
+
+
 def start_coverage_server(port: int | None = None) -> bool:
     """Start the coverage snapshot server if TUSK_COVERAGE_PORT is set.
 
     Returns True if the server was started, False otherwise.
     """
+    global _coverage_server
+
     port_str = os.environ.get("TUSK_COVERAGE_PORT")
     if not port_str and port is None:
         return False
@@ -151,8 +158,17 @@ def start_coverage_server(port: int | None = None) -> bool:
 
     # Start HTTP server in a daemon thread
     http_server = HTTPServer(("127.0.0.1", actual_port), CoverageSnapshotHandler)
+    _coverage_server = http_server
     thread = threading.Thread(target=http_server.serve_forever, daemon=True)
     thread.start()
 
     logger.info(f"Coverage snapshot server listening on port {actual_port}")
     return True
+
+
+def stop_coverage_server() -> None:
+    """Shut down the coverage snapshot server if running."""
+    global _coverage_server
+    if _coverage_server is not None:
+        _coverage_server.shutdown()
+        _coverage_server = None
