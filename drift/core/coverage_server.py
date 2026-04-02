@@ -36,7 +36,8 @@ def start_coverage_collection() -> bool:
     """
     global _cov_instance, _source_root
 
-    if not os.environ.get("NODE_V8_COVERAGE"):
+    # TUSK_COVERAGE is the language-agnostic signal from the CLI
+    if not os.environ.get("TUSK_COVERAGE"):
         return False
 
     try:
