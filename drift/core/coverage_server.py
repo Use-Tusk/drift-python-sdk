@@ -61,8 +61,7 @@ class CoverageSnapshotHandler(BaseHTTPRequestHandler):
 
                 if is_baseline:
                     # Baseline: return ALL coverable lines (including uncovered at count=0)
-                    # This provides the denominator for coverage percentage.
-                    # analysis2() returns (filename, statements, excluded, missing, formatted)
+                    # plus branch coverage data.
                     data = cov.get_data()
                     for filename in data.measured_files():
                         if "site-packages" in filename or "lib/python" in filename:
@@ -75,8 +74,15 @@ class CoverageSnapshotHandler(BaseHTTPRequestHandler):
                             lines_map = {}
                             for line in statements:
                                 lines_map[str(line)] = 0 if line in missing_set else 1
+
+                            # Branch data from coverage.py
+                            branch_data = _get_branch_data(cov, data, filename)
+
                             if lines_map:
-                                coverage[filename] = lines_map
+                                coverage[filename] = {
+                                    "lines": lines_map,
+                                    **branch_data,
+                                }
                         except Exception:
                             continue
                 else:
@@ -89,7 +95,11 @@ class CoverageSnapshotHandler(BaseHTTPRequestHandler):
                             continue
                         lines = data.lines(filename)
                         if lines:
-                            coverage[filename] = {str(line): 1 for line in lines}
+                            branch_data = _get_branch_data(cov, data, filename)
+                            coverage[filename] = {
+                                "lines": {str(line): 1 for line in lines},
+                                **branch_data,
+                            }
 
                 # Erase data and restart for next test
                 cov.erase()
@@ -109,6 +119,58 @@ class CoverageSnapshotHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         """Suppress default HTTP server logging."""
         pass
+
+
+def _get_branch_data(cov, data, filename: str) -> dict:
+    """Extract branch coverage data for a file.
+
+    Returns dict with totalBranches, coveredBranches, and per-line branch detail.
+    Uses coverage.py's analysis API which tracks branches as arcs (from_line, to_line).
+    """
+    try:
+        if not data.has_arcs():
+            return {"totalBranches": 0, "coveredBranches": 0, "branches": {}}
+
+        # Use internal _analyze for full branch analysis
+        analysis = cov._analyze(filename)
+        numbers = analysis.numbers
+
+        total_branches = numbers.n_branches
+        covered_branches = total_branches - numbers.n_missing_branches
+
+        # Get per-line branch detail from missing_branch_arcs
+        missing_arcs = analysis.missing_branch_arcs()
+        executed_arcs = set(data.arcs(filename) or [])
+
+        # Build per-line branch info
+        # Collect all branch source lines from both executed and missing
+        branch_lines: dict[int, dict] = {}  # from_line -> {total, covered}
+
+        # Count executed arcs by source line
+        for from_line, to_line in executed_arcs:
+            if from_line < 0:  # negative = entry/exit arcs, skip
+                continue
+            if from_line not in branch_lines:
+                branch_lines[from_line] = {"total": 0, "covered": 0}
+            branch_lines[from_line]["total"] += 1
+            branch_lines[from_line]["covered"] += 1
+
+        # Count missing arcs by source line
+        for from_line, to_lines in missing_arcs.items():
+            if from_line not in branch_lines:
+                branch_lines[from_line] = {"total": 0, "covered": 0}
+            branch_lines[from_line]["total"] += len(to_lines)
+
+        # Convert to string keys
+        branches = {str(line): info for line, info in branch_lines.items()}
+
+        return {
+            "totalBranches": total_branches,
+            "coveredBranches": covered_branches,
+            "branches": branches,
+        }
+    except Exception:
+        return {"totalBranches": 0, "coveredBranches": 0, "branches": {}}
 
 
 _coverage_server: HTTPServer | None = None
@@ -142,6 +204,7 @@ def start_coverage_server(port: int | None = None) -> bool:
     # Start coverage collection
     cov = coverage_module.Coverage(
         source=[source_root],
+        branch=True,  # Enable branch coverage tracking
         omit=[
             "*/site-packages/*",
             "*/venv/*",
