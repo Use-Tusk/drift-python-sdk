@@ -832,7 +832,7 @@ class TuskDrift:
         """Shutdown the SDK."""
         import asyncio
 
-        from .coverage_server import stop_coverage_server
+        from .coverage_server import stop_coverage_collection
 
         # Shutdown OpenTelemetry tracer provider
         if self._td_span_processor is not None:
@@ -855,4 +855,4 @@ class TuskDrift:
         except Exception as e:
             logger.error(f"Error shutting down trace blocking manager: {e}")
 
-        stop_coverage_server()
+        stop_coverage_collection()
