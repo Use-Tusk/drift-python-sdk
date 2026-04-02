@@ -819,7 +819,7 @@ class ProtobufCommunicator:
     def _handle_coverage_snapshot_sync(self, cli_message: CliMessage) -> None:
         """Handle CoverageSnapshot request from CLI and send response."""
         request = cli_message.coverage_snapshot_request
-        if not request:
+        if request is None:
             return
 
         logger.debug(f"Received CoverageSnapshot request: baseline={request.baseline}")
@@ -865,7 +865,7 @@ class ProtobufCommunicator:
             self._send_message_sync(sdk_message)
             logger.debug(f"Sent CoverageSnapshot response: success={response.success}")
         except Exception as e:
-            logger.error(f"Failed to send CoverageSnapshot response: {e}")
+            logger.error(f"[coverage] Failed to send response: {e}")
 
     def _send_message_sync(self, message: SdkMessage) -> None:
         """Send a message synchronously on the main socket."""
