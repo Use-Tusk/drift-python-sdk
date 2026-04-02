@@ -68,14 +68,15 @@ def start_coverage_collection() -> bool:
 
 
 def stop_coverage_collection() -> None:
-    """Stop coverage collection and clean up."""
+    """Stop coverage collection and clean up. Thread-safe."""
     global _cov_instance
-    if _cov_instance is not None:
-        try:
-            _cov_instance.stop()
-        except Exception:
-            pass
-        _cov_instance = None
+    with _lock:
+        if _cov_instance is not None:
+            try:
+                _cov_instance.stop()
+            except Exception:
+                pass
+            _cov_instance = None
 
 
 def take_coverage_snapshot(baseline: bool = False) -> dict:
