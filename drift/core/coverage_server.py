@@ -173,11 +173,109 @@ def _get_branch_data(cov, data, filename: str) -> dict:
         return {"totalBranches": 0, "coveredBranches": 0, "branches": {}}
 
 
+def take_coverage_snapshot(baseline: bool = False) -> dict:
+    """Take a coverage snapshot (callable from both HTTP handler and protobuf handler).
+
+    Returns dict of { filePath: { "lines": {...}, "totalBranches": N, ... } }
+    """
+    cov = CoverageSnapshotHandler.cov_instance
+    source_root = CoverageSnapshotHandler.source_root
+
+    if cov is None:
+        raise RuntimeError("Coverage not initialized")
+
+    with CoverageSnapshotHandler._lock:
+        cov.stop()
+        coverage = {}
+
+        if baseline:
+            data = cov.get_data()
+            for filename in data.measured_files():
+                if "site-packages" in filename or "lib/python" in filename:
+                    continue
+                if source_root and not filename.startswith(source_root):
+                    continue
+                try:
+                    _, statements, _, missing, _ = cov.analysis2(filename)
+                    missing_set = set(missing)
+                    lines_map = {}
+                    for line in statements:
+                        lines_map[str(line)] = 0 if line in missing_set else 1
+                    branch_data = _get_branch_data(cov, data, filename)
+                    if lines_map:
+                        coverage[filename] = {"lines": lines_map, **branch_data}
+                except Exception:
+                    continue
+        else:
+            data = cov.get_data()
+            for filename in data.measured_files():
+                if "site-packages" in filename or "lib/python" in filename:
+                    continue
+                if source_root and not filename.startswith(source_root):
+                    continue
+                lines = data.lines(filename)
+                if lines:
+                    branch_data = _get_branch_data(cov, data, filename)
+                    coverage[filename] = {
+                        "lines": {str(line): 1 for line in lines},
+                        **branch_data,
+                    }
+
+        cov.erase()
+        cov.start()
+
+    return coverage
+
+
 _coverage_server: HTTPServer | None = None
 
 
+def start_coverage_collection() -> bool:
+    """Initialize coverage.py collection if NODE_V8_COVERAGE is set.
+
+    Coverage data is accessed via take_coverage_snapshot() which can be called
+    from the protobuf handler or HTTP server.
+
+    Returns True if coverage was started, False otherwise.
+    """
+    # NODE_V8_COVERAGE is set by the CLI when coverage is enabled.
+    # Python doesn't use V8 but we use the same env var as the signal.
+    if not os.environ.get("NODE_V8_COVERAGE"):
+        return False
+
+    try:
+        import coverage as coverage_module
+    except ImportError:
+        logger.warning(
+            "Coverage requested but 'coverage' package is not installed. "
+            "Install it with: pip install coverage"
+        )
+        return False
+
+    source_root = os.getcwd()
+
+    cov = coverage_module.Coverage(
+        source=[source_root],
+        branch=True,
+        omit=[
+            "*/site-packages/*",
+            "*/venv/*",
+            "*/.venv/*",
+            "*/test*",
+            "*/__pycache__/*",
+        ],
+    )
+    cov.start()
+
+    CoverageSnapshotHandler.cov_instance = cov
+    CoverageSnapshotHandler.source_root = source_root
+
+    logger.info("Coverage collection started")
+    return True
+
+
 def start_coverage_server(port: int | None = None) -> bool:
-    """Start the coverage snapshot server if TUSK_COVERAGE_PORT is set.
+    """Start the coverage HTTP snapshot server (legacy, for non-protobuf mode).
 
     Returns True if the server was started, False otherwise.
     """
@@ -189,35 +287,10 @@ def start_coverage_server(port: int | None = None) -> bool:
 
     actual_port = port or int(port_str)
 
-    # Try to import coverage
-    try:
-        import coverage as coverage_module
-    except ImportError:
-        logger.warning(
-            "TUSK_COVERAGE_PORT is set but 'coverage' package is not installed. "
-            "Install it with: pip install coverage"
-        )
-        return False
-
-    source_root = os.getcwd()
-
-    # Start coverage collection
-    cov = coverage_module.Coverage(
-        source=[source_root],
-        branch=True,  # Enable branch coverage tracking
-        omit=[
-            "*/site-packages/*",
-            "*/venv/*",
-            "*/.venv/*",
-            "*/test*",
-            "*/__pycache__/*",
-        ],
-    )
-    cov.start()
-
-    # Set shared state on the handler class
-    CoverageSnapshotHandler.cov_instance = cov
-    CoverageSnapshotHandler.source_root = source_root
+    # Ensure coverage is initialized
+    if CoverageSnapshotHandler.cov_instance is None:
+        if not start_coverage_collection():
+            return False
 
     # Start HTTP server in a daemon thread
     http_server = HTTPServer(("127.0.0.1", actual_port), CoverageSnapshotHandler)

@@ -160,9 +160,10 @@ class TuskDrift:
 
         configure_logger(log_level=log_level, prefix="TuskDrift")
 
-        # Start coverage server early (before any SDK mode checks that might return early)
-        from .coverage_server import start_coverage_server
-        start_coverage_server()
+        # Start coverage collection early (before any SDK mode checks that might return early).
+        # Coverage data is accessed via protobuf channel (communicator handles requests).
+        from .coverage_server import start_coverage_collection
+        start_coverage_collection()
 
         instance._init_params = {
             "api_key": api_key,
