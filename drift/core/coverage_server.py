@@ -27,10 +27,10 @@ _lock = threading.Lock()
 
 
 def start_coverage_collection() -> bool:
-    """Initialize coverage.py collection if NODE_V8_COVERAGE is set.
+    """Initialize coverage.py collection if TUSK_COVERAGE is set.
 
-    NODE_V8_COVERAGE is set by the CLI when coverage is enabled.
-    Python doesn't use V8 but we use the same env var as the signal.
+    TUSK_COVERAGE is set by the CLI when coverage is enabled.
+    This is the language-agnostic signal (Node uses NODE_V8_COVERAGE additionally).
 
     Returns True if coverage was started, False otherwise.
     """
@@ -49,20 +49,29 @@ def start_coverage_collection() -> bool:
         )
         return False
 
-    _source_root = os.getcwd()
+    with _lock:
+        # Guard against double initialization — stop existing instance first
+        if _cov_instance is not None:
+            try:
+                _cov_instance.stop()
+            except Exception:
+                pass
 
-    _cov_instance = coverage_module.Coverage(
-        source=[_source_root],
-        branch=True,
-        omit=[
-            "*/site-packages/*",
-            "*/venv/*",
-            "*/.venv/*",
-            "*/test*",
-            "*/__pycache__/*",
-        ],
-    )
-    _cov_instance.start()
+        _source_root = os.path.realpath(os.getcwd())
+
+        _cov_instance = coverage_module.Coverage(
+            source=[_source_root],
+            branch=True,
+            omit=[
+                "*/site-packages/*",
+                "*/venv/*",
+                "*/.venv/*",
+                "*/tests/*",
+                "*/test_*.py",
+                "*/__pycache__/*",
+            ],
+        )
+        _cov_instance.start()
 
     logger.info("Coverage collection started")
     return True
@@ -114,7 +123,8 @@ def take_coverage_snapshot(baseline: bool = False) -> dict:
                     branch_data = _get_branch_data(data, filename)
                     if lines_map:
                         coverage[filename] = {"lines": lines_map, **branch_data}
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to analyze {filename}: {e}")
                     continue
         else:
             data = _cov_instance.get_data()
@@ -139,7 +149,10 @@ def _is_user_file(filename: str) -> bool:
     """Check if a file is a user source file (not third-party)."""
     if "site-packages" in filename or "lib/python" in filename:
         return False
-    if _source_root and not filename.startswith(_source_root):
+    # Resolve symlinks for consistent path comparison
+    resolved = os.path.realpath(filename)
+    # Use trailing separator to avoid prefix collisions (/app matching /application)
+    if _source_root and not (resolved.startswith(_source_root + os.sep) or resolved == _source_root):
         return False
     return True
 

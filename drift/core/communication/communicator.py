@@ -781,8 +781,8 @@ class ProtobufCommunicator:
 
     def _handle_set_time_travel_sync(self, cli_message: CliMessage) -> None:
         """Handle SetTimeTravel request from CLI and send response."""
-        request = cli_message.set_time_travel_request
-        if not request:
+        request = getattr(cli_message, "set_time_travel_request", None)
+        if request is None:
             return
 
         logger.debug(
@@ -818,7 +818,7 @@ class ProtobufCommunicator:
 
     def _handle_coverage_snapshot_sync(self, cli_message: CliMessage) -> None:
         """Handle CoverageSnapshot request from CLI and send response."""
-        request = cli_message.coverage_snapshot_request
+        request = getattr(cli_message, "coverage_snapshot_request", None)
         if request is None:
             return
 
