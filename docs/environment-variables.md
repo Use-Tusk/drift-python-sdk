@@ -174,7 +174,20 @@ These variables configure how the SDK connects to the Tusk CLI during replay:
 
 These are typically set automatically by the Tusk CLI and do not need to be configured manually.
 
+## Coverage Variables
+
+Set automatically by the CLI when `tusk drift run --coverage` is used. You should **not** set them manually.
+
+| Variable | Description |
+|----------|-------------|
+| `TUSK_COVERAGE` | Set to `true` when coverage is enabled. The SDK checks this to start coverage.py. |
+
+Note: `NODE_V8_COVERAGE` is also set by the CLI (for Node.js) but is ignored by the Python SDK.
+
+See [Coverage Guide](./coverage.md) for details on how coverage collection works.
+
 ## Related Docs
 
 - [Initialization Guide](./initialization.md) - SDK initialization parameters and config file settings
 - [Quick Start Guide](./quickstart.md) - Record and replay your first trace
+- [Coverage Guide](./coverage.md) - Code coverage during test replay
