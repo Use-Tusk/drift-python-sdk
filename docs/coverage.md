@@ -10,7 +10,7 @@ pip install coverage
 pip install tusk-drift[coverage]
 ```
 
-If `coverage` is not installed and `--coverage` is used, the SDK logs a warning and coverage is skipped — tests still run normally.
+If `coverage` is not installed when coverage is enabled, the SDK logs a warning and coverage is skipped. Tests still run normally.
 
 ## How It Works
 
@@ -24,7 +24,7 @@ import coverage
 cov = coverage.Coverage(
     source=[os.path.realpath(os.getcwd())],
     branch=True,
-    omit=["*/site-packages/*", "*/venv/*", "*/.venv/*", "*/test*", "*/__pycache__/*"],
+    omit=["*/site-packages/*", "*/venv/*", "*/.venv/*", "*/tests/*", "*/test_*.py", "*/__pycache__/*"],
 )
 cov.start()
 ```
@@ -93,7 +93,7 @@ This is important because the protobuf communicator runs coverage handlers in a 
 ## Limitations
 
 - **`coverage` package required**: Unlike Node.js (V8 coverage is built-in), Python needs `pip install coverage`. If not installed, coverage silently doesn't work (warning logged).
-- **Performance overhead**: coverage.py uses `sys.settrace()` which adds 10-30% execution overhead. V8 coverage is near-zero. This overhead only applies during `--coverage` replay runs.
+- **Performance overhead**: coverage.py uses `sys.settrace()` which adds 10-30% execution overhead. This only applies during coverage replay runs.
 - **Multi-process servers**: gunicorn with `--workers > 1` forks worker processes. The SDK starts coverage.py in the main process; forked workers don't inherit it. Use `--workers 1` during coverage runs.
 - **Private API for branches**: `_analyze()` is not part of coverage.py's public API. Branch coverage detail may break on future coverage.py versions.
 - **Python 3.12+ recommended for async**: coverage.py's `sys.settrace` can miss some async lines on Python < 3.12. Python 3.12+ uses `sys.monitoring` for better async tracking.
