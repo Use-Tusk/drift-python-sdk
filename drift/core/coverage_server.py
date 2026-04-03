@@ -102,10 +102,9 @@ def take_coverage_snapshot(baseline: bool = False) -> dict:
     Returns:
         dict of { filePath: { "lines": {...}, "totalBranches": N, "coveredBranches": N, "branches": {...} } }
     """
-    if _cov_instance is None:
-        raise RuntimeError("Coverage not initialized")
-
     with _lock:
+        if _cov_instance is None:
+            raise RuntimeError("Coverage not initialized")
         _cov_instance.stop()
         coverage = {}
 
@@ -176,20 +175,30 @@ def _get_branch_data(data, filename: str) -> dict:
         missing_arcs = analysis.missing_branch_arcs()
         executed_arcs = set(data.arcs(filename) or [])
 
-        branch_lines: dict[int, dict] = {}
-
+        # Group executed arcs by from_line (skip negative entry arcs)
+        executed_by_line: dict[int, list[int]] = {}
         for from_line, to_line in executed_arcs:
             if from_line < 0:
                 continue
-            if from_line not in branch_lines:
-                branch_lines[from_line] = {"total": 0, "covered": 0}
-            branch_lines[from_line]["total"] += 1
-            branch_lines[from_line]["covered"] += 1
+            executed_by_line.setdefault(from_line, []).append(to_line)
 
-        for from_line, to_lines in missing_arcs.items():
-            if from_line not in branch_lines:
-                branch_lines[from_line] = {"total": 0, "covered": 0}
-            branch_lines[from_line]["total"] += len(to_lines)
+        # A line is a branch point if:
+        # - it appears in missing_arcs (at least one path wasn't taken), OR
+        # - it has multiple executed arcs (multiple paths from same line)
+        branch_point_lines = set(missing_arcs.keys())
+        for from_line, to_lines in executed_by_line.items():
+            if len(to_lines) > 1:
+                branch_point_lines.add(from_line)
+
+        branch_lines: dict[int, dict] = {}
+
+        for from_line in branch_point_lines:
+            executed_count = len(executed_by_line.get(from_line, []))
+            missing_count = len(missing_arcs.get(from_line, []))
+            branch_lines[from_line] = {
+                "total": executed_count + missing_count,
+                "covered": executed_count,
+            }
 
         branches = {str(line): info for line, info in branch_lines.items()}
 
