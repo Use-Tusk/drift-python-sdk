@@ -25,6 +25,12 @@ _cov_instance = None
 _source_root: str | None = None
 _lock = threading.Lock()
 
+# Cache branch structure from baseline to ensure deterministic branch counts.
+# Branch detection via _analyze() depends on observed arcs, which vary with
+# thread timing. By caching from the baseline (which has the fullest data),
+# per-test snapshots report consistent totals.
+_branch_cache: dict[str, dict] | None = None
+
 
 def start_coverage_collection() -> bool:
     """Initialize coverage.py collection if TUSK_COVERAGE is set.
@@ -85,7 +91,7 @@ def start_coverage_collection() -> bool:
 
 def stop_coverage_collection() -> None:
     """Stop coverage collection and clean up. Thread-safe."""
-    global _cov_instance
+    global _cov_instance, _branch_cache
     with _lock:
         if _cov_instance is not None:
             try:
@@ -93,6 +99,7 @@ def stop_coverage_collection() -> None:
             except Exception:
                 pass
             _cov_instance = None
+        _branch_cache = None
 
 
 def take_coverage_snapshot(baseline: bool = False) -> dict:
@@ -115,7 +122,10 @@ def take_coverage_snapshot(baseline: bool = False) -> dict:
         coverage = {}
 
         try:
+            global _branch_cache
             if baseline:
+                # Baseline: compute fresh branch data and cache it for per-test reuse
+                _branch_cache = {}
                 data = _cov_instance.get_data()
                 for filename in data.measured_files():
                     if not _is_user_file(filename):
@@ -127,6 +137,7 @@ def take_coverage_snapshot(baseline: bool = False) -> dict:
                         for line in statements:
                             lines_map[str(line)] = 0 if line in missing_set else 1
                         branch_data = _get_branch_data(data, filename)
+                        _branch_cache[filename] = branch_data
                         if lines_map:
                             coverage[filename] = {"lines": lines_map, **branch_data}
                     except Exception as e:
@@ -139,7 +150,12 @@ def take_coverage_snapshot(baseline: bool = False) -> dict:
                         continue
                     lines = data.lines(filename)
                     if lines:
-                        branch_data = _get_branch_data(data, filename)
+                        # Use cached branch data from baseline for stable totals.
+                        # Fall back to live _analyze() if no cache (e.g., no baseline taken).
+                        if _branch_cache is not None and filename in _branch_cache:
+                            branch_data = _get_per_test_branch_data(data, filename, _branch_cache[filename])
+                        else:
+                            branch_data = _get_branch_data(data, filename)
                         coverage[filename] = {
                             "lines": {str(line): 1 for line in lines},
                             **branch_data,
@@ -213,6 +229,46 @@ def _get_branch_data(data, filename: str) -> dict:
         return {
             "totalBranches": total_branches,
             "coveredBranches": covered_branches,
+            "branches": branches,
+        }
+    except Exception:
+        return {"totalBranches": 0, "coveredBranches": 0, "branches": {}}
+
+
+def _get_per_test_branch_data(data, filename: str, cached: dict) -> dict:
+    """Compute per-test branch coverage using cached branch structure from baseline.
+
+    Uses the cached branch point set (from baseline) for stable totals,
+    but computes covered counts from the current test's executed arcs.
+    This avoids flaky branch totals caused by non-deterministic arc detection.
+    """
+    try:
+        if not data.has_arcs():
+            return {"totalBranches": 0, "coveredBranches": 0, "branches": {}}
+
+        executed_arcs = set(data.arcs(filename) or [])
+
+        # Group executed arcs by from_line (skip negative entry arcs)
+        executed_by_line: dict[int, list[int]] = {}
+        for from_line, to_line in executed_arcs:
+            if from_line < 0:
+                continue
+            executed_by_line.setdefault(from_line, []).append(to_line)
+
+        # Use cached branch points — only compute covered from current arcs
+        cached_branches = cached.get("branches", {})
+        branches: dict[str, dict] = {}
+        total_covered = 0
+
+        for line_str, info in cached_branches.items():
+            total = info["total"]
+            covered = min(len(executed_by_line.get(int(line_str), [])), total)
+            branches[line_str] = {"total": total, "covered": covered}
+            total_covered += covered
+
+        return {
+            "totalBranches": cached.get("totalBranches", 0),
+            "coveredBranches": total_covered,
             "branches": branches,
         }
     except Exception:
