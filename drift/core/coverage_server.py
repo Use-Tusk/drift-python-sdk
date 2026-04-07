@@ -178,6 +178,16 @@ def _is_user_file(filename: str) -> bool:
     return not _source_root or resolved.startswith(_source_root + os.sep) or resolved == _source_root
 
 
+def _group_arcs_by_line(arcs: set) -> dict[int, list[int]]:
+    """Group executed arcs by from_line, skipping negative entry arcs."""
+    by_line: dict[int, list[int]] = {}
+    for from_line, to_line in arcs:
+        if from_line < 0:
+            continue
+        by_line.setdefault(from_line, []).append(to_line)
+    return by_line
+
+
 def _get_branch_data(data, filename: str) -> dict:
     """Extract branch coverage data for a file.
 
@@ -199,13 +209,7 @@ def _get_branch_data(data, filename: str) -> dict:
 
         missing_arcs = analysis.missing_branch_arcs()
         executed_arcs = set(data.arcs(filename) or [])
-
-        # Group executed arcs by from_line (skip negative entry arcs)
-        executed_by_line: dict[int, list[int]] = {}
-        for from_line, to_line in executed_arcs:
-            if from_line < 0:
-                continue
-            executed_by_line.setdefault(from_line, []).append(to_line)
+        executed_by_line = _group_arcs_by_line(executed_arcs)
 
         # A line is a branch point if:
         # - it appears in missing_arcs (at least one path wasn't taken), OR
@@ -248,13 +252,7 @@ def _get_per_test_branch_data(data, filename: str, cached: dict) -> dict:
             return {"totalBranches": 0, "coveredBranches": 0, "branches": {}}
 
         executed_arcs = set(data.arcs(filename) or [])
-
-        # Group executed arcs by from_line (skip negative entry arcs)
-        executed_by_line: dict[int, list[int]] = {}
-        for from_line, to_line in executed_arcs:
-            if from_line < 0:
-                continue
-            executed_by_line.setdefault(from_line, []).append(to_line)
+        executed_by_line = _group_arcs_by_line(executed_arcs)
 
         # Use cached branch points — only compute covered from current arcs
         cached_branches = cached.get("branches", {})
