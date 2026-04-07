@@ -44,8 +44,7 @@ def start_coverage_collection() -> bool:
         import coverage as coverage_module
     except ImportError:
         logger.warning(
-            "Coverage requested but 'coverage' package is not installed. "
-            "Install it with: pip install coverage"
+            "Coverage requested but 'coverage' package is not installed. Install it with: pip install coverage"
         )
         return False
 
@@ -108,38 +107,39 @@ def take_coverage_snapshot(baseline: bool = False) -> dict:
         _cov_instance.stop()
         coverage = {}
 
-        if baseline:
-            data = _cov_instance.get_data()
-            for filename in data.measured_files():
-                if not _is_user_file(filename):
-                    continue
-                try:
-                    _, statements, _, missing, _ = _cov_instance.analysis2(filename)
-                    missing_set = set(missing)
-                    lines_map = {}
-                    for line in statements:
-                        lines_map[str(line)] = 0 if line in missing_set else 1
-                    branch_data = _get_branch_data(data, filename)
-                    if lines_map:
-                        coverage[filename] = {"lines": lines_map, **branch_data}
-                except Exception as e:
-                    logger.debug(f"Failed to analyze {filename}: {e}")
-                    continue
-        else:
-            data = _cov_instance.get_data()
-            for filename in data.measured_files():
-                if not _is_user_file(filename):
-                    continue
-                lines = data.lines(filename)
-                if lines:
-                    branch_data = _get_branch_data(data, filename)
-                    coverage[filename] = {
-                        "lines": {str(line): 1 for line in lines},
-                        **branch_data,
-                    }
-
-        _cov_instance.erase()
-        _cov_instance.start()
+        try:
+            if baseline:
+                data = _cov_instance.get_data()
+                for filename in data.measured_files():
+                    if not _is_user_file(filename):
+                        continue
+                    try:
+                        _, statements, _, missing, _ = _cov_instance.analysis2(filename)
+                        missing_set = set(missing)
+                        lines_map = {}
+                        for line in statements:
+                            lines_map[str(line)] = 0 if line in missing_set else 1
+                        branch_data = _get_branch_data(data, filename)
+                        if lines_map:
+                            coverage[filename] = {"lines": lines_map, **branch_data}
+                    except Exception as e:
+                        logger.debug(f"Failed to analyze {filename}: {e}")
+                        continue
+            else:
+                data = _cov_instance.get_data()
+                for filename in data.measured_files():
+                    if not _is_user_file(filename):
+                        continue
+                    lines = data.lines(filename)
+                    if lines:
+                        branch_data = _get_branch_data(data, filename)
+                        coverage[filename] = {
+                            "lines": {str(line): 1 for line in lines},
+                            **branch_data,
+                        }
+        finally:
+            _cov_instance.erase()
+            _cov_instance.start()
 
     return coverage
 
@@ -164,6 +164,9 @@ def _get_branch_data(data, filename: str) -> dict:
     """
     try:
         if not data.has_arcs():
+            return {"totalBranches": 0, "coveredBranches": 0, "branches": {}}
+
+        if _cov_instance is None:
             return {"totalBranches": 0, "coveredBranches": 0, "branches": {}}
 
         analysis = _cov_instance._analyze(filename)
