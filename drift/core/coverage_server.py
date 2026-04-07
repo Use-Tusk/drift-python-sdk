@@ -40,6 +40,13 @@ def start_coverage_collection() -> bool:
     if not os.environ.get("TUSK_COVERAGE"):
         return False
 
+    # Coverage collection only makes sense in REPLAY mode.
+    # If TUSK_DRIFT_MODE is not set we still proceed for backwards compatibility.
+    mode = os.environ.get("TUSK_DRIFT_MODE", "").upper()
+    if mode and mode != "REPLAY":
+        logger.debug("Coverage collection skipped: not in REPLAY mode (mode=%s)", mode)
+        return False
+
     try:
         import coverage as coverage_module
     except ImportError:
