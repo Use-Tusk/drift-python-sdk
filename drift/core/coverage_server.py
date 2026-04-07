@@ -151,9 +151,7 @@ def _is_user_file(filename: str) -> bool:
     # Resolve symlinks for consistent path comparison
     resolved = os.path.realpath(filename)
     # Use trailing separator to avoid prefix collisions (/app matching /application)
-    if _source_root and not (resolved.startswith(_source_root + os.sep) or resolved == _source_root):
-        return False
-    return True
+    return not _source_root or resolved.startswith(_source_root + os.sep) or resolved == _source_root
 
 
 def _get_branch_data(data, filename: str) -> dict:
