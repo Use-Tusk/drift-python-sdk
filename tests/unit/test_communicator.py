@@ -598,3 +598,210 @@ class TestProtobufCommunicatorThreadSafety:
 
         assert hasattr(communicator, "_response_lock")
         assert isinstance(communicator._response_lock, type(threading.Lock()))
+
+
+class TestProtobufCommunicatorHandleSetTimeTravelSync:
+    """Tests for _handle_set_time_travel_sync method."""
+
+    def test_returns_early_when_no_request(self, mocker):
+        """Should return early when set_time_travel_request is None."""
+        communicator = ProtobufCommunicator()
+        mock_send = mocker.patch.object(communicator, "_send_message_sync")
+
+        mock_cli_message = mocker.MagicMock()
+        mock_cli_message.set_time_travel_request = None
+
+        communicator._handle_set_time_travel_sync(mock_cli_message)
+
+        mock_send.assert_not_called()
+
+    def test_handles_successful_time_travel(self, mocker):
+        """Should send success response when time travel starts successfully."""
+        from tusk.drift.core.v1 import MessageType
+
+        communicator = ProtobufCommunicator()
+        mock_send = mocker.patch.object(communicator, "_send_message_sync")
+
+        mock_cli_message = mocker.MagicMock()
+        mock_request = mocker.MagicMock()
+        mock_request.timestamp_seconds = 1234567890
+        mock_request.trace_id = "trace123"
+        mock_request.timestamp_source = "manual"
+        mock_cli_message.set_time_travel_request = mock_request
+        mock_cli_message.request_id = "req123"
+
+        mock_start_time_travel = mocker.patch(
+            "drift.instrumentation.datetime.instrumentation.start_time_travel", return_value=True
+        )
+
+        communicator._handle_set_time_travel_sync(mock_cli_message)
+
+        mock_start_time_travel.assert_called_once_with(1234567890, "trace123")
+        mock_send.assert_called_once()
+        sent_message = mock_send.call_args[0][0]
+        assert sent_message.type == MessageType.SET_TIME_TRAVEL
+        assert sent_message.request_id == "req123"
+        assert sent_message.set_time_travel_response.success is True
+
+    def test_handles_time_travel_failure(self, mocker):
+        """Should send error response when time travel fails."""
+        from tusk.drift.core.v1 import MessageType
+
+        communicator = ProtobufCommunicator()
+        mock_send = mocker.patch.object(communicator, "_send_message_sync")
+
+        mock_cli_message = mocker.MagicMock()
+        mock_request = mocker.MagicMock()
+        mock_request.timestamp_seconds = 1234567890
+        mock_request.trace_id = "trace123"
+        mock_request.timestamp_source = "manual"
+        mock_cli_message.set_time_travel_request = mock_request
+        mock_cli_message.request_id = "req456"
+
+        mocker.patch("drift.instrumentation.datetime.instrumentation.start_time_travel", return_value=False)
+
+        communicator._handle_set_time_travel_sync(mock_cli_message)
+
+        mock_send.assert_called_once()
+        sent_message = mock_send.call_args[0][0]
+        assert sent_message.type == MessageType.SET_TIME_TRAVEL
+        assert sent_message.set_time_travel_response.success is False
+        assert "not available" in sent_message.set_time_travel_response.error
+
+    def test_handles_time_travel_exception(self, mocker):
+        """Should send error response when exception occurs during time travel."""
+
+        communicator = ProtobufCommunicator()
+        mock_send = mocker.patch.object(communicator, "_send_message_sync")
+
+        mock_cli_message = mocker.MagicMock()
+        mock_request = mocker.MagicMock()
+        mock_request.timestamp_seconds = 1234567890
+        mock_request.trace_id = "trace123"
+        mock_request.timestamp_source = "manual"
+        mock_cli_message.set_time_travel_request = mock_request
+        mock_cli_message.request_id = "req789"
+
+        mocker.patch(
+            "drift.instrumentation.datetime.instrumentation.start_time_travel",
+            side_effect=Exception("Time travel error"),
+        )
+
+        communicator._handle_set_time_travel_sync(mock_cli_message)
+
+        mock_send.assert_called_once()
+        sent_message = mock_send.call_args[0][0]
+        assert sent_message.set_time_travel_response.success is False
+        assert "Time travel error" in sent_message.set_time_travel_response.error
+
+
+class TestProtobufCommunicatorHandleCoverageSnapshotSync:
+    """Tests for _handle_coverage_snapshot_sync method."""
+
+    def test_returns_early_when_no_request(self, mocker):
+        """Should return early when coverage_snapshot_request is None."""
+        communicator = ProtobufCommunicator()
+        mock_send = mocker.patch.object(communicator, "_send_message_sync")
+
+        mock_cli_message = mocker.MagicMock()
+        mock_cli_message.coverage_snapshot_request = None
+
+        communicator._handle_coverage_snapshot_sync(mock_cli_message)
+
+        mock_send.assert_not_called()
+
+    def test_handles_successful_baseline_snapshot(self, mocker):
+        """Should send success response with coverage data for baseline snapshot."""
+        from tusk.drift.core.v1 import MessageType
+
+        communicator = ProtobufCommunicator()
+        mock_send = mocker.patch.object(communicator, "_send_message_sync")
+
+        mock_cli_message = mocker.MagicMock()
+        mock_request = mocker.MagicMock()
+        mock_request.baseline = True
+        mock_cli_message.coverage_snapshot_request = mock_request
+        mock_cli_message.request_id = "cov123"
+
+        mock_snapshot_result = {
+            "/app/main.py": {
+                "lines": {"1": 1, "2": 0, "3": 1},
+                "totalBranches": 2,
+                "coveredBranches": 1,
+                "branches": {"5": {"total": 2, "covered": 1}},
+            }
+        }
+        mock_take_snapshot = mocker.patch(
+            "drift.core.coverage_server.take_coverage_snapshot",
+            return_value=mock_snapshot_result,
+        )
+
+        communicator._handle_coverage_snapshot_sync(mock_cli_message)
+
+        mock_take_snapshot.assert_called_once_with(True)
+        mock_send.assert_called_once()
+        sent_message = mock_send.call_args[0][0]
+        assert sent_message.type == MessageType.COVERAGE_SNAPSHOT
+        assert sent_message.request_id == "cov123"
+        assert sent_message.coverage_snapshot_response.success is True
+        assert "/app/main.py" in sent_message.coverage_snapshot_response.coverage
+
+    def test_converts_coverage_data_to_protobuf_format(self, mocker):
+        """Should properly convert coverage data to protobuf FileCoverageData format."""
+
+        communicator = ProtobufCommunicator()
+        mock_send = mocker.patch.object(communicator, "_send_message_sync")
+
+        mock_cli_message = mocker.MagicMock()
+        mock_request = mocker.MagicMock()
+        mock_request.baseline = False
+        mock_cli_message.coverage_snapshot_request = mock_request
+        mock_cli_message.request_id = "cov789"
+
+        mock_snapshot_result = {
+            "/app/file1.py": {
+                "lines": {"1": 1, "2": 1},
+                "totalBranches": 4,
+                "coveredBranches": 3,
+                "branches": {"5": {"total": 2, "covered": 1}, "10": {"total": 2, "covered": 2}},
+            }
+        }
+        mocker.patch(
+            "drift.core.coverage_server.take_coverage_snapshot",
+            return_value=mock_snapshot_result,
+        )
+
+        communicator._handle_coverage_snapshot_sync(mock_cli_message)
+
+        sent_message = mock_send.call_args[0][0]
+        file_data = sent_message.coverage_snapshot_response.coverage["/app/file1.py"]
+        assert file_data.lines == {"1": 1, "2": 1}
+        assert file_data.total_branches == 4
+        assert file_data.covered_branches == 3
+        assert "5" in file_data.branches
+        assert file_data.branches["5"].total == 2
+        assert file_data.branches["5"].covered == 1
+
+    def test_handles_snapshot_exception(self, mocker):
+        """Should send error response when take_coverage_snapshot raises exception."""
+
+        communicator = ProtobufCommunicator()
+        mock_send = mocker.patch.object(communicator, "_send_message_sync")
+
+        mock_cli_message = mocker.MagicMock()
+        mock_request = mocker.MagicMock()
+        mock_request.baseline = False
+        mock_cli_message.coverage_snapshot_request = mock_request
+        mock_cli_message.request_id = "cov999"
+
+        mocker.patch(
+            "drift.core.coverage_server.take_coverage_snapshot",
+            side_effect=RuntimeError("Coverage not initialized"),
+        )
+
+        communicator._handle_coverage_snapshot_sync(mock_cli_message)
+
+        mock_send.assert_called_once()
+        sent_message = mock_send.call_args[0][0]
+        assert sent_message.coverage_snapshot_response.success is False
+        assert "Coverage not initialized" in sent_message.coverage_snapshot_response.error
