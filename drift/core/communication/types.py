@@ -43,7 +43,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from tusk.drift.core.v1 import (
+    BranchInfo,  # noqa: F401 (re-exported)
     CliMessage,
+    CoverageSnapshotResponse,  # noqa: F401 (re-exported)
+    FileCoverageData,  # noqa: F401 (re-exported)
     InstrumentationVersionMismatchAlert,
     MessageType,
     Runtime,
