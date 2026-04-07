@@ -10,27 +10,31 @@ import traceback
 from dataclasses import dataclass
 from typing import Any
 
-from tusk.drift.core.v1 import GetMockRequest as ProtoGetMockRequest
-
-from ...version import MIN_CLI_VERSION, SDK_VERSION
-from ..span_serialization import clean_span_to_proto
-from ..types import CleanSpanData, calling_library_context
-from .types import (
+from tusk.drift.core.v1 import (
     BranchInfo,
     CliMessage,
-    ConnectRequest,
     CoverageSnapshotResponse,
     FileCoverageData,
-    GetMockRequest,
     InstrumentationVersionMismatchAlert,
     MessageType,
-    MockRequestInput,
-    MockResponseOutput,
     SdkMessage,
     SendAlertRequest,
     SendInboundSpanForReplayRequest,
     SetTimeTravelResponse,
     UnpatchedDependencyAlert,
+)
+from tusk.drift.core.v1 import (
+    GetMockRequest as ProtoGetMockRequest,
+)
+
+from ...version import MIN_CLI_VERSION, SDK_VERSION
+from ..span_serialization import clean_span_to_proto
+from ..types import CleanSpanData, calling_library_context
+from .types import (
+    ConnectRequest,
+    GetMockRequest,
+    MockRequestInput,
+    MockResponseOutput,
     span_to_proto,
 )
 
