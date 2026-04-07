@@ -91,7 +91,7 @@ def start_coverage_collection() -> bool:
 
 def stop_coverage_collection() -> None:
     """Stop coverage collection and clean up. Thread-safe."""
-    global _cov_instance, _branch_cache
+    global _cov_instance, _branch_cache, _source_root
     with _lock:
         if _cov_instance is not None:
             try:
@@ -100,6 +100,7 @@ def stop_coverage_collection() -> None:
                 pass
             _cov_instance = None
         _branch_cache = None
+        _source_root = None
 
 
 def take_coverage_snapshot(baseline: bool = False) -> dict:
