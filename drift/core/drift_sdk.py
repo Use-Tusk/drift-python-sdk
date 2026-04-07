@@ -160,12 +160,6 @@ class TuskDrift:
 
         configure_logger(log_level=log_level, prefix="TuskDrift")
 
-        # Start coverage collection early (before any SDK mode checks that might return early).
-        # Coverage data is accessed via protobuf channel (communicator handles requests).
-        from .coverage_server import start_coverage_collection
-
-        start_coverage_collection()
-
         instance._init_params = {
             "api_key": api_key,
             "env": env,
@@ -184,6 +178,13 @@ class TuskDrift:
                 f"Environment not provided in initialization parameters. Using '{env_from_var}' as the environment."
             )
             env = env_from_var
+
+        # Start coverage collection early (before any SDK mode checks that might return early),
+        # but after the _initialized guard so we don't re-invoke on repeated initialize() calls.
+        # Coverage data is accessed via protobuf channel (communicator handles requests).
+        from .coverage_server import start_coverage_collection
+
+        start_coverage_collection()
 
         if cls._initialized:
             logger.debug("Already initialized, skipping...")

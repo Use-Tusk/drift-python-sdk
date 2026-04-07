@@ -5,9 +5,7 @@ The Python SDK collects per-test code coverage during Tusk Drift replay using `c
 ## Requirements
 
 ```bash
-pip install coverage
-# or
-pip install tusk-drift[coverage]
+pip install tusk-drift-python-sdk[coverage]
 ```
 
 If `coverage` is not installed when coverage is enabled, the SDK logs a warning and coverage is skipped. Tests still run normally.

@@ -2372,6 +2372,10 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+coverage = [
+    { name = "coverage", version = "7.10.7", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "coverage", version = "7.13.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
 dev = [
     { name = "fastapi", version = "0.128.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "fastapi", version = "0.129.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -2408,6 +2412,7 @@ rust = [
 requires-dist = [
     { name = "aiofiles", specifier = ">=23.0.0" },
     { name = "aiohttp", specifier = ">=3.9.0" },
+    { name = "coverage", marker = "extra == 'coverage'", specifier = ">=7.0.0" },
     { name = "django", marker = "extra == 'django'", specifier = ">=4.2" },
     { name = "drift-core-python", marker = "extra == 'rust'", specifier = ">=0.1.9" },
     { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.115.6" },
@@ -2432,7 +2437,7 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'dev'", specifier = ">=0.34.2" },
     { name = "uvicorn", marker = "extra == 'fastapi'", specifier = ">=0.34.2" },
 ]
-provides-extras = ["flask", "fastapi", "django", "rust", "dev"]
+provides-extras = ["flask", "fastapi", "django", "coverage", "rust", "dev"]
 
 [[package]]
 name = "tusk-drift-schemas"
