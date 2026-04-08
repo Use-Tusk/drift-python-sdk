@@ -183,6 +183,12 @@ class TuskDrift:
             logger.debug("Already initialized, skipping...")
             return instance
 
+        # Start coverage collection after the _initialized guard so repeated
+        # initialize() calls don't stop/restart coverage and lose accumulated data.
+        from .coverage_server import start_coverage_collection
+
+        start_coverage_collection()
+
         file_config = instance.file_config
 
         if (
@@ -827,6 +833,8 @@ class TuskDrift:
         """Shutdown the SDK."""
         import asyncio
 
+        from .coverage_server import stop_coverage_collection
+
         # Shutdown OpenTelemetry tracer provider
         if self._td_span_processor is not None:
             self._td_span_processor.shutdown()
@@ -847,3 +855,5 @@ class TuskDrift:
             TraceBlockingManager.get_instance().shutdown()
         except Exception as e:
             logger.error(f"Error shutting down trace blocking manager: {e}")
+
+        stop_coverage_collection()

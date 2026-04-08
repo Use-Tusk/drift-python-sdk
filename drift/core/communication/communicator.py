@@ -10,24 +10,31 @@ import traceback
 from dataclasses import dataclass
 from typing import Any
 
-from tusk.drift.core.v1 import GetMockRequest as ProtoGetMockRequest
-
-from ...version import MIN_CLI_VERSION, SDK_VERSION
-from ..span_serialization import clean_span_to_proto
-from ..types import CleanSpanData, calling_library_context
-from .types import (
+from tusk.drift.core.v1 import (
+    BranchInfo,
     CliMessage,
-    ConnectRequest,
-    GetMockRequest,
+    CoverageSnapshotResponse,
+    FileCoverageData,
     InstrumentationVersionMismatchAlert,
     MessageType,
-    MockRequestInput,
-    MockResponseOutput,
     SdkMessage,
     SendAlertRequest,
     SendInboundSpanForReplayRequest,
     SetTimeTravelResponse,
     UnpatchedDependencyAlert,
+)
+from tusk.drift.core.v1 import (
+    GetMockRequest as ProtoGetMockRequest,
+)
+
+from ...version import MIN_CLI_VERSION, SDK_VERSION
+from ..span_serialization import clean_span_to_proto
+from ..types import CleanSpanData, calling_library_context
+from .types import (
+    ConnectRequest,
+    GetMockRequest,
+    MockRequestInput,
+    MockResponseOutput,
     span_to_proto,
 )
 
@@ -750,6 +757,10 @@ class ProtobufCommunicator:
                     self._handle_set_time_travel_sync(cli_message)
                     continue
 
+                if cli_message.type == MessageType.COVERAGE_SNAPSHOT:
+                    self._handle_coverage_snapshot_sync(cli_message)
+                    continue
+
                 # Route responses to waiting callers by request_id
                 request_id = cli_message.request_id
                 if request_id:
@@ -774,8 +785,8 @@ class ProtobufCommunicator:
 
     def _handle_set_time_travel_sync(self, cli_message: CliMessage) -> None:
         """Handle SetTimeTravel request from CLI and send response."""
-        request = cli_message.set_time_travel_request
-        if not request:
+        request = getattr(cli_message, "set_time_travel_request", None)
+        if request is None:
             return
 
         logger.debug(
@@ -808,6 +819,57 @@ class ProtobufCommunicator:
             logger.debug(f"Sent SetTimeTravel response: success={response.success}")
         except Exception as e:
             logger.error(f"Failed to send SetTimeTravel response: {e}")
+
+    def _handle_coverage_snapshot_sync(self, cli_message: CliMessage) -> None:
+        """Handle CoverageSnapshot request from CLI and send response."""
+        request = getattr(cli_message, "coverage_snapshot_request", None)
+        if request is None:
+            return
+
+        logger.debug(f"Received CoverageSnapshot request: baseline={request.baseline}")
+
+        try:
+            from ..coverage_server import take_coverage_snapshot
+
+            result = take_coverage_snapshot(request.baseline)
+
+            # Convert to protobuf
+            coverage: dict[str, FileCoverageData] = {}
+            for file_path, file_data in result.items():
+                branches: dict[str, BranchInfo] = {}
+                for line, branch_info in file_data.get("branches", {}).items():
+                    branches[line] = BranchInfo(
+                        total=branch_info.get("total", 0),
+                        covered=branch_info.get("covered", 0),
+                    )
+
+                coverage[file_path] = FileCoverageData(
+                    lines=file_data.get("lines", {}),
+                    total_branches=file_data.get("totalBranches", 0),
+                    covered_branches=file_data.get("coveredBranches", 0),
+                    branches=branches,
+                )
+
+            response = CoverageSnapshotResponse(
+                success=True,
+                error="",
+                coverage=coverage,
+            )
+        except Exception as e:
+            logger.error(f"Failed to take coverage snapshot: {e}")
+            response = CoverageSnapshotResponse(success=False, error=str(e))
+
+        sdk_message = SdkMessage(
+            type=MessageType.COVERAGE_SNAPSHOT,
+            request_id=cli_message.request_id,
+            coverage_snapshot_response=response,
+        )
+
+        try:
+            self._send_message_sync(sdk_message)
+            logger.debug(f"Sent CoverageSnapshot response: success={response.success}")
+        except Exception as e:
+            logger.error(f"[coverage] Failed to send response: {e}")
 
     def _send_message_sync(self, message: SdkMessage) -> None:
         """Send a message synchronously on the main socket."""

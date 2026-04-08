@@ -12,20 +12,6 @@ The protocol uses:
 from __future__ import annotations
 
 __all__ = [
-    # Re-exported protobuf types
-    "CliMessage",
-    "InstrumentationVersionMismatchAlert",
-    "MessageType",
-    "Runtime",
-    "SdkMessage",
-    "SendAlertRequest",
-    "SendInboundSpanForReplayRequest",
-    "SetTimeTravelRequest",
-    "SetTimeTravelResponse",
-    "UnpatchedDependencyAlert",
-    # Aliases
-    "SDKMessageType",
-    "CLIMessageType",
     # Dataclasses
     "ConnectRequest",
     "ConnectResponse",
@@ -43,18 +29,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from tusk.drift.core.v1 import (
-    CliMessage,
-    InstrumentationVersionMismatchAlert,
-    MessageType,
-    Runtime,
-    SdkMessage,
-    SendAlertRequest,
-    SendInboundSpanForReplayRequest,
-    SetTimeTravelRequest,
-    SetTimeTravelResponse,
-    UnpatchedDependencyAlert,
-)
-from tusk.drift.core.v1 import (
     ConnectRequest as ProtoConnectRequest,
 )
 from tusk.drift.core.v1 import (
@@ -65,6 +39,9 @@ from tusk.drift.core.v1 import (
 )
 from tusk.drift.core.v1 import (
     GetMockResponse as ProtoGetMockResponse,
+)
+from tusk.drift.core.v1 import (
+    Runtime,
 )
 from tusk.drift.core.v1 import (
     Span as ProtoSpan,
@@ -78,9 +55,6 @@ from tusk.drift.core.v1 import (
 from tusk.drift.core.v1 import (
     StatusCode as ProtoStatusCode,
 )
-
-SDKMessageType = MessageType
-CLIMessageType = MessageType
 
 
 def _python_to_value(value: Any) -> Any:

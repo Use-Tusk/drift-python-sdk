@@ -1,4 +1,5 @@
 version = 1
+revision = 1
 requires-python = ">=3.9"
 resolution-markers = [
     "python_full_version >= '3.12'",
@@ -2353,7 +2354,7 @@ wheels = [
 
 [[package]]
 name = "tusk-drift-python-sdk"
-version = "0.1.22"
+version = "0.1.23"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
@@ -2371,6 +2372,10 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+coverage = [
+    { name = "coverage", version = "7.10.7", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "coverage", version = "7.13.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
 dev = [
     { name = "fastapi", version = "0.128.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "fastapi", version = "0.129.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -2407,6 +2412,7 @@ rust = [
 requires-dist = [
     { name = "aiofiles", specifier = ">=23.0.0" },
     { name = "aiohttp", specifier = ">=3.9.0" },
+    { name = "coverage", marker = "extra == 'coverage'", specifier = ">=7.0.0" },
     { name = "django", marker = "extra == 'django'", specifier = ">=4.2" },
     { name = "drift-core-python", marker = "extra == 'rust'", specifier = ">=0.1.9" },
     { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.115.6" },
@@ -2415,33 +2421,34 @@ requires-dist = [
     { name = "flask", marker = "extra == 'flask'", specifier = ">=3.1.2" },
     { name = "opentelemetry-api", specifier = ">=1.20.0" },
     { name = "opentelemetry-sdk", specifier = ">=1.20.0" },
-    { name = "protobuf", specifier = ">=6.0" },
+    { name = "protobuf", specifier = ">=3.20.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0,<9.0.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "pytest-mock", marker = "extra == 'dev'", specifier = ">=3.15.0" },
     { name = "python-jsonpath", marker = "extra == 'dev'", specifier = ">=0.10" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "requests", specifier = ">=2.32.5" },
+    { name = "requests", specifier = ">=2.28.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.14.13" },
     { name = "starlette", marker = "extra == 'fastapi'", specifier = "<0.42.0" },
     { name = "time-machine", specifier = ">=2.10.0" },
-    { name = "tusk-drift-schemas", specifier = ">=0.1.24" },
+    { name = "tusk-drift-schemas", specifier = ">=0.1.34" },
     { name = "ty", marker = "extra == 'dev'", specifier = "==0.0.12" },
     { name = "typing-extensions", specifier = ">=4.4.0" },
     { name = "uvicorn", marker = "extra == 'dev'", specifier = ">=0.34.2" },
     { name = "uvicorn", marker = "extra == 'fastapi'", specifier = ">=0.34.2" },
 ]
+provides-extras = ["flask", "fastapi", "django", "coverage", "rust", "dev"]
 
 [[package]]
 name = "tusk-drift-schemas"
-version = "0.1.30"
+version = "0.1.34"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "betterproto", extra = ["compiler"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b8/13/0490df57cef00ddb6e123908ec43d506d791542a26bc39492faea137301a/tusk_drift_schemas-0.1.30.tar.gz", hash = "sha256:ba992f243bbf68eae27ecfac003d33861f9e16abc7cc007fd511cc8ca342450f", size = 14741 }
+sdist = { url = "https://files.pythonhosted.org/packages/6b/cb/f83b416768ca099f6438b98970abd02fafce9f5135f0c4450cb8b8fd815c/tusk_drift_schemas-0.1.34.tar.gz", hash = "sha256:8d60c69d21e03f04facb19ad71aa91060941131a2bef9b79cdc55cdac651e89a", size = 17170 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/23/f0/33cb9a814e8ad7a6c32e48041428bc41d0829c657c0879e4ed49e7b5144b/tusk_drift_schemas-0.1.30-py3-none-any.whl", hash = "sha256:0f1193548e559122d355d19b432792001059f3fcb3f254f8aba6afe0cdea3e23", size = 14565 },
+    { url = "https://files.pythonhosted.org/packages/ef/d4/8e88b76ba1fb60f5dc69ac7cb6c132392b35a99a907191fcfc43dfecb999/tusk_drift_schemas-0.1.34-py3-none-any.whl", hash = "sha256:f1af65fe49b911cddf7814cd5f5b94c420155602648e1d0b85b4fdf3e215c93a", size = 16257 },
 ]
 
 [[package]]
