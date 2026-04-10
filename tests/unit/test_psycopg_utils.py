@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
+import importlib
 import uuid
 from decimal import Decimal
+from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
@@ -124,7 +126,8 @@ class TestDeserializeDbValue:
 
     @pytest.mark.skipif(not HAS_PSYCOPG_RANGE, reason="psycopg not installed")
     def test_range_dict_with_psycopg_returns_range(self):
-        from psycopg.types.range import Range
+        range_module = importlib.import_module("psycopg.types.range")
+        Range = range_module.Range
 
         range_val = {"__range__": {"lower": 1, "upper": 5, "bounds": "[)"}}
         result = deserialize_db_value(range_val)
@@ -133,7 +136,8 @@ class TestDeserializeDbValue:
 
     @pytest.mark.skipif(not HAS_PSYCOPG_RANGE, reason="psycopg not installed")
     def test_range_empty_with_psycopg_returns_empty_range(self):
-        from psycopg.types.range import Range
+        range_module = importlib.import_module("psycopg.types.range")
+        Range = range_module.Range
 
         range_val = {"__range__": {"empty": True}}
         result = deserialize_db_value(range_val)
@@ -258,6 +262,7 @@ class TestRestoreRowIntegerTypes:
             {"name": "count", "type_code": 23},  # INTEGER
         ]
         result = restore_row_integer_types(row, description)
+        assert isinstance(result, list)
         assert result == [1, "hello", 3]
         assert isinstance(result[0], int)
         assert isinstance(result[2], int)
@@ -266,6 +271,7 @@ class TestRestoreRowIntegerTypes:
         row = [1.5]
         description = [{"name": "val", "type_code": 23}]
         result = restore_row_integer_types(row, description)
+        assert isinstance(result, list)
         assert result == [1.5]
         assert isinstance(result[0], float)
 
@@ -273,6 +279,7 @@ class TestRestoreRowIntegerTypes:
         row = [1.0]
         description = [{"name": "val", "type_code": 1700}]  # NUMERIC
         result = restore_row_integer_types(row, description)
+        assert isinstance(result, list)
         assert result == [1.0]
         assert isinstance(result[0], float)
 
@@ -280,6 +287,7 @@ class TestRestoreRowIntegerTypes:
         row = [9999999999.0]
         description = [{"name": "val", "type_code": 20}]  # BIGINT
         result = restore_row_integer_types(row, description)
+        assert isinstance(result, list)
         assert result == [9999999999]
         assert isinstance(result[0], int)
 
@@ -311,6 +319,7 @@ class TestRestoreRowIntegerTypes:
         row = [1.0, 2.0, 3.0]
         description = [{"name": "a", "type_code": 23}]  # only one column described
         result = restore_row_integer_types(row, description)
+        assert isinstance(result, list)
         assert result[0] == 1
         # extra values beyond description appended as-is
         assert result[1] == 2.0
@@ -319,7 +328,7 @@ class TestRestoreRowIntegerTypes:
     def test_list_row_description_with_non_dict_items(self):
         row = [1.0]
         description = [None]  # non-dict description item
-        result = restore_row_integer_types(row, description)
+        result = restore_row_integer_types(row, cast(list[dict[str, Any]], description))
         # type_code is None, not in POSTGRES_INTEGER_TYPE_CODES → no conversion
         assert result == [1.0]
 
@@ -333,6 +342,7 @@ class TestRestoreRowIntegerTypes:
             {"name": "count", "type_code": 23},
         ]
         result = restore_row_integer_types(row, description)
+        assert isinstance(result, dict)
         assert result == {"id": 5, "name": "test", "count": 3}
         assert isinstance(result["id"], int)
 
@@ -340,19 +350,22 @@ class TestRestoreRowIntegerTypes:
         row = {"val": 1.5}
         description = [{"name": "val", "type_code": 23}]
         result = restore_row_integer_types(row, description)
+        assert isinstance(result, dict)
         assert result["val"] == 1.5
 
     def test_dict_row_unknown_column_not_converted(self):
         row = {"unknown": 5.0}
         description = [{"name": "id", "type_code": 23}]
         result = restore_row_integer_types(row, description)
+        assert isinstance(result, dict)
         # "unknown" not in type_code_by_name, so type_code is None
         assert result["unknown"] == 5.0
 
     def test_dict_row_description_with_non_dict_items(self):
         row = {"id": 5.0}
         description = [None]  # non-dict item
-        result = restore_row_integer_types(row, description)
+        result = restore_row_integer_types(row, cast(list[dict[str, Any]], description))
+        assert isinstance(result, dict)
         # Non-dict items in description are skipped (no name extracted)
         assert result["id"] == 5.0
 
@@ -428,6 +441,7 @@ class TestRestoreRowDateTypes:
         row = ["2023-01-15", "extra"]
         description = [{"name": "d", "type_code": POSTGRES_DATE_TYPE_CODE}]
         result = restore_row_date_types(row, description)
+        assert isinstance(result, list)
         # index 0 converted, index 1 beyond description → no type_code → passthrough
         assert result[0] == dt.date(2023, 1, 15)
         assert result[1] == "extra"
@@ -435,7 +449,7 @@ class TestRestoreRowDateTypes:
     def test_list_row_non_dict_description_item(self):
         row = ["2023-01-15"]
         description = [None]
-        result = restore_row_date_types(row, description)
+        result = restore_row_date_types(row, cast(list[dict[str, Any]], description))
         assert result == ["2023-01-15"]
 
     # --- dict row ---
@@ -447,6 +461,7 @@ class TestRestoreRowDateTypes:
             {"name": "name", "type_code": 25},
         ]
         result = restore_row_date_types(row, description)
+        assert isinstance(result, dict)
         assert result["created"] == dt.date(2023, 6, 1)
         assert result["name"] == "test"
 
@@ -454,12 +469,14 @@ class TestRestoreRowDateTypes:
         row = {"start_time": "08:00:00"}
         description = [{"name": "start_time", "type_code": 1083}]
         result = restore_row_date_types(row, description)
+        assert isinstance(result, dict)
         assert result["start_time"] == dt.time(8, 0, 0)
 
     def test_dict_row_unknown_column_passthrough(self):
         row = {"unknown": "2023-01-15"}
         description = [{"name": "other", "type_code": POSTGRES_DATE_TYPE_CODE}]
         result = restore_row_date_types(row, description)
+        assert isinstance(result, dict)
         # "unknown" not in type_code_by_name → type_code None → passthrough
         assert result["unknown"] == "2023-01-15"
 
@@ -467,12 +484,14 @@ class TestRestoreRowDateTypes:
         row = {"d": 12345}
         description = [{"name": "d", "type_code": POSTGRES_DATE_TYPE_CODE}]
         result = restore_row_date_types(row, description)
+        assert isinstance(result, dict)
         assert result["d"] == 12345
 
     def test_dict_row_non_dict_description_items_skipped(self):
         row = {"d": "2023-01-15"}
         description = [None]
-        result = restore_row_date_types(row, description)
+        result = restore_row_date_types(row, cast(list[dict[str, Any]], description))
+        assert isinstance(result, dict)
         assert result["d"] == "2023-01-15"
 
     # --- mixed columns ---
@@ -486,6 +505,7 @@ class TestRestoreRowDateTypes:
             {"name": "int_col", "type_code": 23},
         ]
         result = restore_row_date_types(row, description)
+        assert isinstance(result, list)
         assert result[0] == dt.date(2023, 1, 15)
         assert result[1] == dt.time(14, 30, 0)
         assert result[2] == "plain text"
