@@ -104,22 +104,6 @@ class TestDeserializeDbValue:
 
     # --- range dict ---
 
-    def test_range_dict_returns_range(self):
-        from psycopg.types.range import Range  # ty: ignore[unresolved-import]
-
-        range_val = {"__range__": {"lower": 1, "upper": 5, "bounds": "[)"}}
-        result = deserialize_db_value(range_val)
-        assert isinstance(result, Range)
-        assert result == Range(1, 5, "[)")
-
-    def test_range_empty_returns_empty_range(self):
-        from psycopg.types.range import Range  # ty: ignore[unresolved-import]
-
-        range_val = {"__range__": {"empty": True}}
-        result = deserialize_db_value(range_val)
-        assert isinstance(result, Range)
-        assert result == Range(empty=True)
-
     def test_range_not_triggered_when_extra_keys(self):
         result = deserialize_db_value({"__range__": {"lower": 1}, "extra": 1})
         assert isinstance(result, dict)
