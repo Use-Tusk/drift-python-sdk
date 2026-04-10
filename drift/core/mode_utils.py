@@ -187,11 +187,10 @@ def should_record_inbound_http_request(
 
     if not is_pre_app_start:
         from .drift_sdk import TuskDrift
-        from .sampling import should_sample
 
         sdk = TuskDrift.get_instance()
-        sampling_rate = sdk.get_sampling_rate()
-        if not should_sample(sampling_rate, is_app_ready=True):
+        decision = sdk.should_record_root_request(is_pre_app_start=is_pre_app_start)
+        if not decision.should_record:
             return False, "not_sampled"
 
     return True, None

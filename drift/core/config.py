@@ -67,10 +67,20 @@ class ComparisonConfig:
 
 
 @dataclass
+class SamplingConfig:
+    """Configuration for fixed vs adaptive sampling."""
+
+    mode: str | None = None
+    base_rate: float | None = None
+    min_rate: float | None = None
+
+
+@dataclass
 class RecordingConfig:
     """Configuration for recording behavior."""
 
     sampling_rate: float | None = None
+    sampling: SamplingConfig | None = None
     export_spans: bool | None = None
     enable_env_var_recording: bool | None = None
     enable_analytics: bool | None = None
@@ -144,8 +154,42 @@ def _parse_recording_config(data: dict[str, Any]) -> RecordingConfig:
         )
         sampling_rate = None
 
+    sampling = None
+    raw_sampling = data.get("sampling")
+    if isinstance(raw_sampling, dict):
+        base_rate = raw_sampling.get("base_rate")
+        if base_rate is not None and not isinstance(base_rate, (int, float)):
+            logger.warning(
+                f"Invalid 'sampling.base_rate' in config: expected number, got {type(base_rate).__name__}. "
+                "This value will be ignored."
+            )
+            base_rate = None
+
+        min_rate = raw_sampling.get("min_rate")
+        if min_rate is not None and not isinstance(min_rate, (int, float)):
+            logger.warning(
+                f"Invalid 'sampling.min_rate' in config: expected number, got {type(min_rate).__name__}. "
+                "This value will be ignored."
+            )
+            min_rate = None
+
+        mode = raw_sampling.get("mode")
+        if mode is not None and not isinstance(mode, str):
+            logger.warning(
+                f"Invalid 'sampling.mode' in config: expected string, got {type(mode).__name__}. "
+                "This value will be ignored."
+            )
+            mode = None
+
+        sampling = SamplingConfig(
+            mode=mode,
+            base_rate=float(base_rate) if base_rate is not None else None,
+            min_rate=float(min_rate) if min_rate is not None else None,
+        )
+
     return RecordingConfig(
         sampling_rate=sampling_rate,
+        sampling=sampling,
         export_spans=data.get("export_spans"),
         enable_env_var_recording=data.get("enable_env_var_recording"),
         enable_analytics=data.get("enable_analytics"),

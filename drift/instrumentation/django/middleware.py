@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from django.http import HttpRequest, HttpResponse
 from ...core.mode_utils import handle_record_mode, should_record_inbound_http_request
+from ...core.no_recording import suppress_recording
 from ...core.tracing import TdSpanAttributes
 from ...core.tracing.span_utils import CreateSpanOptions, SpanInfo, SpanUtils
 from ...core.types import (
@@ -190,7 +191,8 @@ class DriftMiddleware:
         )
         if not should_record:
             logger.debug(f"[Django] Skipping request ({skip_reason}), path={path}")
-            return self.get_response(request)
+            with suppress_recording():
+                return self.get_response(request)
 
         start_time_ns = time.time_ns()
         span_name = f"{method} {path}"

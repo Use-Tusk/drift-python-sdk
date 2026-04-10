@@ -311,10 +311,8 @@ class TestShouldRecordInboundHttpRequest:
         """Should return (True, None) when not dropped and sampled."""
         mock_drift = mocker.patch("drift.core.drift_sdk.TuskDrift")
         mock_sdk = mocker.MagicMock()
-        mock_sdk.get_sampling_rate.return_value = 1.0
+        mock_sdk.should_record_root_request.return_value.should_record = True
         mock_drift.get_instance.return_value = mock_sdk
-
-        mocker.patch("drift.core.sampling.should_sample", return_value=True)
 
         result, reason = should_record_inbound_http_request(
             method="GET",
@@ -361,10 +359,8 @@ class TestShouldRecordInboundHttpRequest:
         """Should return (False, 'not_sampled') when sampling decides to skip."""
         mock_drift = mocker.patch("drift.core.drift_sdk.TuskDrift")
         mock_sdk = mocker.MagicMock()
-        mock_sdk.get_sampling_rate.return_value = 0.0
+        mock_sdk.should_record_root_request.return_value.should_record = False
         mock_drift.get_instance.return_value = mock_sdk
-
-        mocker.patch("drift.core.sampling.should_sample", return_value=False)
 
         result, reason = should_record_inbound_http_request(
             method="GET",
@@ -382,7 +378,9 @@ class TestShouldRecordInboundHttpRequest:
         mock_transform = mocker.MagicMock()
         mock_transform.should_drop_inbound_request.return_value = True
 
-        mock_sample = mocker.patch("drift.core.sampling.should_sample")
+        mock_drift = mocker.patch("drift.core.drift_sdk.TuskDrift")
+        mock_sdk = mocker.MagicMock()
+        mock_drift.get_instance.return_value = mock_sdk
 
         result, reason = should_record_inbound_http_request(
             method="GET",
@@ -392,7 +390,6 @@ class TestShouldRecordInboundHttpRequest:
             is_pre_app_start=False,
         )
 
-        # should_sample should never be called if dropped
-        mock_sample.assert_not_called()
+        mock_sdk.should_record_root_request.assert_not_called()
         assert result is False
         assert reason == "dropped"

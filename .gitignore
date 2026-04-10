@@ -220,6 +220,9 @@ __marimo__/
 **/.tusk/traces/
 **/.tusk/logs/
 
+# Bug tracking
+**/BUG_TRACKING.md
+
 # macOS
 .DS_Store
 

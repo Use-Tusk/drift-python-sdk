@@ -214,6 +214,38 @@ traces:
             finally:
                 os.chdir(original_cwd)
 
+    def test_loads_nested_sampling_config(self):
+        """Should load recording.sampling config alongside legacy fields."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_root = Path(tmpdir)
+            (project_root / "pyproject.toml").touch()
+
+            tusk_dir = project_root / ".tusk"
+            tusk_dir.mkdir()
+            (tusk_dir / "config.yaml").write_text(
+                """
+recording:
+  sampling:
+    mode: adaptive
+    base_rate: 0.25
+    min_rate: 0.05
+"""
+            )
+
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(project_root)
+                config = load_tusk_config()
+
+                assert config is not None
+                assert config.recording is not None
+                assert config.recording.sampling is not None
+                assert config.recording.sampling.mode == "adaptive"
+                assert config.recording.sampling.base_rate == 0.25
+                assert config.recording.sampling.min_rate == 0.05
+            finally:
+                os.chdir(original_cwd)
+
     def test_handles_invalid_yaml(self):
         """Should return None when YAML is invalid."""
         with tempfile.TemporaryDirectory() as tmpdir:

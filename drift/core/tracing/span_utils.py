@@ -19,6 +19,7 @@ from opentelemetry import trace
 from opentelemetry.trace import SpanKind as OTelSpanKind
 from opentelemetry.trace import Status, StatusCode
 
+from ..no_recording import is_recording_suppressed
 from ..types import TuskDriftMode
 from .td_attributes import TdSpanAttributes
 
@@ -135,6 +136,10 @@ class SpanUtils:
             Returns None if span creation fails.
         """
         try:
+            if is_recording_suppressed():
+                logger.debug(f"[SpanUtils] Skipping span creation for '{options.name}' - recording suppressed")
+                return None
+
             # Import here to avoid circular dependency
             from ..drift_sdk import TuskDrift
 

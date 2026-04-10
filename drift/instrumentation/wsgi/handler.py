@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 
 
 from ...core.mode_utils import handle_record_mode, should_record_inbound_http_request
+from ...core.no_recording import suppress_recording
 from ...core.tracing import TdSpanAttributes
 from ...core.tracing.span_utils import CreateSpanOptions, SpanUtils
 from ...core.types import (
@@ -225,7 +226,8 @@ def _create_and_handle_request(
         )
         if not should_record:
             logger.debug(f"[WSGI] Skipping request ({skip_reason}), path={path}")
-            return original_wsgi_app(app, environ, start_response)
+            with suppress_recording():
+                return original_wsgi_app(app, environ, start_response)
 
     # Capture request body
     request_body = capture_request_body(environ)
