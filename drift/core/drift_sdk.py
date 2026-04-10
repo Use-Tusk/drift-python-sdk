@@ -299,8 +299,6 @@ class TuskDrift:
         instance._td_span_processor = TdSpanProcessor(
             exporter=instance.span_exporter,
             mode=instance.mode,
-            sampling_rate=instance._sampling_rate,
-            app_ready=instance.app_ready,
             environment=env,
         )
         instance._td_span_processor.start()
@@ -847,10 +845,6 @@ class TuskDrift:
             return
 
         self.app_ready = True
-
-        # Update span processor with app_ready flag
-        if self._td_span_processor:
-            self._td_span_processor.update_app_ready(True)
 
         if self.mode == TuskDriftMode.REPLAY:
             logger.debug("Replay mode active - ready to serve mocked responses")

@@ -23,8 +23,7 @@ class TestTdSpanProcessorInitialization:
 
         assert processor._exporter is mock_exporter
         assert processor._mode == TuskDriftMode.RECORD
-        assert processor._sampling_rate == 1.0
-        assert processor._app_ready is False
+        assert processor._environment is None
         assert processor._started is False
 
     def test_initializes_with_optional_params(self, mocker):
@@ -34,14 +33,10 @@ class TestTdSpanProcessorInitialization:
         processor = TdSpanProcessor(
             exporter=mock_exporter,
             mode=TuskDriftMode.REPLAY,
-            sampling_rate=0.5,
-            app_ready=True,
             environment="production",
         )
 
         assert processor._mode == TuskDriftMode.REPLAY
-        assert processor._sampling_rate == 0.5
-        assert processor._app_ready is True
         assert processor._environment == "production"
 
 
@@ -392,35 +387,3 @@ class TestTdSpanProcessorForceFlush:
         result = processor.force_flush()
 
         assert result is False
-
-
-class TestTdSpanProcessorUpdateMethods:
-    """Tests for TdSpanProcessor update methods."""
-
-    def test_update_app_ready(self, mocker):
-        """Should update app_ready flag."""
-        mock_exporter = mocker.MagicMock()
-        processor = TdSpanProcessor(
-            exporter=mock_exporter,
-            mode=TuskDriftMode.RECORD,
-        )
-
-        assert processor._app_ready is False
-
-        processor.update_app_ready(True)
-
-        assert processor._app_ready is True
-
-    def test_update_sampling_rate(self, mocker):
-        """Should update sampling rate."""
-        mock_exporter = mocker.MagicMock()
-        processor = TdSpanProcessor(
-            exporter=mock_exporter,
-            mode=TuskDriftMode.RECORD,
-        )
-
-        assert processor._sampling_rate == 1.0
-
-        processor.update_sampling_rate(0.5)
-
-        assert processor._sampling_rate == 0.5
