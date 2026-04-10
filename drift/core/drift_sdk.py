@@ -184,11 +184,6 @@ class TuskDrift:
             "log_level": log_level,
         }
 
-        sampling_config = instance._determine_sampling_config(sampling_rate)
-        instance._sampling_rate = sampling_config.base_rate
-        instance._sampling_mode = sampling_config.mode
-        instance._min_sampling_rate = sampling_config.min_rate
-
         effective_api_key = api_key or os.environ.get("TUSK_API_KEY")
 
         if not env:
@@ -201,6 +196,11 @@ class TuskDrift:
         if cls._initialized:
             logger.debug("Already initialized, skipping...")
             return instance
+
+        sampling_config = instance._determine_sampling_config(sampling_rate)
+        instance._sampling_rate = sampling_config.base_rate
+        instance._sampling_mode = sampling_config.mode
+        instance._min_sampling_rate = sampling_config.min_rate
 
         # Start coverage collection after the _initialized guard so repeated
         # initialize() calls don't stop/restart coverage and lose accumulated data.

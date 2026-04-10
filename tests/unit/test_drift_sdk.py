@@ -6,6 +6,7 @@ import os
 
 import pytest
 
+from drift.core.adaptive_sampling import AdaptiveSamplingController, ResolvedSamplingConfig
 from drift.core.config import RecordingConfig, SamplingConfig, TuskFileConfig
 from drift.core.drift_sdk import TuskDrift
 from drift.core.types import TuskDriftMode
@@ -336,6 +337,47 @@ class TestTuskDriftInitialize:
         assert instance1 is instance2
         # TracerProvider should only be created once
         assert mock_provider.call_count == 1
+
+    def test_second_initialize_does_not_mutate_live_adaptive_sampling_state(self, reset_singleton, mocker):
+        """Should keep sampling fields aligned with the live controller on repeated initialize calls."""
+        mocker.patch("drift.core.drift_sdk.install_hooks")
+        mocker.patch("drift.core.drift_sdk.atexit")
+        mocker.patch("drift.core.drift_sdk.TracerProvider")
+        mocker.patch("drift.core.drift_sdk.trace")
+        mocker.patch.object(TuskDrift, "_start_adaptive_sampling_control_loop")
+        os.environ["TUSK_DRIFT_MODE"] = "RECORD"
+
+        instance = TuskDrift.get_instance()
+        instance.file_config = TuskFileConfig(
+            recording=RecordingConfig(
+                sampling=SamplingConfig(mode="adaptive", base_rate=0.5, min_rate=0.1),
+            )
+        )
+
+        initialized_instance = TuskDrift.initialize(env="test")
+        initialized_instance._adaptive_sampling_controller = AdaptiveSamplingController(
+            ResolvedSamplingConfig(mode="adaptive", base_rate=0.5, min_rate=0.1),
+            random_fn=lambda: 0.0,
+            now_fn=lambda: 0.0,
+        )
+
+        initialized_instance.file_config = TuskFileConfig(
+            recording=RecordingConfig(
+                sampling=SamplingConfig(mode="fixed", base_rate=0.2, min_rate=None),
+            )
+        )
+
+        second_instance = TuskDrift.initialize(env="test", sampling_rate=0.9)
+
+        assert second_instance is initialized_instance
+        assert second_instance._sampling_rate == 0.5
+        assert second_instance._sampling_mode == "adaptive"
+        assert second_instance._min_sampling_rate == 0.1
+
+        decision = second_instance.should_record_root_request(is_pre_app_start=False)
+        assert decision.mode == "adaptive"
+        assert decision.base_rate == 0.5
+        assert decision.min_rate == 0.1
 
 
 class TestTuskDriftMarkAppAsReady:
