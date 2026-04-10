@@ -180,7 +180,8 @@ def should_record_inbound_http_request(
     Returns:
         Tuple of (should_record, skip_reason):
         - should_record: True if request should be recorded
-        - skip_reason: If False, explains why ("dropped" or "not_sampled"), None otherwise
+        - skip_reason: If False, explains why ("dropped", "not_sampled",
+          "load_shed", or "critical_pause"), None otherwise
     """
     if transform_engine and transform_engine.should_drop_inbound_request(method, target, headers):
         return False, "dropped"
@@ -191,6 +192,6 @@ def should_record_inbound_http_request(
         sdk = TuskDrift.get_instance()
         decision = sdk.should_record_root_request(is_pre_app_start=is_pre_app_start)
         if not decision.should_record:
-            return False, "not_sampled"
+            return False, decision.reason
 
     return True, None

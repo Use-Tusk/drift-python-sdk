@@ -250,7 +250,8 @@ def _create_and_handle_request(
         )
         if not should_record:
             logger.debug(f"[WSGI] Skipping request ({skip_reason}), path={path}")
-            response = original_wsgi_app(app, environ, start_response)
+            with suppress_recording():
+                response = original_wsgi_app(app, environ, start_response)
             return SuppressedResponseIterable(response)
 
     # Capture request body

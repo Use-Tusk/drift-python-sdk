@@ -81,7 +81,7 @@ class AdaptiveSamplingController:
         self._admission_multiplier = 1.0
         self._state: AdaptiveSamplingState = "fixed" if config.mode == "fixed" else "healthy"
         self._paused_until_s = 0.0
-        self._last_updated_at_s = 0.0
+        self._last_updated_at_s: float | None = None
         self._last_decrease_at_s = 0.0
 
         self._prev_dropped_span_count = 0
@@ -99,7 +99,7 @@ class AdaptiveSamplingController:
                 return
 
             now_s = self._now_fn()
-            elapsed_s = 2.0 if self._last_updated_at_s == 0 else max(0.001, now_s - self._last_updated_at_s)
+            elapsed_s = 2.0 if self._last_updated_at_s is None else max(0.001, now_s - self._last_updated_at_s)
             self._last_updated_at_s = now_s
 
             decay = math.exp(-(elapsed_s * 1000.0) / 30000.0)

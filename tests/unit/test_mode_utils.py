@@ -360,6 +360,7 @@ class TestShouldRecordInboundHttpRequest:
         mock_drift = mocker.patch("drift.core.drift_sdk.TuskDrift")
         mock_sdk = mocker.MagicMock()
         mock_sdk.should_record_root_request.return_value.should_record = False
+        mock_sdk.should_record_root_request.return_value.reason = "not_sampled"
         mock_drift.get_instance.return_value = mock_sdk
 
         result, reason = should_record_inbound_http_request(
@@ -372,6 +373,25 @@ class TestShouldRecordInboundHttpRequest:
 
         assert result is False
         assert reason == "not_sampled"
+
+    def test_returns_controller_reason_when_adaptive_sampling_skips(self, mocker):
+        """Should preserve adaptive controller reasons for debug logging."""
+        mock_drift = mocker.patch("drift.core.drift_sdk.TuskDrift")
+        mock_sdk = mocker.MagicMock()
+        mock_sdk.should_record_root_request.return_value.should_record = False
+        mock_sdk.should_record_root_request.return_value.reason = "critical_pause"
+        mock_drift.get_instance.return_value = mock_sdk
+
+        result, reason = should_record_inbound_http_request(
+            method="GET",
+            target="/api/users",
+            headers={},
+            transform_engine=None,
+            is_pre_app_start=False,
+        )
+
+        assert result is False
+        assert reason == "critical_pause"
 
     def test_drop_check_happens_before_sampling(self, mocker):
         """Should check drop rules before sampling."""

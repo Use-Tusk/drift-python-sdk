@@ -1,3 +1,4 @@
+import math
 import threading
 
 from drift.core.adaptive_sampling import (
@@ -42,6 +43,22 @@ def test_controller_load_sheds_and_pauses_on_drops():
     assert paused_decision.state == "critical_pause"
     assert paused_decision.should_record is False
     assert paused_decision.reason == "critical_pause"
+
+
+def test_elapsed_time_uses_zero_timestamp_as_real_value():
+    now = {"value": 0.0}
+    controller = AdaptiveSamplingController(
+        ResolvedSamplingConfig(mode="adaptive", base_rate=0.5, min_rate=0.1),
+        random_fn=lambda: 0.0,
+        now_fn=lambda: now["value"],
+    )
+
+    controller.update(AdaptiveSamplingHealthSnapshot(export_failure_count=1))
+    now["value"] = 0.5
+    controller.update(AdaptiveSamplingHealthSnapshot(export_failure_count=1))
+
+    expected_decay = math.exp(-(0.5 * 1000.0) / 30000.0)
+    assert math.isclose(controller._recent_failure_signal, expected_decay, rel_tol=1e-6)
 
 
 def test_get_decision_waits_for_controller_lock():

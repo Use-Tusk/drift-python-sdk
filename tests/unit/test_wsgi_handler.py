@@ -44,6 +44,9 @@ def test_skipped_wsgi_request_keeps_suppression_during_streaming_iteration_and_c
     )
 
     def original_wsgi_app(_app: Any, _environ: dict[str, Any], _start_response: Any) -> Iterable[bytes]:
+        from drift.core.no_recording import is_recording_suppressed
+
+        observed.append(("call", is_recording_suppressed()))
         return response
 
     def app(_environ: dict[str, Any], _start_response: Any) -> Iterable[bytes]:
@@ -72,6 +75,7 @@ def test_skipped_wsgi_request_keeps_suppression_during_streaming_iteration_and_c
     close_method()
 
     assert observed == [
+        ("call", True),
         ("iter", True),
         ("next", True),
         ("next", True),
