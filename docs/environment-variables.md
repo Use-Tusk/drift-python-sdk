@@ -110,7 +110,7 @@ Your Tusk Drift API key, required when using Tusk Cloud for storing and managing
 
   This will securely store your auth key for future replay sessions.
 
-## TUSK_SAMPLING_RATE
+## TUSK_RECORDING_SAMPLING_RATE
 
 Controls the base recording rate used during trace collection.
 
@@ -123,13 +123,15 @@ Controls the base recording rate used during trace collection.
 
 ```bash
 # Record all requests (100%)
-TUSK_SAMPLING_RATE=1.0 python app.py
+TUSK_RECORDING_SAMPLING_RATE=1.0 python app.py
 
 # Record 10% of requests
-TUSK_SAMPLING_RATE=0.1 python app.py
+TUSK_RECORDING_SAMPLING_RATE=0.1 python app.py
 ```
 
 If `recording.sampling.mode: adaptive` is enabled in `.tusk/config.yaml`, this environment variable still only changes the base rate; adaptive load shedding remains active.
+
+`TUSK_RECORDING_SAMPLING_RATE` is the canonical variable, but `TUSK_SAMPLING_RATE` is still accepted as a backward-compatible alias.
 
 For more details on sampling rate configuration methods and precedence, see the [Initialization Guide](./initialization.md#configure-sampling-rate).
 

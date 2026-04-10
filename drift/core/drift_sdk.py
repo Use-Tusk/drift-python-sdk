@@ -358,16 +358,20 @@ class TuskDrift:
                 base_rate = validated
 
         if base_rate is None:
-            env_rate = os.environ.get("TUSK_SAMPLING_RATE")
-            if env_rate is not None:
+            for env_key in ("TUSK_RECORDING_SAMPLING_RATE", "TUSK_SAMPLING_RATE"):
+                env_rate = os.environ.get(env_key)
+                if env_rate is None:
+                    continue
+
                 try:
                     parsed = float(env_rate)
-                    validated = validate_sampling_rate(parsed, "TUSK_SAMPLING_RATE env var")
+                    validated = validate_sampling_rate(parsed, f"{env_key} env var")
                     if validated is not None:
-                        logger.debug(f"Using sampling rate from env var: {validated}")
+                        logger.debug(f"Using sampling rate from {env_key} env var: {validated}")
                         base_rate = validated
+                        break
                 except ValueError:
-                    logger.warning(f"Invalid TUSK_SAMPLING_RATE env var: {env_rate}")
+                    logger.warning(f"Invalid {env_key} env var: {env_rate}")
 
         if base_rate is None and config_sampling and config_sampling.base_rate is not None:
             validated = validate_sampling_rate(config_sampling.base_rate, "config file recording.sampling.base_rate")

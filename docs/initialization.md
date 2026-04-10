@@ -74,7 +74,7 @@ Create an initialization file or add the SDK initialization to your application 
       <td><code>sampling_rate</code></td>
       <td><code>float</code></td>
       <td><code>None</code></td>
-      <td>Override the base sampling rate (0.0 - 1.0) for recording. Takes precedence over <code>TUSK_SAMPLING_RATE</code> and config file base-rate settings. Does not change <code>recording.sampling.mode</code>.</td>
+      <td>Override the base sampling rate (0.0 - 1.0) for recording. Takes precedence over <code>TUSK_RECORDING_SAMPLING_RATE</code> and config file base-rate settings. Does not change <code>recording.sampling.mode</code>.</td>
     </tr>
   </tbody>
 </table>
@@ -183,7 +183,8 @@ Sampling configuration is resolved in two layers:
 
 1. **Base rate precedence** (highest to lowest):
    - `TuskDrift.initialize(sampling_rate=...)`
-   - `TUSK_SAMPLING_RATE`
+   - `TUSK_RECORDING_SAMPLING_RATE`
+   - legacy alias `TUSK_SAMPLING_RATE`
    - `.tusk/config.yaml` `recording.sampling.base_rate`
    - `.tusk/config.yaml` legacy `recording.sampling_rate`
    - default base rate `1.0`
@@ -207,15 +208,17 @@ sdk = TuskDrift.initialize(
 
 ### Method 2: Environment Variable
 
-Set the `TUSK_SAMPLING_RATE` environment variable to override the base sampling rate:
+Set the `TUSK_RECORDING_SAMPLING_RATE` environment variable to override the base sampling rate:
 
 ```bash
 # Development - record everything
-TUSK_SAMPLING_RATE=1.0 python app.py
+TUSK_RECORDING_SAMPLING_RATE=1.0 python app.py
 
 # Production - sample 10% of requests
-TUSK_SAMPLING_RATE=0.1 python app.py
+TUSK_RECORDING_SAMPLING_RATE=0.1 python app.py
 ```
+
+`TUSK_SAMPLING_RATE` is still supported as a backward-compatible alias, but new setups should prefer `TUSK_RECORDING_SAMPLING_RATE`.
 
 ### Method 3: Configuration File
 
@@ -276,7 +279,7 @@ recording:
       <td><code>sampling.base_rate</code></td>
       <td><code>float</code></td>
       <td><code>1.0</code></td>
-      <td>The base sampling rate (0.0 - 1.0). This is the preferred config key and can be overridden by <code>TUSK_SAMPLING_RATE</code> or the <code>sampling_rate</code> init parameter.</td>
+      <td>The base sampling rate (0.0 - 1.0). This is the preferred config key and can be overridden by <code>TUSK_RECORDING_SAMPLING_RATE</code> or the <code>sampling_rate</code> init parameter.</td>
     </tr>
     <tr>
       <td><code>sampling.min_rate</code></td>

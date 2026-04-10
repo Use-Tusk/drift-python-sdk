@@ -20,7 +20,13 @@ class TestTuskDriftSingleton:
         TuskDrift._instance = None
         TuskDrift._initialized = False
         # Clear environment variables
-        env_vars = ["TUSK_DRIFT_MODE", "TUSK_API_KEY", "TUSK_SAMPLING_RATE", "ENV"]
+        env_vars = [
+            "TUSK_DRIFT_MODE",
+            "TUSK_API_KEY",
+            "TUSK_RECORDING_SAMPLING_RATE",
+            "TUSK_SAMPLING_RATE",
+            "ENV",
+        ]
         original_env = {k: os.environ.get(k) for k in env_vars}
         for var in env_vars:
             if var in os.environ:
@@ -121,9 +127,10 @@ class TestTuskDriftSamplingRate:
         """Reset singleton state before each test."""
         TuskDrift._instance = None
         TuskDrift._initialized = False
-        # Clear sampling rate env var
-        if "TUSK_SAMPLING_RATE" in os.environ:
-            del os.environ["TUSK_SAMPLING_RATE"]
+        # Clear sampling rate env vars
+        for env_var in ("TUSK_RECORDING_SAMPLING_RATE", "TUSK_SAMPLING_RATE"):
+            if env_var in os.environ:
+                del os.environ[env_var]
         yield
         TuskDrift._instance = None
         TuskDrift._initialized = False
@@ -137,10 +144,31 @@ class TestTuskDriftSamplingRate:
 
         assert result == 0.5
 
-    def test_uses_env_var_sampling_rate(self, reset_singleton):
-        """Should use sampling rate from env var if init param not provided."""
+    def test_uses_recording_env_var_sampling_rate(self, reset_singleton):
+        """Should use the canonical recording env var if init param not provided."""
         os.environ["TUSK_DRIFT_MODE"] = "DISABLED"
-        os.environ["TUSK_SAMPLING_RATE"] = "0.25"
+        os.environ["TUSK_RECORDING_SAMPLING_RATE"] = "0.25"
+        instance = TuskDrift.get_instance()
+
+        result = instance._determine_sampling_rate(None)
+
+        assert result == 0.25
+
+    def test_uses_legacy_sampling_env_var_as_alias(self, reset_singleton):
+        """Should fall back to the legacy env var for backward compatibility."""
+        os.environ["TUSK_DRIFT_MODE"] = "DISABLED"
+        os.environ["TUSK_SAMPLING_RATE"] = "0.2"
+        instance = TuskDrift.get_instance()
+
+        result = instance._determine_sampling_rate(None)
+
+        assert result == 0.2
+
+    def test_recording_env_var_takes_precedence_over_legacy_alias(self, reset_singleton):
+        """Should prefer the canonical env var when both env vars are set."""
+        os.environ["TUSK_DRIFT_MODE"] = "DISABLED"
+        os.environ["TUSK_RECORDING_SAMPLING_RATE"] = "0.25"
+        os.environ["TUSK_SAMPLING_RATE"] = "0.1"
         instance = TuskDrift.get_instance()
 
         result = instance._determine_sampling_rate(None)
@@ -150,7 +178,7 @@ class TestTuskDriftSamplingRate:
     def test_init_param_takes_precedence_over_env_var(self, reset_singleton):
         """Should prefer init param over env var."""
         os.environ["TUSK_DRIFT_MODE"] = "DISABLED"
-        os.environ["TUSK_SAMPLING_RATE"] = "0.25"
+        os.environ["TUSK_RECORDING_SAMPLING_RATE"] = "0.25"
         instance = TuskDrift.get_instance()
 
         result = instance._determine_sampling_rate(0.75)
@@ -160,7 +188,7 @@ class TestTuskDriftSamplingRate:
     def test_invalid_init_param_falls_back_to_env_var(self, reset_singleton):
         """Should use env var when init param is present but invalid."""
         os.environ["TUSK_DRIFT_MODE"] = "DISABLED"
-        os.environ["TUSK_SAMPLING_RATE"] = "0.25"
+        os.environ["TUSK_RECORDING_SAMPLING_RATE"] = "0.25"
         instance = TuskDrift.get_instance()
 
         result = instance._determine_sampling_rate(2.0)
@@ -190,10 +218,10 @@ class TestTuskDriftSamplingRate:
 
         assert result == 1.0
 
-    def test_rejects_invalid_env_var_sampling_rate(self, reset_singleton):
-        """Should reject invalid env var and use default."""
+    def test_rejects_invalid_recording_env_var_sampling_rate(self, reset_singleton):
+        """Should reject an invalid canonical env var and use default."""
         os.environ["TUSK_DRIFT_MODE"] = "DISABLED"
-        os.environ["TUSK_SAMPLING_RATE"] = "invalid"
+        os.environ["TUSK_RECORDING_SAMPLING_RATE"] = "invalid"
         instance = TuskDrift.get_instance()
 
         result = instance._determine_sampling_rate(None)
@@ -203,13 +231,24 @@ class TestTuskDriftSamplingRate:
     def test_invalid_env_var_falls_back_to_config_file(self, reset_singleton):
         """Should use config file when env var is present but invalid."""
         os.environ["TUSK_DRIFT_MODE"] = "DISABLED"
-        os.environ["TUSK_SAMPLING_RATE"] = "invalid"
+        os.environ["TUSK_RECORDING_SAMPLING_RATE"] = "invalid"
         instance = TuskDrift.get_instance()
         instance.file_config = TuskFileConfig(
             recording=RecordingConfig(
                 sampling=SamplingConfig(base_rate=0.4),
             )
         )
+
+        result = instance._determine_sampling_rate(None)
+
+        assert result == 0.4
+
+    def test_invalid_recording_env_var_falls_back_to_legacy_alias(self, reset_singleton):
+        """Should use the legacy alias when the canonical env var is invalid."""
+        os.environ["TUSK_DRIFT_MODE"] = "DISABLED"
+        os.environ["TUSK_RECORDING_SAMPLING_RATE"] = "invalid"
+        os.environ["TUSK_SAMPLING_RATE"] = "0.4"
+        instance = TuskDrift.get_instance()
 
         result = instance._determine_sampling_rate(None)
 
@@ -225,7 +264,13 @@ class TestTuskDriftInitialize:
         TuskDrift._instance = None
         TuskDrift._initialized = False
         # Clear environment variables
-        env_vars = ["TUSK_DRIFT_MODE", "TUSK_API_KEY", "TUSK_SAMPLING_RATE", "ENV"]
+        env_vars = [
+            "TUSK_DRIFT_MODE",
+            "TUSK_API_KEY",
+            "TUSK_RECORDING_SAMPLING_RATE",
+            "TUSK_SAMPLING_RATE",
+            "ENV",
+        ]
         for var in env_vars:
             if var in os.environ:
                 del os.environ[var]
