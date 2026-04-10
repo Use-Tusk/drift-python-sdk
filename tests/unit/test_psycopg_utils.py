@@ -7,7 +7,12 @@ import datetime as dt
 import uuid
 from decimal import Decimal
 
+from unittest.mock import patch
+
+import pytest
+
 from drift.instrumentation.utils.psycopg_utils import (
+    HAS_PSYCOPG_RANGE,
     POSTGRES_DATE_TYPE_CODE,
     deserialize_db_value,
     restore_row_date_types,
@@ -104,16 +109,37 @@ class TestDeserializeDbValue:
 
     # --- range dict (no psycopg) ---
 
+    @patch("drift.instrumentation.utils.psycopg_utils.HAS_PSYCOPG_RANGE", False)
     def test_range_dict_without_psycopg_returns_range_data(self):
         range_val = {"__range__": {"lower": 1, "upper": 5, "bounds": "[)"}}
         result = deserialize_db_value(range_val)
-        # Without psycopg, returns the inner range_data dict
         assert result == {"lower": 1, "upper": 5, "bounds": "[)"}
 
+    @patch("drift.instrumentation.utils.psycopg_utils.HAS_PSYCOPG_RANGE", False)
     def test_range_empty_without_psycopg(self):
         range_val = {"__range__": {"empty": True}}
         result = deserialize_db_value(range_val)
         assert result == {"empty": True}
+
+    # --- range dict (with psycopg) ---
+
+    @pytest.mark.skipif(not HAS_PSYCOPG_RANGE, reason="psycopg not installed")
+    def test_range_dict_with_psycopg_returns_range(self):
+        from psycopg.types.range import Range
+
+        range_val = {"__range__": {"lower": 1, "upper": 5, "bounds": "[)"}}
+        result = deserialize_db_value(range_val)
+        assert isinstance(result, Range)
+        assert result == Range(1, 5, "[)")
+
+    @pytest.mark.skipif(not HAS_PSYCOPG_RANGE, reason="psycopg not installed")
+    def test_range_empty_with_psycopg_returns_empty_range(self):
+        from psycopg.types.range import Range
+
+        range_val = {"__range__": {"empty": True}}
+        result = deserialize_db_value(range_val)
+        assert isinstance(result, Range)
+        assert result == Range(empty=True)
 
     def test_range_not_triggered_when_extra_keys(self):
         result = deserialize_db_value({"__range__": {"lower": 1}, "extra": 1})
