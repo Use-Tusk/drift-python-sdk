@@ -6,7 +6,6 @@ import base64
 import datetime as dt
 import uuid
 from decimal import Decimal
-
 from unittest.mock import patch
 
 import pytest
