@@ -2,9 +2,18 @@
 
 Let's walk through recording and replaying your first trace:
 
-## Step 1: Set sampling rate to 1.0
+## Step 1: Set fixed sampling to 1.0
 
-Set the `sampling_rate` in `.tusk/config.yaml` to 1.0 to ensure that all requests are recorded.
+Update `.tusk/config.yaml` so your first recording captures every request:
+
+```yaml
+recording:
+  sampling:
+    mode: fixed
+    base_rate: 1.0
+```
+
+Legacy `recording.sampling_rate: 1.0` still works, but `recording.sampling` is the preferred config shape.
 
 ## Step 2: Start server in record mode
 
