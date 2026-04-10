@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import random
+import threading
 import time
 from dataclasses import dataclass
 from typing import Literal
@@ -75,6 +76,7 @@ class AdaptiveSamplingController:
         self._config = config
         self._random_fn = random_fn
         self._now_fn = now_fn
+        self._lock = threading.RLock()
 
         self._admission_multiplier = 1.0
         self._state: AdaptiveSamplingState = "fixed" if config.mode == "fixed" else "healthy"
@@ -90,135 +92,140 @@ class AdaptiveSamplingController:
         self._recent_failure_signal = 0.0
 
     def update(self, snapshot: AdaptiveSamplingHealthSnapshot) -> None:
-        if self._config.mode != "adaptive":
-            self._state = "fixed"
-            self._admission_multiplier = 1.0
-            return
+        with self._lock:
+            if self._config.mode != "adaptive":
+                self._state = "fixed"
+                self._admission_multiplier = 1.0
+                return
 
-        now_s = self._now_fn()
-        elapsed_s = 2.0 if self._last_updated_at_s == 0 else max(0.001, now_s - self._last_updated_at_s)
-        self._last_updated_at_s = now_s
+            now_s = self._now_fn()
+            elapsed_s = 2.0 if self._last_updated_at_s == 0 else max(0.001, now_s - self._last_updated_at_s)
+            self._last_updated_at_s = now_s
 
-        decay = math.exp(-(elapsed_s * 1000.0) / 30000.0)
-        self._recent_drop_signal *= decay
-        self._recent_failure_signal *= decay
+            decay = math.exp(-(elapsed_s * 1000.0) / 30000.0)
+            self._recent_drop_signal *= decay
+            self._recent_failure_signal *= decay
 
-        dropped_delta = max(0, snapshot.dropped_span_count - self._prev_dropped_span_count)
-        export_failure_delta = max(0, snapshot.export_failure_count - self._prev_export_failure_count)
+            dropped_delta = max(0, snapshot.dropped_span_count - self._prev_dropped_span_count)
+            export_failure_delta = max(0, snapshot.export_failure_count - self._prev_export_failure_count)
 
-        self._prev_dropped_span_count = snapshot.dropped_span_count
-        self._prev_export_failure_count = snapshot.export_failure_count
+            self._prev_dropped_span_count = snapshot.dropped_span_count
+            self._prev_export_failure_count = snapshot.export_failure_count
 
-        self._recent_drop_signal += dropped_delta
-        self._recent_failure_signal += export_failure_delta
+            self._recent_drop_signal += dropped_delta
+            self._recent_failure_signal += export_failure_delta
 
-        if snapshot.queue_fill_ratio is not None:
-            queue_fill_ratio = _clamp01(snapshot.queue_fill_ratio)
-            self._queue_fill_ewma = (
-                queue_fill_ratio
-                if self._queue_fill_ewma is None
-                else (0.25 * queue_fill_ratio) + (0.75 * self._queue_fill_ewma)
+            if snapshot.queue_fill_ratio is not None:
+                queue_fill_ratio = _clamp01(snapshot.queue_fill_ratio)
+                self._queue_fill_ewma = (
+                    queue_fill_ratio
+                    if self._queue_fill_ewma is None
+                    else (0.25 * queue_fill_ratio) + (0.75 * self._queue_fill_ewma)
+                )
+
+            queue_pressure = _normalize_between(self._queue_fill_ewma, 0.20, 0.85)
+            memory_pressure = _normalize_between(snapshot.memory_pressure_ratio, 0.80, 0.92)
+            export_failure_pressure = _clamp01(self._recent_failure_signal / 5.0)
+            pressure = max(queue_pressure, memory_pressure, export_failure_pressure)
+
+            hard_brake = (
+                dropped_delta > 0 or snapshot.export_circuit_open or (snapshot.memory_pressure_ratio or 0.0) >= 0.92
             )
 
-        queue_pressure = _normalize_between(self._queue_fill_ewma, 0.20, 0.85)
-        memory_pressure = _normalize_between(snapshot.memory_pressure_ratio, 0.80, 0.92)
-        export_failure_pressure = _clamp01(self._recent_failure_signal / 5.0)
-        pressure = max(queue_pressure, memory_pressure, export_failure_pressure)
+            previous_state = self._state
+            previous_multiplier = self._admission_multiplier
 
-        hard_brake = (
-            dropped_delta > 0 or snapshot.export_circuit_open or (snapshot.memory_pressure_ratio or 0.0) >= 0.92
-        )
+            if hard_brake:
+                self._paused_until_s = now_s + 15.0
+                self._admission_multiplier = 0.0
+                self._state = "critical_pause"
+                self._last_decrease_at_s = now_s
+                self._log_transition(previous_state, previous_multiplier, pressure, snapshot)
+                return
 
-        previous_state = self._state
-        previous_multiplier = self._admission_multiplier
+            if now_s < self._paused_until_s:
+                self._state = "critical_pause"
+                self._log_transition(previous_state, previous_multiplier, pressure, snapshot)
+                return
 
-        if hard_brake:
-            self._paused_until_s = now_s + 15.0
-            self._admission_multiplier = 0.0
-            self._state = "critical_pause"
-            self._last_decrease_at_s = now_s
+            min_multiplier = self._get_min_multiplier()
+            if pressure >= 0.70:
+                self._admission_multiplier = max(min_multiplier, self._admission_multiplier * 0.4)
+                self._state = "hot"
+                self._last_decrease_at_s = now_s
+            elif pressure >= 0.45:
+                self._admission_multiplier = max(min_multiplier, self._admission_multiplier * 0.7)
+                self._state = "warm"
+                self._last_decrease_at_s = now_s
+            else:
+                if pressure <= 0.20 and (now_s - self._last_decrease_at_s) >= 10.0:
+                    self._admission_multiplier = min(1.0, self._admission_multiplier + 0.05)
+                self._state = "healthy"
+
             self._log_transition(previous_state, previous_multiplier, pressure, snapshot)
-            return
-
-        if now_s < self._paused_until_s:
-            self._state = "critical_pause"
-            self._log_transition(previous_state, previous_multiplier, pressure, snapshot)
-            return
-
-        min_multiplier = self._get_min_multiplier()
-        if pressure >= 0.70:
-            self._admission_multiplier = max(min_multiplier, self._admission_multiplier * 0.4)
-            self._state = "hot"
-            self._last_decrease_at_s = now_s
-        elif pressure >= 0.45:
-            self._admission_multiplier = max(min_multiplier, self._admission_multiplier * 0.7)
-            self._state = "warm"
-            self._last_decrease_at_s = now_s
-        else:
-            if pressure <= 0.20 and (now_s - self._last_decrease_at_s) >= 10.0:
-                self._admission_multiplier = min(1.0, self._admission_multiplier + 0.05)
-            self._state = "healthy"
-
-        self._log_transition(previous_state, previous_multiplier, pressure, snapshot)
 
     def get_decision(self, *, is_pre_app_start: bool) -> RootSamplingDecision:
-        if is_pre_app_start:
-            return RootSamplingDecision(
-                should_record=True,
-                reason="pre_app_start",
-                mode=self._config.mode,
-                state=self._state,
-                base_rate=self._config.base_rate,
-                min_rate=self._config.min_rate,
-                effective_rate=1.0,
-                admission_multiplier=1.0,
+        with self._lock:
+            if is_pre_app_start:
+                return RootSamplingDecision(
+                    should_record=True,
+                    reason="pre_app_start",
+                    mode=self._config.mode,
+                    state=self._state,
+                    base_rate=self._config.base_rate,
+                    min_rate=self._config.min_rate,
+                    effective_rate=1.0,
+                    admission_multiplier=1.0,
+                )
+
+            effective_rate = (
+                self.get_effective_sampling_rate()
+                if self._config.mode == "adaptive"
+                else _clamp01(self._config.base_rate)
             )
 
-        effective_rate = (
-            self.get_effective_sampling_rate() if self._config.mode == "adaptive" else _clamp01(self._config.base_rate)
-        )
+            if effective_rate <= 0.0:
+                return RootSamplingDecision(
+                    should_record=False,
+                    reason="critical_pause" if self._state == "critical_pause" else "not_sampled",
+                    mode=self._config.mode,
+                    state=self._state,
+                    base_rate=self._config.base_rate,
+                    min_rate=self._config.min_rate,
+                    effective_rate=effective_rate,
+                    admission_multiplier=self._admission_multiplier,
+                )
 
-        if effective_rate <= 0.0:
+            should_record = self._random_fn() < effective_rate
             return RootSamplingDecision(
-                should_record=False,
-                reason="critical_pause" if self._state == "critical_pause" else "not_sampled",
+                should_record=should_record,
+                reason=(
+                    "sampled"
+                    if should_record
+                    else "load_shed"
+                    if self._config.mode == "adaptive" and effective_rate < self._config.base_rate
+                    else "not_sampled"
+                ),
                 mode=self._config.mode,
                 state=self._state,
                 base_rate=self._config.base_rate,
                 min_rate=self._config.min_rate,
                 effective_rate=effective_rate,
-                admission_multiplier=self._admission_multiplier,
+                admission_multiplier=self._admission_multiplier if self._config.mode == "adaptive" else 1.0,
             )
 
-        should_record = self._random_fn() < effective_rate
-        return RootSamplingDecision(
-            should_record=should_record,
-            reason=(
-                "sampled"
-                if should_record
-                else "load_shed"
-                if self._config.mode == "adaptive" and effective_rate < self._config.base_rate
-                else "not_sampled"
-            ),
-            mode=self._config.mode,
-            state=self._state,
-            base_rate=self._config.base_rate,
-            min_rate=self._config.min_rate,
-            effective_rate=effective_rate,
-            admission_multiplier=self._admission_multiplier if self._config.mode == "adaptive" else 1.0,
-        )
-
     def get_effective_sampling_rate(self) -> float:
-        if self._config.mode != "adaptive":
-            return _clamp01(self._config.base_rate)
-        if self._state == "critical_pause" and self._now_fn() < self._paused_until_s:
-            return 0.0
-        effective_rate = self._config.base_rate * self._admission_multiplier
-        return _clamp(
-            effective_rate,
-            min(self._config.base_rate, self._config.min_rate),
-            self._config.base_rate,
-        )
+        with self._lock:
+            if self._config.mode != "adaptive":
+                return _clamp01(self._config.base_rate)
+            if self._state == "critical_pause" and self._now_fn() < self._paused_until_s:
+                return 0.0
+            effective_rate = self._config.base_rate * self._admission_multiplier
+            return _clamp(
+                effective_rate,
+                min(self._config.base_rate, self._config.min_rate),
+                self._config.base_rate,
+            )
 
     def _get_min_multiplier(self) -> float:
         if self._config.base_rate <= 0.0 or self._config.min_rate <= 0.0:

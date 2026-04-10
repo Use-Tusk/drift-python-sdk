@@ -1,3 +1,5 @@
+import threading
+
 from drift.core.adaptive_sampling import (
     AdaptiveSamplingController,
     AdaptiveSamplingHealthSnapshot,
@@ -40,3 +42,62 @@ def test_controller_load_sheds_and_pauses_on_drops():
     assert paused_decision.state == "critical_pause"
     assert paused_decision.should_record is False
     assert paused_decision.reason == "critical_pause"
+
+
+def test_get_decision_waits_for_controller_lock():
+    controller = AdaptiveSamplingController(
+        ResolvedSamplingConfig(mode="adaptive", base_rate=0.5, min_rate=0.1),
+        random_fn=lambda: 0.0,
+        now_fn=lambda: 0.0,
+    )
+    started = threading.Event()
+    finished = threading.Event()
+    result = {}
+
+    def worker() -> None:
+        started.set()
+        result["decision"] = controller.get_decision(is_pre_app_start=False)
+        finished.set()
+
+    thread = threading.Thread(target=worker)
+    controller._lock.acquire()
+    try:
+        thread.start()
+        assert started.wait(timeout=1.0)
+        assert not finished.wait(timeout=0.05)
+    finally:
+        controller._lock.release()
+
+    assert finished.wait(timeout=1.0)
+    thread.join(timeout=1.0)
+    assert not thread.is_alive()
+    assert result["decision"].effective_rate == 0.5
+
+
+def test_update_waits_for_controller_lock():
+    controller = AdaptiveSamplingController(
+        ResolvedSamplingConfig(mode="adaptive", base_rate=0.5, min_rate=0.1),
+        random_fn=lambda: 0.0,
+        now_fn=lambda: 0.0,
+    )
+    started = threading.Event()
+    finished = threading.Event()
+
+    def worker() -> None:
+        started.set()
+        controller.update(AdaptiveSamplingHealthSnapshot(queue_fill_ratio=0.9))
+        finished.set()
+
+    thread = threading.Thread(target=worker)
+    controller._lock.acquire()
+    try:
+        thread.start()
+        assert started.wait(timeout=1.0)
+        assert not finished.wait(timeout=0.05)
+    finally:
+        controller._lock.release()
+
+    assert finished.wait(timeout=1.0)
+    thread.join(timeout=1.0)
+    assert not thread.is_alive()
+    assert controller.get_decision(is_pre_app_start=False).state == "hot"

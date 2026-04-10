@@ -352,13 +352,14 @@ class TuskDrift:
                 config_sampling.mode,
             )
 
-        base_rate = 1.0
+        base_rate: float | None = None
         if init_param is not None:
             validated = validate_sampling_rate(init_param, "init params")
             if validated is not None:
                 logger.debug(f"Using sampling rate from init params: {validated}")
                 base_rate = validated
-        else:
+
+        if base_rate is None:
             env_rate = os.environ.get("TUSK_SAMPLING_RATE")
             if env_rate is not None:
                 try:
@@ -369,20 +370,22 @@ class TuskDrift:
                         base_rate = validated
                 except ValueError:
                     logger.warning(f"Invalid TUSK_SAMPLING_RATE env var: {env_rate}")
-            elif config_sampling and config_sampling.base_rate is not None:
-                validated = validate_sampling_rate(
-                    config_sampling.base_rate, "config file recording.sampling.base_rate"
-                )
-                if validated is not None:
-                    base_rate = validated
-            elif recording_config and recording_config.sampling_rate is not None:
-                validated = validate_sampling_rate(
-                    recording_config.sampling_rate, "config file recording.sampling_rate"
-                )
-                if validated is not None:
-                    base_rate = validated
-            else:
-                logger.debug("Using default sampling rate: 1.0")
+
+        if base_rate is None and config_sampling and config_sampling.base_rate is not None:
+            validated = validate_sampling_rate(config_sampling.base_rate, "config file recording.sampling.base_rate")
+            if validated is not None:
+                logger.debug(f"Using sampling rate from config file recording.sampling.base_rate: {validated}")
+                base_rate = validated
+
+        if base_rate is None and recording_config and recording_config.sampling_rate is not None:
+            validated = validate_sampling_rate(recording_config.sampling_rate, "config file recording.sampling_rate")
+            if validated is not None:
+                logger.debug(f"Using sampling rate from config file recording.sampling_rate: {validated}")
+                base_rate = validated
+
+        if base_rate is None:
+            logger.debug("Using default sampling rate: 1.0")
+            base_rate = 1.0
 
         min_rate = 0.0
         if mode == "adaptive":
@@ -423,11 +426,17 @@ class TuskDrift:
             name="drift-adaptive-sampling",
         )
         self._adaptive_sampling_thread.start()
-        self._update_adaptive_sampling_health()
+        self._safe_update_adaptive_sampling_health()
 
     def _adaptive_sampling_loop(self) -> None:
         while not self._adaptive_sampling_stop_event.wait(timeout=2.0):
+            self._safe_update_adaptive_sampling_health()
+
+    def _safe_update_adaptive_sampling_health(self) -> None:
+        try:
             self._update_adaptive_sampling_health()
+        except Exception:
+            logger.error("Adaptive sampling health update failed; keeping previous controller state.", exc_info=True)
 
     def _update_adaptive_sampling_health(self) -> None:
         if self._adaptive_sampling_controller is None:
@@ -484,14 +493,52 @@ class TuskDrift:
         if cgroup_v1_current is not None:
             return cgroup_v1_current / self._effective_memory_limit_bytes
 
-        try:
-            import resource
+        current_rss_bytes = self._read_current_rss_bytes()
+        if current_rss_bytes is not None:
+            return current_rss_bytes / self._effective_memory_limit_bytes
 
-            rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-            rss_bytes = rss if platform.system() == "Darwin" else rss * 1024
-            return rss_bytes / self._effective_memory_limit_bytes
-        except Exception:
+        return None
+
+    @staticmethod
+    def _parse_proc_status_rss_bytes(raw_status: str) -> int | None:
+        for line in raw_status.splitlines():
+            if not line.startswith("VmRSS:"):
+                continue
+
+            parts = line.split()
+            if len(parts) < 3 or parts[2].lower() != "kb":
+                return None
+
+            return int(parts[1]) * 1024
+
+        return None
+
+    @staticmethod
+    def _parse_proc_statm_rss_bytes(raw_statm: str, page_size: int) -> int | None:
+        fields = raw_statm.split()
+        if len(fields) < 2:
             return None
+
+        return int(fields[1]) * page_size
+
+    def _read_current_rss_bytes(self) -> int | None:
+        try:
+            proc_status_path = Path("/proc/self/status")
+            if proc_status_path.exists():
+                parsed = self._parse_proc_status_rss_bytes(proc_status_path.read_text())
+                if parsed is not None:
+                    return parsed
+        except Exception:
+            pass
+
+        try:
+            proc_statm_path = Path("/proc/self/statm")
+            if proc_statm_path.exists():
+                return self._parse_proc_statm_rss_bytes(proc_statm_path.read_text(), int(os.sysconf("SC_PAGE_SIZE")))
+        except Exception:
+            pass
+
+        return None
 
     def _read_numeric_control_file(self, path: str) -> int | None:
         try:

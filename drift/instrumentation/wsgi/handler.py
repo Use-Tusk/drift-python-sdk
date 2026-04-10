@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from typing import TYPE_CHECKING, Any
 
 from opentelemetry import context as otel_context
@@ -52,6 +52,30 @@ from .utilities import (
     extract_headers,
     parse_status_line,
 )
+
+
+class SuppressedResponseIterable(Iterable[bytes]):
+    """Keep no-record suppression active while a skipped WSGI response is consumed."""
+
+    def __init__(self, response: Iterable[bytes]):
+        self._response = response
+
+    def __iter__(self) -> Iterator[bytes]:
+        with suppress_recording():
+            iterator = iter(self._response)
+        while True:
+            try:
+                with suppress_recording():
+                    chunk = next(iterator)
+            except StopIteration:
+                return
+            yield chunk
+
+    def close(self) -> None:
+        close_method = getattr(self._response, "close", None)
+        if close_method is not None:
+            with suppress_recording():
+                close_method()
 
 
 def handle_wsgi_request(
@@ -226,8 +250,8 @@ def _create_and_handle_request(
         )
         if not should_record:
             logger.debug(f"[WSGI] Skipping request ({skip_reason}), path={path}")
-            with suppress_recording():
-                return original_wsgi_app(app, environ, start_response)
+            response = original_wsgi_app(app, environ, start_response)
+            return SuppressedResponseIterable(response)
 
     # Capture request body
     request_body = capture_request_body(environ)

@@ -6,6 +6,7 @@ import os
 
 import pytest
 
+from drift.core.config import RecordingConfig, SamplingConfig, TuskFileConfig
 from drift.core.drift_sdk import TuskDrift
 from drift.core.types import TuskDriftMode
 
@@ -156,6 +157,30 @@ class TestTuskDriftSamplingRate:
 
         assert result == 0.75
 
+    def test_invalid_init_param_falls_back_to_env_var(self, reset_singleton):
+        """Should use env var when init param is present but invalid."""
+        os.environ["TUSK_DRIFT_MODE"] = "DISABLED"
+        os.environ["TUSK_SAMPLING_RATE"] = "0.25"
+        instance = TuskDrift.get_instance()
+
+        result = instance._determine_sampling_rate(2.0)
+
+        assert result == 0.25
+
+    def test_invalid_init_param_falls_back_to_config_file(self, reset_singleton):
+        """Should use config file when init param is present but invalid."""
+        os.environ["TUSK_DRIFT_MODE"] = "DISABLED"
+        instance = TuskDrift.get_instance()
+        instance.file_config = TuskFileConfig(
+            recording=RecordingConfig(
+                sampling=SamplingConfig(base_rate=0.4),
+            )
+        )
+
+        result = instance._determine_sampling_rate(2.0)
+
+        assert result == 0.4
+
     def test_defaults_to_1_0(self, reset_singleton):
         """Should default to 1.0 (100%) sampling rate."""
         os.environ["TUSK_DRIFT_MODE"] = "DISABLED"
@@ -174,6 +199,21 @@ class TestTuskDriftSamplingRate:
         result = instance._determine_sampling_rate(None)
 
         assert result == 1.0
+
+    def test_invalid_env_var_falls_back_to_config_file(self, reset_singleton):
+        """Should use config file when env var is present but invalid."""
+        os.environ["TUSK_DRIFT_MODE"] = "DISABLED"
+        os.environ["TUSK_SAMPLING_RATE"] = "invalid"
+        instance = TuskDrift.get_instance()
+        instance.file_config = TuskFileConfig(
+            recording=RecordingConfig(
+                sampling=SamplingConfig(base_rate=0.4),
+            )
+        )
+
+        result = instance._determine_sampling_rate(None)
+
+        assert result == 0.4
 
 
 class TestTuskDriftInitialize:
@@ -410,6 +450,105 @@ class TestTuskDriftShutdown:
 
         mock_td_processor.shutdown.assert_called_once()
         mock_tracer_provider.shutdown.assert_called_once()
+
+
+class TestTuskDriftAdaptiveSampling:
+    """Tests for adaptive sampling health monitoring."""
+
+    @pytest.fixture(autouse=True)
+    def reset_singleton(self):
+        """Reset singleton state before each test."""
+        TuskDrift._instance = None
+        TuskDrift._initialized = False
+        yield
+        TuskDrift._instance = None
+        TuskDrift._initialized = False
+
+    def test_safe_update_logs_and_swallows_health_update_exceptions(self, reset_singleton, mocker):
+        """Should log and continue when health updates fail."""
+        instance = TuskDrift.get_instance()
+        mocker.patch.object(instance, "_update_adaptive_sampling_health", side_effect=RuntimeError("boom"))
+        log_error = mocker.patch("drift.core.drift_sdk.logger.error")
+
+        instance._safe_update_adaptive_sampling_health()
+
+        log_error.assert_called_once()
+        assert "Adaptive sampling health update failed" in log_error.call_args.args[0]
+
+    def test_adaptive_sampling_loop_continues_after_update_exception(self, reset_singleton, mocker):
+        """Should keep polling after a single health update failure."""
+        instance = TuskDrift.get_instance()
+        stop_event = mocker.MagicMock()
+        stop_event.wait.side_effect = [False, False, True]
+        instance._adaptive_sampling_stop_event = stop_event
+        log_error = mocker.patch("drift.core.drift_sdk.logger.error")
+
+        update_health = mocker.patch.object(
+            instance,
+            "_update_adaptive_sampling_health",
+            side_effect=[RuntimeError("boom"), None],
+        )
+
+        instance._adaptive_sampling_loop()
+
+        assert update_health.call_count == 2
+        log_error.assert_called_once()
+        assert "Adaptive sampling health update failed" in log_error.call_args.args[0]
+
+
+class TestTuskDriftMemoryPressure:
+    """Tests for memory pressure measurement helpers."""
+
+    @pytest.fixture(autouse=True)
+    def reset_singleton(self):
+        """Reset singleton state before each test."""
+        TuskDrift._instance = None
+        TuskDrift._initialized = False
+        yield
+        TuskDrift._instance = None
+        TuskDrift._initialized = False
+
+    def test_parse_proc_status_rss_bytes(self, reset_singleton):
+        """Should parse current RSS from /proc/self/status."""
+        raw_status = "Name:\tpython\nVmRSS:\t1234 kB\nThreads:\t8\n"
+
+        assert TuskDrift._parse_proc_status_rss_bytes(raw_status) == 1234 * 1024
+
+    def test_read_current_rss_bytes_falls_back_to_proc_statm(self, reset_singleton, mocker):
+        """Should use /proc/self/statm when /proc/self/status is unavailable."""
+        instance = TuskDrift.get_instance()
+
+        mocker.patch(
+            "drift.core.drift_sdk.Path.exists",
+            autospec=True,
+            side_effect=lambda path: str(path) == "/proc/self/statm",
+        )
+        mocker.patch(
+            "drift.core.drift_sdk.Path.read_text",
+            autospec=True,
+            side_effect=lambda path: "100 25 0 0 0 0 0\n" if str(path) == "/proc/self/statm" else "",
+        )
+        mocker.patch("drift.core.drift_sdk.os.sysconf", return_value=4096)
+
+        assert instance._read_current_rss_bytes() == 25 * 4096
+
+    def test_get_memory_pressure_ratio_uses_current_rss_fallback(self, reset_singleton, mocker):
+        """Should use current RSS fallback when cgroup current usage is unavailable."""
+        instance = TuskDrift.get_instance()
+        instance._effective_memory_limit_bytes = 1024
+        mocker.patch.object(instance, "_read_numeric_control_file", return_value=None)
+        mocker.patch.object(instance, "_read_current_rss_bytes", return_value=256)
+
+        assert instance._get_memory_pressure_ratio() == 0.25
+
+    def test_get_memory_pressure_ratio_returns_none_without_current_measurement(self, reset_singleton, mocker):
+        """Should return None when no current memory measurement is available."""
+        instance = TuskDrift.get_instance()
+        instance._effective_memory_limit_bytes = 1024
+        mocker.patch.object(instance, "_read_numeric_control_file", return_value=None)
+        mocker.patch.object(instance, "_read_current_rss_bytes", return_value=None)
+
+        assert instance._get_memory_pressure_ratio() is None
 
 
 class TestTuskDriftGetTracer:
