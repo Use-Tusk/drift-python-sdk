@@ -850,22 +850,29 @@ class RedisInstrumentation(InstrumentationBase):
         return " ".join(parts)
 
     def _get_pipeline_commands(self, pipeline: Any) -> list:
-        """Extract commands from pipeline."""
+        """Extract commands from pipeline.
+
+        ClusterPipeline has an always-empty ``command_stack`` attribute while
+        the real commands live in ``_execution_strategy._command_queue``, so we
+        check ``_execution_strategy`` first to avoid returning the empty list.
+        """
         try:
-            if hasattr(pipeline, "command_stack"):
-                return pipeline.command_stack
-            elif hasattr(pipeline, "_command_stack"):
-                return pipeline._command_stack
-            # ClusterPipeline stores commands in _execution_strategy._command_queue
-            elif hasattr(pipeline, "_execution_strategy"):
+            # ClusterPipeline stores commands in _execution_strategy._command_queue.
+            # Must be checked before command_stack because ClusterPipeline also
+            # has a command_stack attr that is always empty (redis-py #3703).
+            if hasattr(pipeline, "_execution_strategy"):
                 strategy = pipeline._execution_strategy
                 if hasattr(strategy, "_command_queue"):
                     return strategy._command_queue
-                elif hasattr(strategy, "command_queue"):
+                if hasattr(strategy, "command_queue"):
                     return strategy.command_queue
             # Async ClusterPipeline stores commands in _command_queue directly
-            elif hasattr(pipeline, "_command_queue"):
+            if hasattr(pipeline, "_command_queue"):
                 return pipeline._command_queue
+            if hasattr(pipeline, "command_stack"):
+                return pipeline.command_stack
+            if hasattr(pipeline, "_command_stack"):
+                return pipeline._command_stack
         except AttributeError:
             pass
         return []
