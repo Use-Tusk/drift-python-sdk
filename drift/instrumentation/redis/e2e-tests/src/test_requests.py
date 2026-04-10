@@ -44,4 +44,9 @@ if __name__ == "__main__":
 
     make_request("GET", "/test/transaction-watch")
 
+    # RedisCluster operations
+    make_request("GET", "/test/cluster-set-get")
+    make_request("GET", "/test/cluster-incr")
+    make_request("GET", "/test/cluster-pipeline")
+
     print_request_summary()

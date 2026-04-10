@@ -212,6 +212,110 @@ class RedisInstrumentation(InstrumentationBase):
         except ImportError:
             logger.debug("redis.asyncio not available")
 
+        # Patch RedisCluster.execute_command (separate class, NOT a subclass of Redis)
+        try:
+            from redis.cluster import ClusterPipeline as SyncClusterPipeline
+            from redis.cluster import RedisCluster
+
+            if hasattr(RedisCluster, "execute_command"):
+                original_cluster_execute = RedisCluster.execute_command
+                instrumentation = self
+
+                def patched_cluster_execute_command(cluster_self, *args, **kwargs):
+                    """Patched RedisCluster.execute_command method."""
+                    sdk = TuskDrift.get_instance()
+
+                    if sdk.mode == TuskDriftMode.DISABLED:
+                        return original_cluster_execute(cluster_self, *args, **kwargs)
+
+                    return instrumentation._traced_execute_command(
+                        cluster_self,
+                        original_cluster_execute,
+                        sdk,
+                        args,
+                        kwargs,
+                    )
+
+                RedisCluster.execute_command = patched_cluster_execute_command
+                logger.debug("redis.cluster.RedisCluster.execute_command instrumented")
+
+            # Patch ClusterPipeline.execute
+            if hasattr(SyncClusterPipeline, "execute"):
+                original_cluster_pipeline_execute = SyncClusterPipeline.execute
+                instrumentation = self
+
+                def patched_cluster_pipeline_execute(pipeline_self, *args, **kwargs):
+                    """Patched ClusterPipeline.execute method."""
+                    sdk = TuskDrift.get_instance()
+
+                    if sdk.mode == TuskDriftMode.DISABLED:
+                        return original_cluster_pipeline_execute(pipeline_self, *args, **kwargs)
+
+                    return instrumentation._traced_cluster_pipeline_execute(
+                        pipeline_self,
+                        original_cluster_pipeline_execute,
+                        sdk,
+                        args,
+                        kwargs,
+                    )
+
+                SyncClusterPipeline.execute = patched_cluster_pipeline_execute
+                logger.debug("redis.cluster.ClusterPipeline.execute instrumented")
+        except ImportError:
+            logger.debug("redis.cluster not available")
+
+        # Patch async RedisCluster.execute_command
+        try:
+            from redis.asyncio.cluster import ClusterPipeline as AsyncClusterPipeline
+            from redis.asyncio.cluster import RedisCluster as AsyncRedisCluster
+
+            if hasattr(AsyncRedisCluster, "execute_command"):
+                original_async_cluster_execute = AsyncRedisCluster.execute_command
+                instrumentation = self
+
+                async def patched_async_cluster_execute_command(cluster_self, *args, **kwargs):
+                    """Patched async RedisCluster.execute_command method."""
+                    sdk = TuskDrift.get_instance()
+
+                    if sdk.mode == TuskDriftMode.DISABLED:
+                        return await original_async_cluster_execute(cluster_self, *args, **kwargs)
+
+                    return await instrumentation._traced_async_execute_command(
+                        cluster_self,
+                        original_async_cluster_execute,
+                        sdk,
+                        args,
+                        kwargs,
+                    )
+
+                AsyncRedisCluster.execute_command = patched_async_cluster_execute_command
+                logger.debug("redis.asyncio.cluster.RedisCluster.execute_command instrumented")
+
+            # Patch async ClusterPipeline.execute
+            if hasattr(AsyncClusterPipeline, "execute"):
+                original_async_cluster_pipeline_execute = AsyncClusterPipeline.execute
+                instrumentation = self
+
+                async def patched_async_cluster_pipeline_execute(pipeline_self, *args, **kwargs):
+                    """Patched async ClusterPipeline.execute method."""
+                    sdk = TuskDrift.get_instance()
+
+                    if sdk.mode == TuskDriftMode.DISABLED:
+                        return await original_async_cluster_pipeline_execute(pipeline_self, *args, **kwargs)
+
+                    return await instrumentation._traced_async_cluster_pipeline_execute(
+                        pipeline_self,
+                        original_async_cluster_pipeline_execute,
+                        sdk,
+                        args,
+                        kwargs,
+                    )
+
+                AsyncClusterPipeline.execute = patched_async_cluster_pipeline_execute
+                logger.debug("redis.asyncio.cluster.ClusterPipeline.execute instrumented")
+        except ImportError:
+            logger.debug("redis.asyncio.cluster not available")
+
     def _traced_execute_command(
         self, redis_client: Any, original_execute: Any, sdk: TuskDrift, args: tuple, kwargs: dict
     ) -> Any:
@@ -519,6 +623,59 @@ class RedisInstrumentation(InstrumentationBase):
             pipeline, original_execute, sdk, args, kwargs, command_str, command_stack
         )
 
+    def _traced_cluster_pipeline_execute(
+        self, pipeline: Any, original_execute: Any, sdk: TuskDrift, args: tuple, kwargs: dict
+    ) -> Any:
+        """Traced ClusterPipeline.execute method.
+
+        Must snapshot the command queue before calling original_execute because
+        ClusterPipeline.execute resets the queue in its finally block.
+        """
+        if sdk.mode == TuskDriftMode.DISABLED:
+            return original_execute(pipeline, *args, **kwargs)
+
+        command_stack = list(self._get_pipeline_commands(pipeline))
+        command_str = self._format_pipeline_commands(command_stack)
+
+        def original_call():
+            return original_execute(pipeline, *args, **kwargs)
+
+        if sdk.mode == TuskDriftMode.REPLAY:
+            return handle_replay_mode(
+                replay_mode_handler=lambda: self._replay_pipeline_execute(sdk, command_str, command_stack),
+                no_op_request_handler=lambda: [],
+                is_server_request=False,
+            )
+
+        return handle_record_mode(
+            original_function_call=original_call,
+            record_mode_handler=lambda is_pre_app_start: self._record_pipeline_execute(
+                pipeline, original_execute, sdk, args, kwargs, command_str, command_stack, is_pre_app_start
+            ),
+            span_kind=OTelSpanKind.CLIENT,
+        )
+
+    async def _traced_async_cluster_pipeline_execute(
+        self, pipeline: Any, original_execute: Any, sdk: TuskDrift, args: tuple, kwargs: dict
+    ) -> Any:
+        """Traced async ClusterPipeline.execute method."""
+        if sdk.mode == TuskDriftMode.DISABLED:
+            return await original_execute(pipeline, *args, **kwargs)
+
+        command_stack = list(self._get_pipeline_commands(pipeline))
+        command_str = self._format_pipeline_commands(command_stack)
+
+        if sdk.mode == TuskDriftMode.REPLAY:
+            return handle_replay_mode(
+                replay_mode_handler=lambda: self._replay_pipeline_execute(sdk, command_str, command_stack),
+                no_op_request_handler=lambda: [],
+                is_server_request=False,
+            )
+
+        return await self._record_async_pipeline_execute(
+            pipeline, original_execute, sdk, args, kwargs, command_str, command_stack
+        )
+
     async def _record_async_pipeline_execute(
         self,
         pipeline: Any,
@@ -699,6 +856,16 @@ class RedisInstrumentation(InstrumentationBase):
                 return pipeline.command_stack
             elif hasattr(pipeline, "_command_stack"):
                 return pipeline._command_stack
+            # ClusterPipeline stores commands in _execution_strategy._command_queue
+            elif hasattr(pipeline, "_execution_strategy"):
+                strategy = pipeline._execution_strategy
+                if hasattr(strategy, "_command_queue"):
+                    return strategy._command_queue
+                elif hasattr(strategy, "command_queue"):
+                    return strategy.command_queue
+            # Async ClusterPipeline stores commands in _command_queue directly
+            elif hasattr(pipeline, "_command_queue"):
+                return pipeline._command_queue
         except AttributeError:
             pass
         return []
