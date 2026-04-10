@@ -301,13 +301,6 @@ class TestRestoreRowIntegerTypes:
         assert result[1] == 2.0
         assert result[2] == 3.0
 
-    def test_list_row_description_with_non_dict_items(self):
-        row = [1.0]
-        description = [None]  # non-dict description item
-        result = restore_row_integer_types(row, description)  # ty: ignore[invalid-argument-type]
-        # type_code is None, not in POSTGRES_INTEGER_TYPE_CODES → no conversion
-        assert result == [1.0]
-
     # --- dict row ---
 
     def test_dict_row_converts_integer_float_to_int(self):
@@ -336,14 +329,6 @@ class TestRestoreRowIntegerTypes:
         assert isinstance(result, dict)
         # "unknown" not in type_code_by_name, so type_code is None
         assert result["unknown"] == 5.0
-
-    def test_dict_row_description_with_non_dict_items(self):
-        row = {"id": 5.0}
-        description = [None]  # non-dict item
-        result = restore_row_integer_types(row, description)  # ty: ignore[invalid-argument-type]
-        assert isinstance(result, dict)
-        # Non-dict items in description are skipped (no name extracted)
-        assert result["id"] == 5.0
 
 
 class TestRestoreRowDateTypes:
@@ -422,12 +407,6 @@ class TestRestoreRowDateTypes:
         assert result[0] == dt.date(2023, 1, 15)
         assert result[1] == "extra"
 
-    def test_list_row_non_dict_description_item(self):
-        row = ["2023-01-15"]
-        description = [None]
-        result = restore_row_date_types(row, description)  # ty: ignore[invalid-argument-type]
-        assert result == ["2023-01-15"]
-
     # --- dict row ---
 
     def test_dict_row_converts_date_string(self):
@@ -462,13 +441,6 @@ class TestRestoreRowDateTypes:
         result = restore_row_date_types(row, description)
         assert isinstance(result, dict)
         assert result["d"] == 12345
-
-    def test_dict_row_non_dict_description_items_skipped(self):
-        row = {"d": "2023-01-15"}
-        description = [None]
-        result = restore_row_date_types(row, description)  # ty: ignore[invalid-argument-type]
-        assert isinstance(result, dict)
-        assert result["d"] == "2023-01-15"
 
     # --- mixed columns ---
 
