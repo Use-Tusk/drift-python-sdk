@@ -149,11 +149,3 @@ include = [
 
 [tool.ty.overrides.rules]
 "unresolved-import" = "ignore"
-
-[[tool.ty.overrides]]
-# Test files that import optional dependencies (psycopg) and use union return types
-include = ["tests/unit/test_psycopg_utils.py"]
-
-[tool.ty.overrides.rules]
-"unresolved-import" = "ignore"
-"invalid-argument-type" = "ignore"
