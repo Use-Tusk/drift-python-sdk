@@ -15,10 +15,26 @@ sdk = TuskDrift.initialize(
 
 app = Flask(__name__)
 
-# Initialize Redis client
+# Initialize Redis client (standalone)
 redis_client = redis.Redis(
     host=os.getenv("REDIS_HOST", "redis"), port=int(os.getenv("REDIS_PORT", "6379")), db=0, decode_responses=True
 )
+
+# Lazy-initialized RedisCluster client.
+# Initialized on first use so that cluster connection failures don't prevent
+# the rest of the app from starting (avoids breaking non-cluster tests).
+_cluster_client = None
+
+
+def get_cluster_client():
+    global _cluster_client
+    if _cluster_client is None:
+        _cluster_client = redis.RedisCluster(
+            host=os.getenv("REDIS_CLUSTER_HOST", "redis-node-1"),
+            port=int(os.getenv("REDIS_CLUSTER_PORT", "6379")),
+            decode_responses=True,
+        )
+    return _cluster_client
 
 
 @app.route("/health")
@@ -241,6 +257,85 @@ def test_transaction_watch():
         redis_client.delete("test:watch:counter")
 
         return jsonify({"success": True, "initial_value": 10, "expected_final": 15, "results": results})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/cluster-set-get", methods=["GET"])
+def test_cluster_set_get():
+    """Test SET/GET through RedisCluster.
+
+    RedisCluster.execute_command is a separate method from Redis.execute_command
+    """
+    try:
+        cluster = get_cluster_client()
+        cluster.set("test:cluster:key1", "cluster_value1")
+        cluster.set("test:cluster:key2", "cluster_value2")
+        val1 = cluster.get("test:cluster:key1")
+        val2 = cluster.get("test:cluster:key2")
+        cluster.delete("test:cluster:key1", "test:cluster:key2")
+        return jsonify({"success": True, "val1": val1, "val2": val2})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/cluster-incr", methods=["GET"])
+def test_cluster_incr():
+    """Test INCR through RedisCluster.
+
+    Exercises the cluster's execute_command path for a simple write operation.
+    """
+    try:
+        cluster = get_cluster_client()
+        cluster.set("test:cluster:counter", "0")
+        cluster.incr("test:cluster:counter")
+        cluster.incr("test:cluster:counter")
+        cluster.incr("test:cluster:counter")
+        val = cluster.get("test:cluster:counter")
+        cluster.delete("test:cluster:counter")
+        return jsonify({"success": True, "value": int(val)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/cluster-pipeline", methods=["GET"])
+def test_cluster_pipeline():
+    """Test pipeline through RedisCluster (ClusterPipeline).
+
+    ClusterPipeline.execute_command is also a separate path.
+    All keys use the same hash tag {cp} to ensure they land on the same slot,
+    which is required for cluster pipelines.
+    """
+    try:
+        cluster = get_cluster_client()
+        pipe = cluster.pipeline()
+        pipe.set("{cp}:key1", "pipe_val1")
+        pipe.set("{cp}:key2", "pipe_val2")
+        pipe.get("{cp}:key1")
+        pipe.get("{cp}:key2")
+        results = pipe.execute()
+        cluster.delete("{cp}:key1", "{cp}:key2")
+        return jsonify({"success": True, "results": results})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test/cluster-pipeline-transaction", methods=["GET"])
+def test_cluster_pipeline_transaction():
+    """Test ClusterPipeline with transaction mode.
+
+    Uses TransactionStrategy internally. All keys must be on the same slot.
+    """
+    try:
+        cluster = get_cluster_client()
+        pipe = cluster.pipeline(transaction=True)
+        pipe.set("{tx}:key1", "txval1")
+        pipe.set("{tx}:key2", "txval2")
+        pipe.get("{tx}:key1")
+        pipe.get("{tx}:key2")
+        results = pipe.execute()
+        cluster.delete("{tx}:key1", "{tx}:key2")
+        return jsonify({"success": True, "results": results})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

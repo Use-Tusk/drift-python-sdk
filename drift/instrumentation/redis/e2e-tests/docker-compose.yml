@@ -7,6 +7,46 @@ services:
       timeout: 5s
       retries: 5
 
+  redis-node-1:
+    image: redis:7-alpine
+    command: redis-server --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --cluster-announce-hostname redis-node-1 --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis-node-2:
+    image: redis:7-alpine
+    command: redis-server --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --cluster-announce-hostname redis-node-2 --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis-node-3:
+    image: redis:7-alpine
+    command: redis-server --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --cluster-announce-hostname redis-node-3 --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis-cluster-init:
+    image: redis:7-alpine
+    depends_on:
+      redis-node-1:
+        condition: service_healthy
+      redis-node-2:
+        condition: service_healthy
+      redis-node-3:
+        condition: service_healthy
+    command: >
+      sh -c "redis-cli --cluster create redis-node-1:6379 redis-node-2:6379 redis-node-3:6379 --cluster-replicas 0 --cluster-yes"
+    restart: "no"
+
   app:
     build:
       context: ../../../..
@@ -21,10 +61,14 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      redis-cluster-init:
+        condition: service_completed_successfully
     environment:
       - PORT=8000
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - REDIS_CLUSTER_HOST=redis-node-1
+      - REDIS_CLUSTER_PORT=6379
       - TUSK_ANALYTICS_DISABLED=1
       - PYTHONUNBUFFERED=1
       - TUSK_USE_RUST_CORE=${TUSK_USE_RUST_CORE:-0}
