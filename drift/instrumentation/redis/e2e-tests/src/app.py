@@ -319,6 +319,25 @@ def test_cluster_pipeline():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/test/cluster-pipeline-transaction", methods=["GET"])
+def test_cluster_pipeline_transaction():
+    """Test ClusterPipeline with transaction mode.
+
+    Uses TransactionStrategy internally. All keys must be on the same slot.
+    """
+    try:
+        cluster = get_cluster_client()
+        pipe = cluster.pipeline(transaction=True)
+        pipe.set("{tx}:key1", "txval1")
+        pipe.set("{tx}:key2", "txval2")
+        pipe.get("{tx}:key1")
+        pipe.get("{tx}:key2")
+        results = pipe.execute()
+        cluster.delete("{tx}:key1", "{tx}:key2")
+        return jsonify({"success": True, "results": results})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 if __name__ == "__main__":
     sdk.mark_app_as_ready()

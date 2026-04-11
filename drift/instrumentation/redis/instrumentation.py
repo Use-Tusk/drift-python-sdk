@@ -1122,6 +1122,8 @@ class RedisInstrumentation(InstrumentationBase):
             return {k: self._deserialize_value(v) for k, v in value.items()}
         elif isinstance(value, list):
             return [self._deserialize_value(v) for v in value]
+        elif isinstance(value, float) and value.is_integer():
+            return int(value)
         return value
 
     def _deserialize_response(self, mock_data: dict[str, Any]) -> Any:
