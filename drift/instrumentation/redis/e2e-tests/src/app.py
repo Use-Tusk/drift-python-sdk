@@ -319,6 +319,7 @@ def test_cluster_pipeline():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 @app.route("/test/cluster-pipeline-transaction", methods=["GET"])
 def test_cluster_pipeline_transaction():
     """Test ClusterPipeline with transaction mode.
