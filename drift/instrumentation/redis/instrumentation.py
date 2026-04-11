@@ -1091,7 +1091,9 @@ class RedisInstrumentation(InstrumentationBase):
                 return {"__bytes__": True, "encoding": "utf8", "value": decoded}
             except UnicodeDecodeError:
                 return {"__bytes__": True, "encoding": "hex", "value": value.hex()}
-        elif isinstance(value, (str, int, float, bool, type(None))):
+        elif isinstance(value, float):
+            return {"__float__": True, "value": value}
+        elif isinstance(value, (str, int, bool, type(None))):
             return value
         elif isinstance(value, (list, tuple)):
             return [self._serialize_value(v) for v in value]
@@ -1109,7 +1111,6 @@ class RedisInstrumentation(InstrumentationBase):
     def _deserialize_value(self, value: Any) -> Any:
         """Deserialize a value, converting typed wrappers back to original types."""
         if isinstance(value, dict):
-            # Check for bytes wrapper
             if value.get("__bytes__") is True:
                 encoding = value.get("encoding")
                 data = value.get("value", "")
@@ -1118,6 +1119,8 @@ class RedisInstrumentation(InstrumentationBase):
                 elif encoding == "hex":
                     return bytes.fromhex(data)
                 return data  # fallback
+            if value.get("__float__") is True:
+                return float(value.get("value", 0.0))
             # Recursively deserialize dict values
             return {k: self._deserialize_value(v) for k, v in value.items()}
         elif isinstance(value, list):
