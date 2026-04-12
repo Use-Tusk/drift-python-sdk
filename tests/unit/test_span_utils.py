@@ -7,6 +7,7 @@ from opentelemetry import context as otel_context
 from opentelemetry.trace import SpanKind as OTelSpanKind
 from opentelemetry.trace import Status, StatusCode
 
+from drift.core.no_recording import suppress_recording
 from drift.core.tracing.span_utils import (
     AddSpanAttributesOptions,
     CreateSpanOptions,
@@ -202,6 +203,23 @@ class TestSpanUtilsCreateSpan:
         )
 
         result = SpanUtils.create_span(options)
+
+        assert result is None
+
+    def test_returns_none_when_recording_is_suppressed(self, mocker):
+        """Should not create spans when no-record context is active."""
+        mock_drift = mocker.patch("drift.core.drift_sdk.TuskDrift")
+        mock_sdk = mocker.MagicMock()
+        mock_sdk.get_tracer.return_value = mocker.MagicMock()
+        mock_drift.get_instance.return_value = mock_sdk
+
+        options = CreateSpanOptions(
+            name="test-span",
+            kind=OTelSpanKind.SERVER,
+        )
+
+        with suppress_recording():
+            result = SpanUtils.create_span(options)
 
         assert result is None
 

@@ -244,3 +244,8 @@ class BatchSpanProcessor:
     def dropped_span_count(self) -> int:
         """Get the number of dropped spans."""
         return self._dropped_spans
+
+    @property
+    def max_queue_size(self) -> int:
+        """Get the configured maximum queue size."""
+        return self._config.max_queue_size

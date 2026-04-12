@@ -8,6 +8,7 @@ import os
 import platform
 import random
 import stat
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -19,6 +20,13 @@ from opentelemetry.trace import SpanKind as OTelSpanKind
 
 from ..instrumentation.registry import install_hooks
 from ..version import SDK_VERSION
+from .adaptive_sampling import (
+    AdaptiveSamplingController,
+    AdaptiveSamplingHealthSnapshot,
+    ResolvedSamplingConfig,
+    RootSamplingDecision,
+    SamplingMode,
+)
 from .communication.communicator import CommunicatorConfig, ProtobufCommunicator
 from .communication.types import MockRequestInput, MockResponseOutput
 from .config import TuskConfig, TuskFileConfig, load_tusk_config
@@ -48,6 +56,12 @@ class TuskDrift:
         self.app_ready = False
         self._sdk_instance_id = self._generate_sdk_instance_id()
         self._sampling_rate: float = 1.0
+        self._sampling_mode: str = "fixed"
+        self._min_sampling_rate: float = 0.0
+        self._adaptive_sampling_controller: AdaptiveSamplingController | None = None
+        self._adaptive_sampling_thread: threading.Thread | None = None
+        self._adaptive_sampling_stop_event = threading.Event()
+        self._effective_memory_limit_bytes: int | None = None
         self._transform_configs: dict[str, Any] | None = None
         self._init_params: dict[str, Any] = {}
 
@@ -121,14 +135,16 @@ class TuskDrift:
         )
 
         logger.info(
-            "SDK initialized successfully (version=%s, mode=%s, env=%s, service=%s, serviceId=%s, exportSpans=%s, samplingRate=%s, logLevel=%s, runtime=python %s, platform=%s/%s).",
+            "SDK initialized successfully (version=%s, mode=%s, env=%s, service=%s, serviceId=%s, exportSpans=%s, samplingMode=%s, samplingBaseRate=%s, samplingMinRate=%s, logLevel=%s, runtime=python %s, platform=%s/%s).",
             SDK_VERSION,
             self.mode,
             env,
             service_name,
             service_id,
             use_remote_export,
+            self._sampling_mode,
             self._sampling_rate,
+            self._min_sampling_rate,
             get_log_level(),
             platform.python_version(),
             platform.system().lower(),
@@ -168,8 +184,6 @@ class TuskDrift:
             "log_level": log_level,
         }
 
-        instance._sampling_rate = instance._determine_sampling_rate(sampling_rate)
-
         effective_api_key = api_key or os.environ.get("TUSK_API_KEY")
 
         if not env:
@@ -182,6 +196,11 @@ class TuskDrift:
         if cls._initialized:
             logger.debug("Already initialized, skipping...")
             return instance
+
+        sampling_config = instance._determine_sampling_config(sampling_rate)
+        instance._sampling_rate = sampling_config.base_rate
+        instance._sampling_mode = sampling_config.mode
+        instance._min_sampling_rate = sampling_config.min_rate
 
         # Start coverage collection after the _initialized guard so repeated
         # initialize() calls don't stop/restart coverage and lose accumulated data.
@@ -280,8 +299,6 @@ class TuskDrift:
         instance._td_span_processor = TdSpanProcessor(
             exporter=instance.span_exporter,
             mode=instance.mode,
-            sampling_rate=instance._sampling_rate,
-            app_ready=instance.app_ready,
             environment=env,
         )
         instance._td_span_processor.start()
@@ -306,6 +323,7 @@ class TuskDrift:
         install_hooks()
 
         instance._init_auto_instrumentations()
+        instance._start_adaptive_sampling_control_loop()
 
         # Create env vars snapshot if enabled (matches Node SDK behavior)
         instance.create_env_vars_snapshot()
@@ -318,38 +336,222 @@ class TuskDrift:
 
         return instance
 
-    def _determine_sampling_rate(self, init_param: float | None) -> float:
-        """Determine the sampling rate from various sources (precedence order)."""
-        # 1. Init param takes precedence
+    def _determine_sampling_config(self, init_param: float | None) -> ResolvedSamplingConfig:
+        """Determine the effective sampling config from init params, env, and file config."""
+        recording_config = self.file_config.recording if self.file_config else None
+        config_sampling = recording_config.sampling if recording_config else None
+
+        mode: SamplingMode = "fixed"
+        if config_sampling and config_sampling.mode in {"fixed", "adaptive"}:
+            mode = "adaptive" if config_sampling.mode == "adaptive" else "fixed"
+        elif config_sampling and config_sampling.mode:
+            logger.warning(
+                "Invalid sampling mode from config file: %s. Must be 'fixed' or 'adaptive'. Ignoring.",
+                config_sampling.mode,
+            )
+
+        base_rate: float | None = None
         if init_param is not None:
             validated = validate_sampling_rate(init_param, "init params")
             if validated is not None:
                 logger.debug(f"Using sampling rate from init params: {validated}")
-                return validated
+                base_rate = validated
 
-        # 2. Environment variable
-        env_rate = os.environ.get("TUSK_SAMPLING_RATE")
-        if env_rate is not None:
-            try:
-                parsed = float(env_rate)
-                validated = validate_sampling_rate(parsed, "TUSK_SAMPLING_RATE env var")
-                if validated is not None:
-                    logger.debug(f"Using sampling rate from env var: {validated}")
-                    return validated
-            except ValueError:
-                logger.warning(f"Invalid TUSK_SAMPLING_RATE env var: {env_rate}")
+        if base_rate is None:
+            for env_key in ("TUSK_RECORDING_SAMPLING_RATE", "TUSK_SAMPLING_RATE"):
+                env_rate = os.environ.get(env_key)
+                if env_rate is None:
+                    continue
 
-        # 3. Config file
-        if self.file_config and self.file_config.recording and self.file_config.recording.sampling_rate is not None:
-            config_rate = self.file_config.recording.sampling_rate
-            validated = validate_sampling_rate(config_rate, "config file")
+                try:
+                    parsed = float(env_rate)
+                    validated = validate_sampling_rate(parsed, f"{env_key} env var")
+                    if validated is not None:
+                        logger.debug(f"Using sampling rate from {env_key} env var: {validated}")
+                        base_rate = validated
+                        break
+                except ValueError:
+                    logger.warning(f"Invalid {env_key} env var: {env_rate}")
+
+        if base_rate is None and config_sampling and config_sampling.base_rate is not None:
+            validated = validate_sampling_rate(config_sampling.base_rate, "config file recording.sampling.base_rate")
             if validated is not None:
-                logger.debug(f"Using sampling rate from config file: {validated}")
-                return validated
+                logger.debug(f"Using sampling rate from config file recording.sampling.base_rate: {validated}")
+                base_rate = validated
 
-        # 4. Default
-        logger.debug("Using default sampling rate: 1.0")
-        return 1.0
+        if base_rate is None and recording_config and recording_config.sampling_rate is not None:
+            validated = validate_sampling_rate(recording_config.sampling_rate, "config file recording.sampling_rate")
+            if validated is not None:
+                logger.debug(f"Using sampling rate from config file recording.sampling_rate: {validated}")
+                base_rate = validated
+
+        if base_rate is None:
+            logger.debug("Using default sampling rate: 1.0")
+            base_rate = 1.0
+
+        min_rate = 0.0
+        if mode == "adaptive":
+            validated_min_rate = validate_sampling_rate(
+                config_sampling.min_rate if config_sampling else None,
+                "config file recording.sampling.min_rate",
+            )
+            min_rate = validated_min_rate if validated_min_rate is not None else 0.001
+            min_rate = min(base_rate, min_rate)
+
+        return ResolvedSamplingConfig(
+            mode=mode,
+            base_rate=base_rate,
+            min_rate=min_rate,
+        )
+
+    def _determine_sampling_rate(self, init_param: float | None) -> float:
+        """Backward-compatible helper that returns only the effective base sampling rate."""
+        return self._determine_sampling_config(init_param).base_rate
+
+    def _start_adaptive_sampling_control_loop(self) -> None:
+        if self.mode != TuskDriftMode.RECORD or self._sampling_mode != "adaptive":
+            return
+
+        self._adaptive_sampling_controller = AdaptiveSamplingController(
+            ResolvedSamplingConfig(
+                mode="adaptive",
+                base_rate=self._sampling_rate,
+                min_rate=self._min_sampling_rate,
+            )
+        )
+        self._effective_memory_limit_bytes = self._detect_effective_memory_limit_bytes()
+        self._adaptive_sampling_stop_event.clear()
+
+        self._adaptive_sampling_thread = threading.Thread(
+            target=self._adaptive_sampling_loop,
+            daemon=True,
+            name="drift-adaptive-sampling",
+        )
+        self._adaptive_sampling_thread.start()
+        self._safe_update_adaptive_sampling_health()
+
+    def _adaptive_sampling_loop(self) -> None:
+        while not self._adaptive_sampling_stop_event.wait(timeout=2.0):
+            self._safe_update_adaptive_sampling_health()
+
+    def _safe_update_adaptive_sampling_health(self) -> None:
+        try:
+            self._update_adaptive_sampling_health()
+        except Exception:
+            logger.error("Adaptive sampling health update failed; keeping previous controller state.", exc_info=True)
+
+    def _update_adaptive_sampling_health(self) -> None:
+        if self._adaptive_sampling_controller is None:
+            return
+
+        batch_processor = self._td_span_processor._batch_processor if self._td_span_processor else None
+        queue_fill_ratio = None
+        dropped_span_count = 0
+        if batch_processor is not None and batch_processor.max_queue_size > 0:
+            queue_fill_ratio = batch_processor.queue_size / batch_processor.max_queue_size
+            dropped_span_count = batch_processor.dropped_span_count
+
+        export_failure_count = 0
+        export_circuit_open = False
+        if self.span_exporter is not None:
+            for adapter in self.span_exporter.get_adapters():
+                spans_failed = getattr(adapter, "spans_failed", 0)
+                export_failure_count += int(spans_failed)
+                export_circuit_open = export_circuit_open or getattr(adapter, "circuit_state", "") == "open"
+
+        self._adaptive_sampling_controller.update(
+            AdaptiveSamplingHealthSnapshot(
+                queue_fill_ratio=queue_fill_ratio,
+                dropped_span_count=dropped_span_count,
+                export_failure_count=export_failure_count,
+                export_circuit_open=export_circuit_open,
+                memory_pressure_ratio=self._get_memory_pressure_ratio(),
+            )
+        )
+
+    def _detect_effective_memory_limit_bytes(self) -> int | None:
+        candidates = (
+            "/sys/fs/cgroup/memory.max",
+            "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+        )
+        for path in candidates:
+            parsed = self._read_numeric_control_file(path)
+            if parsed is None:
+                continue
+            if parsed <= 0 or parsed > 1_000_000_000_000_000:
+                continue
+            return parsed
+        return None
+
+    def _get_memory_pressure_ratio(self) -> float | None:
+        if self._effective_memory_limit_bytes is None or self._effective_memory_limit_bytes <= 0:
+            return None
+
+        cgroup_current = self._read_numeric_control_file("/sys/fs/cgroup/memory.current")
+        if cgroup_current is not None:
+            return cgroup_current / self._effective_memory_limit_bytes
+
+        cgroup_v1_current = self._read_numeric_control_file("/sys/fs/cgroup/memory/memory.usage_in_bytes")
+        if cgroup_v1_current is not None:
+            return cgroup_v1_current / self._effective_memory_limit_bytes
+
+        current_rss_bytes = self._read_current_rss_bytes()
+        if current_rss_bytes is not None:
+            return current_rss_bytes / self._effective_memory_limit_bytes
+
+        return None
+
+    @staticmethod
+    def _parse_proc_status_rss_bytes(raw_status: str) -> int | None:
+        for line in raw_status.splitlines():
+            if not line.startswith("VmRSS:"):
+                continue
+
+            parts = line.split()
+            if len(parts) < 3 or parts[2].lower() != "kb":
+                return None
+
+            return int(parts[1]) * 1024
+
+        return None
+
+    @staticmethod
+    def _parse_proc_statm_rss_bytes(raw_statm: str, page_size: int) -> int | None:
+        fields = raw_statm.split()
+        if len(fields) < 2:
+            return None
+
+        return int(fields[1]) * page_size
+
+    def _read_current_rss_bytes(self) -> int | None:
+        try:
+            proc_status_path = Path("/proc/self/status")
+            if proc_status_path.exists():
+                parsed = self._parse_proc_status_rss_bytes(proc_status_path.read_text())
+                if parsed is not None:
+                    return parsed
+        except Exception:
+            pass
+
+        try:
+            proc_statm_path = Path("/proc/self/statm")
+            if proc_statm_path.exists():
+                return self._parse_proc_statm_rss_bytes(proc_statm_path.read_text(), int(os.sysconf("SC_PAGE_SIZE")))
+        except Exception:
+            pass
+
+        return None
+
+    def _read_numeric_control_file(self, path: str) -> int | None:
+        try:
+            if not os.path.exists(path):
+                return None
+            raw_value = Path(path).read_text().strip()
+            if not raw_value or raw_value == "max":
+                return None
+            return int(raw_value)
+        except Exception:
+            return None
 
     def _detect_mode(self) -> TuskDriftMode:
         """Detect the SDK mode from environment variable."""
@@ -648,10 +850,6 @@ class TuskDrift:
 
         self.app_ready = True
 
-        # Update span processor with app_ready flag
-        if self._td_span_processor:
-            self._td_span_processor.update_app_ready(True)
-
         if self.mode == TuskDriftMode.REPLAY:
             logger.debug("Replay mode active - ready to serve mocked responses")
         elif self.mode == TuskDriftMode.RECORD:
@@ -801,6 +999,34 @@ class TuskDrift:
         except Exception as e:
             logger.debug(f"Failed to send unpatched dependency alert: {e}")
 
+    def should_record_root_request(self, *, is_pre_app_start: bool) -> RootSamplingDecision:
+        if self._adaptive_sampling_controller is not None:
+            return self._adaptive_sampling_controller.get_decision(is_pre_app_start=is_pre_app_start)
+
+        if is_pre_app_start:
+            return RootSamplingDecision(
+                should_record=True,
+                reason="pre_app_start",
+                mode="fixed",
+                state="fixed",
+                base_rate=self._sampling_rate,
+                min_rate=self._min_sampling_rate,
+                effective_rate=1.0,
+                admission_multiplier=1.0,
+            )
+
+        should_record = should_sample(self._sampling_rate, True)
+        return RootSamplingDecision(
+            should_record=should_record,
+            reason="sampled" if should_record else "not_sampled",
+            mode="fixed",
+            state="fixed",
+            base_rate=self._sampling_rate,
+            min_rate=self._min_sampling_rate,
+            effective_rate=self._sampling_rate,
+            admission_multiplier=1.0,
+        )
+
     def get_sampling_rate(self) -> float:
         """Get the current sampling rate."""
         return self._sampling_rate
@@ -834,6 +1060,11 @@ class TuskDrift:
         import asyncio
 
         from .coverage_server import stop_coverage_collection
+
+        self._adaptive_sampling_stop_event.set()
+        if self._adaptive_sampling_thread is not None:
+            self._adaptive_sampling_thread.join(timeout=5.0)
+            self._adaptive_sampling_thread = None
 
         # Shutdown OpenTelemetry tracer provider
         if self._td_span_processor is not None:

@@ -27,6 +27,7 @@ from opentelemetry.trace import StatusCode as OTelStatusCode
 from ...core.drift_sdk import TuskDrift
 from ...core.json_schema_helper import JsonSchemaHelper, SchemaMerge
 from ...core.mode_utils import handle_record_mode, should_record_inbound_http_request
+from ...core.no_recording import suppress_recording
 from ...core.tracing import TdSpanAttributes
 from ...core.tracing.span_utils import CreateSpanOptions, SpanInfo, SpanUtils
 from ...core.types import (
@@ -267,7 +268,8 @@ async def _record_request(
     )
     if not should_record:
         logger.debug(f"[FastAPI] Skipping request ({skip_reason}), path={raw_path}")
-        return await original_call(app, scope, receive, send)
+        with suppress_recording():
+            return await original_call(app, scope, receive, send)
 
     start_time_ns = time.time_ns()
 

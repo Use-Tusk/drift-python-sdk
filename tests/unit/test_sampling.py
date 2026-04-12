@@ -90,7 +90,7 @@ class TestValidateSamplingRate:
     def test_custom_source_in_warning(self):
         """Should include custom source in warning message."""
         # Just verify it doesn't raise with custom source
-        result = validate_sampling_rate(-0.5, source="env var TUSK_SAMPLING_RATE")
+        result = validate_sampling_rate(-0.5, source="env var TUSK_RECORDING_SAMPLING_RATE")
         assert result is None
 
     def test_converts_to_float(self):

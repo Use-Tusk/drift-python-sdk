@@ -47,21 +47,21 @@ class TdSpanProcessor(SpanProcessor):
 
     This processor implements OpenTelemetry's SpanProcessor interface and serves
     as the bridge between OTel's tracing system and Drift's export infrastructure.
+    Root-request admission sampling happens earlier in inbound instrumentations,
+    so this processor only handles ended spans that were already allowed through.
 
     When a span ends:
     1. Convert to CleanSpanData using otel_converter
-    2. Apply sampling logic
-    3. Apply trace blocking logic
-    4. Validate protobuf serialization
-    5. Forward to batch processor for export
+    2. Apply trace blocking logic
+    3. Validate protobuf serialization
+    4. Handle REPLAY-mode inbound span forwarding
+    5. Forward RECORD-mode spans to the batch processor for export
     """
 
     def __init__(
         self,
         exporter: TdSpanExporter,
         mode: TuskDriftMode,
-        sampling_rate: float = 1.0,
-        app_ready: bool = False,
         environment: str | None = None,
     ) -> None:
         """Initialize the TdSpanProcessor.
@@ -69,14 +69,10 @@ class TdSpanProcessor(SpanProcessor):
         Args:
             exporter: The TdSpanExporter to use for span export
             mode: SDK mode (RECORD, REPLAY, DISABLED)
-            sampling_rate: Sampling rate (0.0-1.0)
-            app_ready: Whether the application is ready
             environment: Environment name to include on spans
         """
         self._exporter = exporter
         self._mode = mode
-        self._sampling_rate = sampling_rate
-        self._app_ready = app_ready
         self._environment = environment
 
         # We'll import and create batch processor lazily to avoid circular imports
@@ -244,23 +240,3 @@ class TdSpanProcessor(SpanProcessor):
         except Exception as e:
             logger.error(f"Error during force_flush: {e}")
             return False
-
-    def update_app_ready(self, app_ready: bool) -> None:
-        """Update the app_ready flag.
-
-        This is called when the application marks itself as ready.
-
-        Args:
-            app_ready: Whether the application is ready
-        """
-        self._app_ready = app_ready
-        logger.debug(f"TdSpanProcessor app_ready updated to {app_ready}")
-
-    def update_sampling_rate(self, sampling_rate: float) -> None:
-        """Update the sampling rate.
-
-        Args:
-            sampling_rate: New sampling rate (0.0-1.0)
-        """
-        self._sampling_rate = sampling_rate
-        logger.debug(f"TdSpanProcessor sampling_rate updated to {sampling_rate}")
