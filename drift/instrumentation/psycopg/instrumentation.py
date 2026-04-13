@@ -559,10 +559,32 @@ class PsycopgInstrumentation(InstrumentationBase):
             span_kind=OTelSpanKind.CLIENT,
         )
 
-    def _noop_execute(self, cursor: Any) -> Any:
+    def _noop_execute(self, cursor: Any, is_async: bool = False) -> Any:
         """Handle background requests in REPLAY mode - return cursor with empty mock data."""
         cursor._mock_rows = []  # pyright: ignore
         cursor._mock_index = 0  # pyright: ignore
+        fetchone, fetchmany, fetchall = self._create_fetch_methods(cursor, "_mock_rows", "_mock_index")
+        if is_async:
+            sync_fetchone, sync_fetchmany, sync_fetchall = fetchone, fetchmany, fetchall
+
+            async def async_fetchone():
+                return sync_fetchone()
+
+            async def async_fetchmany(size=None):
+                if size is None:
+                    size = cursor.arraysize
+                return sync_fetchmany(size)
+
+            async def async_fetchall():
+                return sync_fetchall()
+
+            cursor.fetchone = async_fetchone  # pyright: ignore[reportAttributeAccessIssue]
+            cursor.fetchmany = async_fetchmany  # pyright: ignore[reportAttributeAccessIssue]
+            cursor.fetchall = async_fetchall  # pyright: ignore[reportAttributeAccessIssue]
+        else:
+            cursor.fetchone = fetchone  # pyright: ignore[reportAttributeAccessIssue]
+            cursor.fetchmany = fetchmany  # pyright: ignore[reportAttributeAccessIssue]
+            cursor.fetchall = fetchall  # pyright: ignore[reportAttributeAccessIssue]
         return cursor
 
     def _replay_execute(self, cursor: Any, sdk: TuskDrift, query_str: str, params: Any, is_async: bool = False) -> Any:
@@ -581,9 +603,17 @@ class PsycopgInstrumentation(InstrumentationBase):
 
             if mock_result is None:
                 is_pre_app_start = not sdk.app_ready
+                if is_pre_app_start:
+                    logger.warning(
+                        f"[Tusk REPLAY] No mock found for pre-app-start psycopg query, returning empty result. "
+                        f"Query: {query_str[:100]}..."
+                    )
+                    self._noop_execute(cursor, is_async=is_async)
+                    span_info.span.end()
+                    return cursor
                 raise RuntimeError(
                     f"[Tusk REPLAY] No mock found for psycopg execute query. "
-                    f"This {'pre-app-start ' if is_pre_app_start else ''}query was not recorded during the trace capture. "
+                    f"This query was not recorded during the trace capture. "
                     f"Query: {query_str[:100]}..."
                 )
 
@@ -742,12 +772,17 @@ class PsycopgInstrumentation(InstrumentationBase):
 
             if mock_result is None:
                 is_pre_app_start = not sdk.app_ready
-                logger.error(
-                    f"No mock found for {'pre-app-start ' if is_pre_app_start else ''}psycopg executemany query in REPLAY mode: {query_str[:100]}"
-                )
+                if is_pre_app_start:
+                    logger.warning(
+                        f"[Tusk REPLAY] No mock found for pre-app-start psycopg executemany query, returning empty result. "
+                        f"Query: {query_str[:100]}..."
+                    )
+                    self._noop_execute(cursor)
+                    span_info.span.end()
+                    return cursor
                 raise RuntimeError(
                     f"[Tusk REPLAY] No mock found for psycopg executemany query. "
-                    f"This {'pre-app-start ' if is_pre_app_start else ''}query was not recorded during the trace capture. "
+                    f"This query was not recorded during the trace capture. "
                     f"Query: {query_str[:100]}..."
                 )
 
@@ -1150,9 +1185,16 @@ class PsycopgInstrumentation(InstrumentationBase):
 
             if mock_result is None:
                 is_pre_app_start = not sdk.app_ready
+                if is_pre_app_start:
+                    logger.warning(
+                        f"[Tusk REPLAY] No mock found for pre-app-start psycopg stream query, returning empty result. "
+                        f"Query: {query_str[:100]}..."
+                    )
+                    span_info.span.end()
+                    return
                 raise RuntimeError(
                     f"[Tusk REPLAY] No mock found for psycopg stream query. "
-                    f"This {'pre-app-start ' if is_pre_app_start else ''}query was not recorded. "
+                    f"This query was not recorded. "
                     f"Query: {query_str[:100]}..."
                 )
 
@@ -1295,9 +1337,17 @@ class PsycopgInstrumentation(InstrumentationBase):
 
             if mock_result is None:
                 is_pre_app_start = not sdk.app_ready
+                if is_pre_app_start:
+                    logger.warning(
+                        f"[Tusk REPLAY] No mock found for pre-app-start psycopg copy operation, returning empty result. "
+                        f"Query: {query_str[:100]}..."
+                    )
+                    span_info.span.end()
+                    yield MockCopy(data=[])
+                    return
                 raise RuntimeError(
                     f"[Tusk REPLAY] No mock found for psycopg copy operation. "
-                    f"This {'pre-app-start ' if is_pre_app_start else ''}copy was not recorded. "
+                    f"This copy was not recorded. "
                     f"Query: {query_str[:100]}..."
                 )
 

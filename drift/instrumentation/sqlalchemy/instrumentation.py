@@ -89,19 +89,26 @@ class SqlAlchemyInstrumentation(InstrumentationBase):
 
             if mock_result is None:
                 is_pre_app_start = not sdk.app_ready
-                span_info.span.set_status(
-                    Status(
-                        OTelStatusCode.ERROR,
-                        "No mock found for sqlalchemy query in replay",
+                if is_pre_app_start:
+                    logger.warning(
+                        f"[Tusk REPLAY] No mock found for pre-app-start sqlalchemy query, returning empty result. "
+                        f"Query: {query_str[:120]}..."
                     )
-                )
-                span_info.span.end()
-                instrumentation._reset_context_state(context)
-                raise RuntimeError(
-                    f"[Tusk REPLAY] No mock found for sqlalchemy query. "
-                    f"This {'pre-app-start ' if is_pre_app_start else ''}query was not recorded during the trace capture. "
-                    f"Query: {query_str[:120]}..."
-                )
+                    mock_result = {"rows": [], "rowcount": 0, "description": None}
+                else:
+                    span_info.span.set_status(
+                        Status(
+                            OTelStatusCode.ERROR,
+                            "No mock found for sqlalchemy query in replay",
+                        )
+                    )
+                    span_info.span.end()
+                    instrumentation._reset_context_state(context)
+                    raise RuntimeError(
+                        f"[Tusk REPLAY] No mock found for sqlalchemy query. "
+                        f"This query was not recorded during the trace capture. "
+                        f"Query: {query_str[:120]}..."
+                    )
 
             # Preserve error-path behavior in replay for queries recorded as failures.
             if isinstance(mock_result, dict):

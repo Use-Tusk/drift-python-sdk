@@ -431,9 +431,16 @@ class RedisInstrumentation(InstrumentationBase):
 
             if mock_result is None:
                 is_pre_app_start = not sdk.app_ready
+                if is_pre_app_start:
+                    logger.warning(
+                        f"[Tusk REPLAY] No mock found for pre-app-start Redis command, returning default response. "
+                        f"Command: {command_str}"
+                    )
+                    span_info.span.end()
+                    return self._get_default_response(command_name)
                 raise RuntimeError(
                     f"[Tusk REPLAY] No mock found for Redis command. "
-                    f"This {'pre-app-start ' if is_pre_app_start else ''}command was not recorded during the trace capture. "
+                    f"This command was not recorded during the trace capture. "
                     f"Command: {command_str}"
                 )
 
@@ -769,9 +776,16 @@ class RedisInstrumentation(InstrumentationBase):
 
             if mock_result is None:
                 is_pre_app_start = not sdk.app_ready
+                if is_pre_app_start:
+                    logger.warning(
+                        f"[Tusk REPLAY] No mock found for pre-app-start Redis pipeline, returning empty result. "
+                        f"Commands: {command_str}"
+                    )
+                    span_info.span.end()
+                    return []
                 raise RuntimeError(
                     f"[Tusk REPLAY] No mock found for Redis pipeline. "
-                    f"This {'pre-app-start ' if is_pre_app_start else ''}pipeline was not recorded during the trace capture. "
+                    f"This pipeline was not recorded during the trace capture. "
                     f"Commands: {command_str}"
                 )
 
