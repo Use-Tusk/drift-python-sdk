@@ -563,6 +563,10 @@ class PsycopgInstrumentation(InstrumentationBase):
         """Handle background requests in REPLAY mode - return cursor with empty mock data."""
         cursor._mock_rows = []  # pyright: ignore
         cursor._mock_index = 0  # pyright: ignore
+        fetchone, fetchmany, fetchall = self._create_fetch_methods(cursor, "_mock_rows", "_mock_index")
+        cursor.fetchone = fetchone  # pyright: ignore[reportAttributeAccessIssue]
+        cursor.fetchmany = fetchmany  # pyright: ignore[reportAttributeAccessIssue]
+        cursor.fetchall = fetchall  # pyright: ignore[reportAttributeAccessIssue]
         return cursor
 
     def _replay_execute(self, cursor: Any, sdk: TuskDrift, query_str: str, params: Any, is_async: bool = False) -> Any:
