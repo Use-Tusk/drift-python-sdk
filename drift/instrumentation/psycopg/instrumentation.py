@@ -559,14 +559,32 @@ class PsycopgInstrumentation(InstrumentationBase):
             span_kind=OTelSpanKind.CLIENT,
         )
 
-    def _noop_execute(self, cursor: Any) -> Any:
+    def _noop_execute(self, cursor: Any, is_async: bool = False) -> Any:
         """Handle background requests in REPLAY mode - return cursor with empty mock data."""
         cursor._mock_rows = []  # pyright: ignore
         cursor._mock_index = 0  # pyright: ignore
         fetchone, fetchmany, fetchall = self._create_fetch_methods(cursor, "_mock_rows", "_mock_index")
-        cursor.fetchone = fetchone  # pyright: ignore[reportAttributeAccessIssue]
-        cursor.fetchmany = fetchmany  # pyright: ignore[reportAttributeAccessIssue]
-        cursor.fetchall = fetchall  # pyright: ignore[reportAttributeAccessIssue]
+        if is_async:
+            sync_fetchone, sync_fetchmany, sync_fetchall = fetchone, fetchmany, fetchall
+
+            async def async_fetchone():
+                return sync_fetchone()
+
+            async def async_fetchmany(size=None):
+                if size is None:
+                    size = cursor.arraysize
+                return sync_fetchmany(size)
+
+            async def async_fetchall():
+                return sync_fetchall()
+
+            cursor.fetchone = async_fetchone  # pyright: ignore[reportAttributeAccessIssue]
+            cursor.fetchmany = async_fetchmany  # pyright: ignore[reportAttributeAccessIssue]
+            cursor.fetchall = async_fetchall  # pyright: ignore[reportAttributeAccessIssue]
+        else:
+            cursor.fetchone = fetchone  # pyright: ignore[reportAttributeAccessIssue]
+            cursor.fetchmany = fetchmany  # pyright: ignore[reportAttributeAccessIssue]
+            cursor.fetchall = fetchall  # pyright: ignore[reportAttributeAccessIssue]
         return cursor
 
     def _replay_execute(self, cursor: Any, sdk: TuskDrift, query_str: str, params: Any, is_async: bool = False) -> Any:
@@ -590,7 +608,7 @@ class PsycopgInstrumentation(InstrumentationBase):
                         f"[Tusk REPLAY] No mock found for pre-app-start psycopg query, returning empty result. "
                         f"Query: {query_str[:100]}..."
                     )
-                    self._noop_execute(cursor)
+                    self._noop_execute(cursor, is_async=is_async)
                     span_info.span.end()
                     return cursor
                 raise RuntimeError(
