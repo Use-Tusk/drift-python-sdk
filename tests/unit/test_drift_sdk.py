@@ -25,6 +25,7 @@ class TestTuskDriftSingleton:
             "TUSK_DRIFT_MODE",
             "TUSK_API_KEY",
             "TUSK_RECORDING_SAMPLING_RATE",
+            "TUSK_RECORDING_SAMPLING_LOG_TRANSITIONS",
             "TUSK_SAMPLING_RATE",
             "ENV",
         ]
@@ -129,7 +130,11 @@ class TestTuskDriftSamplingRate:
         TuskDrift._instance = None
         TuskDrift._initialized = False
         # Clear sampling rate env vars
-        for env_var in ("TUSK_RECORDING_SAMPLING_RATE", "TUSK_SAMPLING_RATE"):
+        for env_var in (
+            "TUSK_RECORDING_SAMPLING_RATE",
+            "TUSK_RECORDING_SAMPLING_LOG_TRANSITIONS",
+            "TUSK_SAMPLING_RATE",
+        ):
             if env_var in os.environ:
                 del os.environ[env_var]
         yield
@@ -255,6 +260,35 @@ class TestTuskDriftSamplingRate:
 
         assert result == 0.4
 
+    def test_uses_config_sampling_log_transitions_when_env_var_unset(self, reset_singleton):
+        """Should use config file log_transitions when env var is not set."""
+        os.environ["TUSK_DRIFT_MODE"] = "DISABLED"
+        instance = TuskDrift.get_instance()
+        instance.file_config = TuskFileConfig(
+            recording=RecordingConfig(
+                sampling=SamplingConfig(log_transitions=False),
+            )
+        )
+
+        result = instance._determine_sampling_log_transitions()
+
+        assert result is False
+
+    def test_recording_log_transitions_env_var_overrides_config(self, reset_singleton):
+        """Should prefer the env var over config file log_transitions."""
+        os.environ["TUSK_DRIFT_MODE"] = "DISABLED"
+        os.environ["TUSK_RECORDING_SAMPLING_LOG_TRANSITIONS"] = "false"
+        instance = TuskDrift.get_instance()
+        instance.file_config = TuskFileConfig(
+            recording=RecordingConfig(
+                sampling=SamplingConfig(log_transitions=True),
+            )
+        )
+
+        result = instance._determine_sampling_log_transitions()
+
+        assert result is False
+
 
 class TestTuskDriftInitialize:
     """Tests for TuskDrift.initialize method."""
@@ -269,6 +303,7 @@ class TestTuskDriftInitialize:
             "TUSK_DRIFT_MODE",
             "TUSK_API_KEY",
             "TUSK_RECORDING_SAMPLING_RATE",
+            "TUSK_RECORDING_SAMPLING_LOG_TRANSITIONS",
             "TUSK_SAMPLING_RATE",
             "ENV",
         ]

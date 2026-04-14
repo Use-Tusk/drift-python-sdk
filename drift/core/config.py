@@ -73,6 +73,7 @@ class SamplingConfig:
     mode: str | None = None
     base_rate: float | None = None
     min_rate: float | None = None
+    log_transitions: bool | None = None
 
 
 @dataclass
@@ -181,10 +182,19 @@ def _parse_recording_config(data: dict[str, Any]) -> RecordingConfig:
             )
             mode = None
 
+        log_transitions = raw_sampling.get("log_transitions")
+        if log_transitions is not None and not isinstance(log_transitions, bool):
+            logger.warning(
+                "Invalid 'sampling.log_transitions' in config: expected boolean, got "
+                f"{type(log_transitions).__name__}. This value will be ignored."
+            )
+            log_transitions = None
+
         sampling = SamplingConfig(
             mode=mode,
             base_rate=float(base_rate) if base_rate is not None else None,
             min_rate=float(min_rate) if min_rate is not None else None,
+            log_transitions=log_transitions,
         )
 
     return RecordingConfig(
