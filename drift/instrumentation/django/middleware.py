@@ -274,9 +274,10 @@ class DriftMiddleware:
     def _capture_replay_output(self, request: HttpRequest, response: HttpResponse, span_info: SpanInfo) -> None:
         """Capture response data on the span for REPLAY mode.
 
-        Sets OUTPUT_VALUE so the inbound replay span sent to the CLI includes
-        the actual response for UI comparison. Skips RECORD-mode concerns like
-        transforms, trace blocking, and schema merges.
+        Sets OUTPUT_VALUE and OUTPUT_SCHEMA_MERGES so the inbound replay span
+        sent to the CLI includes the actual response with correct schema hints
+        for UI display. Skips RECORD-mode concerns like transforms and trace
+        blocking.
 
         Args:
             request: Django HttpRequest object
@@ -312,6 +313,9 @@ class DriftMiddleware:
         )
 
         span_info.span.set_attribute(TdSpanAttributes.OUTPUT_VALUE, json.dumps(output_value))
+
+        output_schema_merges = build_output_schema_merges(output_value)
+        span_info.span.set_attribute(TdSpanAttributes.OUTPUT_SCHEMA_MERGES, json.dumps(output_schema_merges))
 
     def _normalize_html_response(self, response: HttpResponse) -> HttpResponse:
         """Normalize HTML response body for REPLAY mode comparison.
