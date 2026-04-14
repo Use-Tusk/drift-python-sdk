@@ -229,6 +229,7 @@ recording:
     mode: adaptive
     base_rate: 0.25
     min_rate: 0.05
+    log_transitions: false
 """
             )
 
@@ -243,6 +244,7 @@ recording:
                 assert config.recording.sampling.mode == "adaptive"
                 assert config.recording.sampling.base_rate == 0.25
                 assert config.recording.sampling.min_rate == 0.05
+                assert config.recording.sampling.log_transitions is False
             finally:
                 os.chdir(original_cwd)
 

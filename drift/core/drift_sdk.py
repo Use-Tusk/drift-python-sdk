@@ -58,6 +58,7 @@ class TuskDrift:
         self._sampling_rate: float = 1.0
         self._sampling_mode: str = "fixed"
         self._min_sampling_rate: float = 0.0
+        self._sampling_log_transitions: bool = True
         self._adaptive_sampling_controller: AdaptiveSamplingController | None = None
         self._adaptive_sampling_thread: threading.Thread | None = None
         self._adaptive_sampling_stop_event = threading.Event()
@@ -135,7 +136,7 @@ class TuskDrift:
         )
 
         logger.info(
-            "SDK initialized successfully (version=%s, mode=%s, env=%s, service=%s, serviceId=%s, exportSpans=%s, samplingMode=%s, samplingBaseRate=%s, samplingMinRate=%s, logLevel=%s, runtime=python %s, platform=%s/%s).",
+            "SDK initialized successfully (version=%s, mode=%s, env=%s, service=%s, serviceId=%s, exportSpans=%s, samplingMode=%s, samplingBaseRate=%s, samplingMinRate=%s, samplingLogTransitions=%s, logLevel=%s, runtime=python %s, platform=%s/%s).",
             SDK_VERSION,
             self.mode,
             env,
@@ -145,6 +146,7 @@ class TuskDrift:
             self._sampling_mode,
             self._sampling_rate,
             self._min_sampling_rate,
+            self._sampling_log_transitions,
             get_log_level(),
             platform.python_version(),
             platform.system().lower(),
@@ -201,6 +203,7 @@ class TuskDrift:
         instance._sampling_rate = sampling_config.base_rate
         instance._sampling_mode = sampling_config.mode
         instance._min_sampling_rate = sampling_config.min_rate
+        instance._sampling_log_transitions = instance._determine_sampling_log_transitions()
 
         # Start coverage collection after the _initialized guard so repeated
         # initialize() calls don't stop/restart coverage and lose accumulated data.
@@ -408,6 +411,34 @@ class TuskDrift:
         """Backward-compatible helper that returns only the effective base sampling rate."""
         return self._determine_sampling_config(init_param).base_rate
 
+    def _determine_sampling_log_transitions(self) -> bool:
+        """Determine whether adaptive sampling transitions should be logged."""
+        recording_config = self.file_config.recording if self.file_config else None
+        config_sampling = recording_config.sampling if recording_config else None
+
+        env_value = os.environ.get("TUSK_RECORDING_SAMPLING_LOG_TRANSITIONS")
+        if env_value is not None:
+            normalized = env_value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                logger.debug(
+                    "Using adaptive sampling log_transitions from TUSK_RECORDING_SAMPLING_LOG_TRANSITIONS env var: True"
+                )
+                return True
+            if normalized in {"0", "false", "no", "off"}:
+                logger.debug(
+                    "Using adaptive sampling log_transitions from TUSK_RECORDING_SAMPLING_LOG_TRANSITIONS env var: False"
+                )
+                return False
+            logger.warning(
+                "Invalid TUSK_RECORDING_SAMPLING_LOG_TRANSITIONS env var: %s. Expected one of true/false/1/0/yes/no/on/off.",
+                env_value,
+            )
+
+        if config_sampling and config_sampling.log_transitions is not None:
+            return config_sampling.log_transitions
+
+        return True
+
     def _start_adaptive_sampling_control_loop(self) -> None:
         if self.mode != TuskDriftMode.RECORD or self._sampling_mode != "adaptive":
             return
@@ -417,7 +448,8 @@ class TuskDrift:
                 mode="adaptive",
                 base_rate=self._sampling_rate,
                 min_rate=self._min_sampling_rate,
-            )
+            ),
+            log_transitions=self._sampling_log_transitions,
         )
         self._effective_memory_limit_bytes = self._detect_effective_memory_limit_bytes()
         self._adaptive_sampling_stop_event.clear()

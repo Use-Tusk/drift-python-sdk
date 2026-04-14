@@ -118,3 +118,19 @@ def test_update_waits_for_controller_lock():
     thread.join(timeout=1.0)
     assert not thread.is_alive()
     assert controller.get_decision(is_pre_app_start=False).state == "hot"
+
+
+def test_controller_can_suppress_transition_logs(caplog):
+    now = {"value": 0.0}
+    controller = AdaptiveSamplingController(
+        ResolvedSamplingConfig(mode="adaptive", base_rate=0.5, min_rate=0.1),
+        log_transitions=False,
+        now_fn=lambda: now["value"],
+    )
+
+    with caplog.at_level("INFO"):
+        controller.update(AdaptiveSamplingHealthSnapshot(queue_fill_ratio=0.9))
+        now["value"] = 1.0
+        controller.update(AdaptiveSamplingHealthSnapshot(queue_fill_ratio=0.1))
+
+    assert "Adaptive sampling updated" not in caplog.text

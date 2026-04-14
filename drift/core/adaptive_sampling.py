@@ -70,10 +70,12 @@ class AdaptiveSamplingController:
         self,
         config: ResolvedSamplingConfig,
         *,
+        log_transitions: bool = True,
         random_fn=random.random,
         now_fn=time.monotonic,
     ) -> None:
         self._config = config
+        self._log_transitions = log_transitions
         self._random_fn = random_fn
         self._now_fn = now_fn
         self._lock = threading.RLock()
@@ -239,6 +241,9 @@ class AdaptiveSamplingController:
         pressure: float,
         snapshot: AdaptiveSamplingHealthSnapshot,
     ) -> None:
+        if not self._log_transitions:
+            return
+
         if previous_state == self._state and abs(previous_multiplier - self._admission_multiplier) < 0.05:
             return
 
