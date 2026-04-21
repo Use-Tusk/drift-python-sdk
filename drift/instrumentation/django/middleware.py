@@ -97,10 +97,10 @@ class DriftMiddleware:
         # Extract trace ID from headers (case-insensitive lookup)
         # Django stores headers in request.META
         headers_lower = {k.lower(): v for k, v in request.META.items() if k.startswith("HTTP_")}
-        logger.info(f"[DJANGO_MIDDLEWARE] REPLAY mode, headers: {list(headers_lower.keys())}")
+        logger.debug(f"[DJANGO_MIDDLEWARE] REPLAY mode, headers: {list(headers_lower.keys())}")
         # Convert HTTP_X_TD_TRACE_ID -> x-td-trace-id
         replay_trace_id = headers_lower.get("http_x_td_trace_id")
-        logger.info(f"[DJANGO_MIDDLEWARE] replay_trace_id from header: {replay_trace_id}")
+        logger.debug(f"[DJANGO_MIDDLEWARE] replay_trace_id from header: {replay_trace_id}")
 
         if not replay_trace_id:
             # No trace context in REPLAY mode; proceed without span

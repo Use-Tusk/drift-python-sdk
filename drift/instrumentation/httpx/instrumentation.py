@@ -325,7 +325,7 @@ class HttpxInstrumentation(InstrumentationBase):
 
         # Apply patch
         module.Client.send = patched_send
-        logger.info("httpx.Client.send instrumented")
+        logger.debug("httpx.Client.send instrumented")
 
     def _handle_replay_send_sync(
         self,
@@ -518,7 +518,7 @@ class HttpxInstrumentation(InstrumentationBase):
 
         # Apply patch
         module.AsyncClient.send = patched_send
-        logger.info("httpx.AsyncClient.send instrumented")
+        logger.debug("httpx.AsyncClient.send instrumented")
 
     async def _handle_replay_send_async(
         self,

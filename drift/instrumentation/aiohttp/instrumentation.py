@@ -203,7 +203,7 @@ class AiohttpInstrumentation(InstrumentationBase):
 
         # Apply patch
         module.ClientSession._request = patched_request
-        logger.info("aiohttp.ClientSession._request instrumented")
+        logger.debug("aiohttp.ClientSession._request instrumented")
 
     async def _handle_replay_request(
         self,

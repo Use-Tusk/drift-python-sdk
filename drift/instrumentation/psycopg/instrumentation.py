@@ -90,10 +90,10 @@ class PsycopgInstrumentation(InstrumentationBase):
                     # Set server cursor factory on the connection for named cursors
                     if server_cursor_factory:
                         connection.server_cursor_factory = server_cursor_factory
-                    logger.info("[PATCHED_CONNECT] REPLAY mode: Successfully connected to database (psycopg3)")
+                    logger.debug("[PATCHED_CONNECT] REPLAY mode: Successfully connected to database (psycopg3)")
                     return connection
                 except Exception as e:
-                    logger.info(
+                    logger.debug(
                         f"[PATCHED_CONNECT] REPLAY mode: Database connection failed ({e}), using mock connection (psycopg3)"
                     )
                     # Return mock connection that doesn't require a real database
@@ -220,12 +220,12 @@ class PsycopgInstrumentation(InstrumentationBase):
                     if user_row_factory is not None:
                         kwargs["row_factory"] = user_row_factory
                     connection = await original_async_connect(conninfo, **kwargs)
-                    logger.info(
+                    logger.debug(
                         "[PATCHED_ASYNC_CONNECT] REPLAY mode: Successfully connected to database (psycopg3 async)"
                     )
                     return connection
                 except Exception as e:
-                    logger.info(
+                    logger.debug(
                         f"[PATCHED_ASYNC_CONNECT] REPLAY mode: Database connection failed ({e}), using mock async connection"
                     )
                     # Import mock async connection
@@ -245,7 +245,7 @@ class PsycopgInstrumentation(InstrumentationBase):
         AsyncConnection.connect = classmethod(
             lambda cls, conninfo="", **kwargs: patched_async_connect(conninfo, **kwargs)
         )
-        logger.info("psycopg.AsyncConnection.connect instrumented")
+        logger.debug("psycopg.AsyncConnection.connect instrumented")
 
         # Also patch AsyncConnectionPool to inject cursor_factory
         self._patch_async_connection_pool(module)
@@ -283,7 +283,7 @@ class PsycopgInstrumentation(InstrumentationBase):
             return original_init(pool_self, conninfo, **kwargs)
 
         AsyncConnectionPool.__init__ = patched_init
-        logger.info("psycopg_pool.AsyncConnectionPool.__init__ instrumented")
+        logger.debug("psycopg_pool.AsyncConnectionPool.__init__ instrumented")
 
     def _create_async_cursor_factory(self, sdk: TuskDrift, base_factory=None):
         """Create an async cursor factory that wraps async cursors with instrumentation.

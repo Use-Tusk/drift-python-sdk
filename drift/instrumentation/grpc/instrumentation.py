@@ -94,7 +94,7 @@ class GrpcInstrumentation(InstrumentationBase):
         # to return instrumented channels
         self._patch_channel_factories(module)
 
-        logger.info("grpc module instrumented")
+        logger.debug("grpc module instrumented")
 
     def _patch_channel_factories(self, module: Any) -> None:
         """Patch channel factory functions to instrument created channels."""

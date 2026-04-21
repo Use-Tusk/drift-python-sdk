@@ -378,7 +378,7 @@ class UrllibInstrumentation(InstrumentationBase):
 
         # Apply patch
         module.OpenerDirector.open = patched_open
-        logger.info("urllib.request.OpenerDirector.open instrumented")
+        logger.debug("urllib.request.OpenerDirector.open instrumented")
 
     def _extract_request_info(self, fullurl: Any, data: bytes | None) -> dict[str, Any]:
         """Extract request information from urlopen arguments.
