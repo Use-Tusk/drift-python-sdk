@@ -218,7 +218,7 @@ class Urllib3Instrumentation(InstrumentationBase):
                 calling_library_context.reset(context_token)
 
         module.PoolManager.urlopen = patched_urlopen
-        logger.info("urllib3.PoolManager.urlopen instrumented")
+        logger.debug("urllib3.PoolManager.urlopen instrumented")
 
     def _patch_connection_pool(self, module: Any) -> None:
         """Patch urllib3.HTTPConnectionPool.urlopen for direct pool usage."""
@@ -363,7 +363,7 @@ class Urllib3Instrumentation(InstrumentationBase):
                 calling_library_context.reset(context_token)
 
         module.HTTPConnectionPool.urlopen = patched_urlopen
-        logger.info("urllib3.HTTPConnectionPool.urlopen instrumented")
+        logger.debug("urllib3.HTTPConnectionPool.urlopen instrumented")
 
     def _get_default_response(self, urllib3_module: Any, url: str) -> Any:
         """Return default response for background requests in REPLAY mode.

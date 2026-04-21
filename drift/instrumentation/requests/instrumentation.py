@@ -154,7 +154,7 @@ class RequestsInstrumentation(InstrumentationBase):
 
         # Apply patch
         module.Session.send = patched_send
-        logger.info("requests.Session.send instrumented")
+        logger.debug("requests.Session.send instrumented")
 
     def _get_default_response(self, url: str) -> Any:
         """Return default response for background requests in REPLAY mode.

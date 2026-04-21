@@ -390,7 +390,7 @@ class Psycopg2Instrumentation(InstrumentationBase):
                     psycopg2.extras.register_default_jsonb = lambda *args, **kwargs: None
                 if original_register_uuid:
                     psycopg2.extras.register_uuid = lambda *args, **kwargs: None
-                logger.info("[PSYCOPG2_REPLAY] Patched psycopg2.extras register functions to be no-ops")
+                logger.debug("[PSYCOPG2_REPLAY] Patched psycopg2.extras register functions to be no-ops")
             else:
                 # In RECORD mode, unwrap InstrumentedConnection before calling original
                 if original_register_default_json:
@@ -422,16 +422,16 @@ class Psycopg2Instrumentation(InstrumentationBase):
 
                     psycopg2.extras.register_uuid = patched_register_uuid
 
-                logger.info("[PSYCOPG2] Patched psycopg2.extras register functions to unwrap InstrumentedConnection")
+                logger.debug("[PSYCOPG2] Patched psycopg2.extras register functions to unwrap InstrumentedConnection")
         except Exception as e:
             logger.warning(f"[PSYCOPG2] Failed to patch psycopg2.extras: {e}")
 
         def patched_connect(*args, **kwargs):
             """Patched psycopg2.connect method."""
             sdk = TuskDrift.get_instance()
-            logger.info("[PATCHED_CONNECT] psycopg2.connect() called")
-            logger.info(f"[PATCHED_CONNECT]   mode: {sdk.mode}")
-            logger.info(f"[PATCHED_CONNECT]   app_ready: {sdk.app_ready}")
+            logger.debug("[PATCHED_CONNECT] psycopg2.connect() called")
+            logger.debug(f"[PATCHED_CONNECT]   mode: {sdk.mode}")
+            logger.debug(f"[PATCHED_CONNECT]   app_ready: {sdk.app_ready}")
             logger.debug(f"[PATCHED_CONNECT]   args: {args[:2] if args else 'none'}")
 
             # Pass through if SDK is disabled or original connect is missing
@@ -446,11 +446,11 @@ class Psycopg2Instrumentation(InstrumentationBase):
                 try:
                     logger.debug("[PATCHED_CONNECT] REPLAY mode: Attempting real DB connection...")
                     connection = original_connect(*args, **kwargs)
-                    logger.info("[PATCHED_CONNECT] REPLAY mode: Successfully connected to real database")
+                    logger.debug("[PATCHED_CONNECT] REPLAY mode: Successfully connected to real database")
                     # Wrap connection to intercept cursor() calls
                     return InstrumentedConnection(connection, instrumentation, sdk)
                 except Exception as e:
-                    logger.info(
+                    logger.debug(
                         f"[PATCHED_CONNECT] REPLAY mode: Database connection failed ({e}), using mock connection"
                     )
                     # Return mock connection that doesn't require a real database
@@ -460,19 +460,19 @@ class Psycopg2Instrumentation(InstrumentationBase):
             # In RECORD mode, always require real connection
             logger.debug("[PATCHED_CONNECT] RECORD mode: Connecting to database...")
             connection = original_connect(*args, **kwargs)
-            logger.info("[PATCHED_CONNECT] RECORD mode: Connected to database successfully")
+            logger.debug("[PATCHED_CONNECT] RECORD mode: Connected to database successfully")
             # Wrap connection to intercept cursor() calls
             return InstrumentedConnection(connection, instrumentation, sdk)
 
         # Apply patch
         module.connect = patched_connect  # type: ignore[attr-defined]
-        logger.info(f"psycopg2.connect instrumented. module.connect is now: {getattr(module, 'connect', None)}")
+        logger.debug("psycopg2.connect instrumented")
 
         # Also verify it's actually patched
         import psycopg2
 
         if psycopg2.connect == patched_connect:
-            logger.info("[VERIFY] psycopg2.connect successfully patched!")
+            logger.debug("[VERIFY] psycopg2.connect successfully patched!")
         else:
             logger.error(
                 f"[VERIFY] psycopg2.connect NOT patched! psycopg2.connect={psycopg2.connect}, patched_connect={patched_connect}"
